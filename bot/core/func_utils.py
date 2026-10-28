@@ -4,7 +4,7 @@ from functools import partial, wraps
 from json import loads as jloads
 from re import findall
 from math import floor
-from os import path as ospath
+from os import path as ospath, walk, remove
 from time import time, sleep
 from traceback import format_exc
 from asyncio import sleep as asleep, create_subprocess_shell
@@ -317,6 +317,22 @@ async def clean_up():
         (await aiormtree(dirtree) for dirtree in ("downloads", "thumbs", "encode"))
     except Exception as e:
         LOGS.error(str(e))
+
+async def clean_old_files(dirs=("encode",), max_age_hours=6):
+    """Delete leftover files (e.g. from failed uploads) older than max_age_hours."""
+    cutoff = time() - max_age_hours * 3600
+    for directory in dirs:
+        if not ospath.isdir(directory):
+            continue
+        for root, _, files in walk(directory):
+            for file in files:
+                file_path = ospath.join(root, file)
+                try:
+                    if ospath.getmtime(file_path) < cutoff:
+                        remove(file_path)
+                        LOGS.info(f"Removed old temp file: {file_path}")
+                except Exception as e:
+                    LOGS.error(f"Failed to remove old temp file {file_path}: {e}")
 
 def convertTime(s: int) -> str:
     m, s = divmod(int(s), 60)
