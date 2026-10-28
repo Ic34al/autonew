@@ -31,9 +31,9 @@ CAPTION_FORMAT = """
 <b>›› Lᴀɴɢᴜᴀɢᴇ: {lang}</b>
 <b>✦─━━━━━━━━━━─✦</b>
 <blockquote><b>≡ Sᴛᴀᴛᴜꜱ: {status}</b></blockquote>
-<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/OtakuFlix_Net'>ᴏᴛᴀᴋᴜғʟɪx</a></b></blockquote>
+<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>
 <b>✦─━━━━━━━━━━─✦</b>
-<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/OtakuFlix_Net'>ᴏᴛᴀᴋᴜғʟɪx</a></b></blockquote>
+<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>
 <blockquote><b>≡ ᴜꜱᴇ <a href='https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad'>vlc player</a> or <a href='https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad'>mx player</a> ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ꜰᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.</b></blockquote>
 """
 
@@ -46,9 +46,9 @@ MOVIE_CAPTION = """
 <b>›› Lᴀɴɢᴜᴀɢᴇ: {lang}</b>
 <b>✦─━━━━━━━━━━─✦</b>
 <blockquote><b>≡ Sᴛᴀᴛᴜꜱ: {status}</b></blockquote>
-<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/OtakuFlix_Net'>ᴏᴛᴀᴋᴜғʟɪx</a></b></blockquote>
+<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>
 <b>✦─━━━━━━━━━━─✦</b>
-<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/OtakuFlix_Net'>ᴏᴛᴀᴋᴜғʟɪx</a></b></blockquote>
+<blockquote><b>≡ Pᴏᴡᴇʀᴇᴅ Bʏ : <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>
 <blockquote><b>≡ ᴜꜱᴇ <a href='https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad'>vlc player</a> or <a href='https://play.google.com/store/apps/details?id=com.mxtech.videoplayer.ad'>mx player</a> ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ꜰᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.</b></blockquote>
 """
 
