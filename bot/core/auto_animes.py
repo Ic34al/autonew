@@ -447,11 +447,21 @@ async def find_existing_anime_channel(anime_name: str):
     return None
 
 async def send_sticker_to_channel(channel, sticker_id):
-    if Var.SEND_STICKER and sticker_id:
-        try:
-            await bot.send_sticker(channel, sticker_id)
-        except Exception as e:
-            print(f"Failed to send sticker: {e}")
+    """Send the Ongoing Anime Time branded banner instead of the old sticker."""
+    if not Var.SEND_STICKER:
+        return
+    banner_path = "thumb.jpg"
+    try:
+        if not os.path.exists(banner_path):
+            print(f"Branding banner not found: {banner_path}")
+            return
+        await bot.send_photo(
+            chat_id=channel,
+            photo=banner_path,
+            caption="✨ Ongoing Anime Time"
+        )
+    except Exception as e:
+        print(f"Failed to send Ongoing Anime Time banner: {e}")
 
 async def validate_channel_id(channel_id):
     if not channel_id:
@@ -1572,10 +1582,14 @@ async def create_anime_channel(name, aniInfo):
                 caption=caption
             )
 
-            STICKER_ID = "CAACAgUAAxkBAAIERmhruO6M5RpLtZjb2yrvPJxTuw0IAAIzEwACTrLwVSdrhgIPuK1TNgQ"
-            await user_client.send_sticker(channel_id, STICKER_ID)
+            if Var.SEND_STICKER and os.path.exists("thumb.jpg"):
+                await user_client.send_photo(
+                    chat_id=channel_id,
+                    photo="thumb.jpg",
+                    caption="✨ Ongoing Anime Time"
+                )
 
-            await rep.report("Intro poster, caption, and sticker sent to channel", "info")
+            await rep.report("Intro poster, caption, and banner sent to channel", "info")
 
         except Exception as e:
             await rep.report(f"Failed to send intro content: {e}", "warning")
