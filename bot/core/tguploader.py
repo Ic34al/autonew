@@ -1,3 +1,4 @@
+import asyncio
 from time import time, sleep
 from traceback import format_exc
 from math import floor
@@ -91,23 +92,27 @@ class TgUploader:
                         caption=f"<b><i>{self.__name}</i></b>",
                         progress=self.progress_status
                     )
-            
+
+                try:
+                    if msg and ospath.exists(path):
+                        await aioremove(path)
+                except Exception as e:
+                    await rep.report(f"Failed to remove file after upload: {str(e)}", "warning")
+
                 return msg
 
             except FloodWait as e:
-                await asleep(e.value * 1.5)
+                wait_seconds = max(1, int(e.value) + 1)
+                await rep.report(
+                    f"Telegram rate limit reached. Retrying in {wait_seconds}s.",
+                    "warning",
+                )
+                await asyncio.sleep(wait_seconds)
                 return await self.upload(path, qual)
 
         except Exception as e:
             await rep.report(f"Upload failed: {str(e)}", "error")
             raise e
-        
-        finally:
-            try:
-                if ospath.exists(path):
-                    await aioremove(path)
-            except Exception as e:
-                await rep.report(f"Failed to remove file after upload: {str(e)}", "warning")
 
     async def progress_status(self, current, total):
         if self.cancelled:

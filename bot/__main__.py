@@ -10,7 +10,7 @@ from sys import executable
 from signal import SIGKILL
 from bot.core.auto_animes import fetch_manga, fetch_animes
 from bot import bot, Var, bot_loop, sch, LOGS, ffQueue, ffLock, ffpids_cache, ff_queued
-from bot.core.func_utils import clean_up, new_task, editMessage
+from bot.core.func_utils import clean_up, clean_old_files, new_task, editMessage
 from bot.modules.up_posts import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
@@ -114,6 +114,7 @@ async def main():
         
         LOGS.info("Starting scheduler...")
         sch.add_job(upcoming_animes, "cron", hour=0, minute=30)
+        sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
         
         LOGS.info("Starting bot...")
