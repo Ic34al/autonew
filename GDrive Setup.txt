@@ -1,0 +1,27 @@
+How to setup GDrive Upload:
+
+1) Go to Google Cloud Console. [https://console.cloud.google.com/]
+2) Go to APIs & Services.
+3) Search Google Drive API & Enable it.
+4) Go Credentials & Create Credentials.
+5) Click on OAuth Client.
+6) Application type- PC/Desktop app & Input any name.
+7) Click on Create.
+8) Go to https://console.cloud.google.com/auth/audience.
+9) Click on Publish App.
+10) Run bot && Turn on GDrive Upload using /gdrive on.
+
+How create service account: 
+
+1) Go to https://console.cloud.google.com/iam-admin/serviceaccounts/
+2) Create input any details.
+3) Copy the content of file and put them in gdrive_service_account.json.
+4) Run bot && Turn on GDrive Upload using /gdrive on.
+
+UPDATED 2025:
+
+0) Read GDrive Upload Setup
+1) Run auth.py
+2) Login
+3) Run bot
+4) Turn on GDrive upload using /gdrive on
