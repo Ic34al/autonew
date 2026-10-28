@@ -174,23 +174,6 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     except Exception as e:
         await rep.report(f"Error applying font changer: {e}", "warning")
 
-    try:
-        post_msg = await bot.send_photo(
-            channel_to_use,
-            photo=poster_url,
-            caption=caption
-        )
-    except Exception as e:
-        await rep.report(f"Failed to send batch poster: {e}", "error")
-        post_msg = None
-
-    await mirror_to_main_channel(
-        post_msg=post_msg,
-        photo_url=poster_url,
-        caption=caption,
-        channel_to_use=channel_to_use
-    )
-
     await asleep(1.5)
     await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
     await asleep(1.5)
@@ -203,7 +186,8 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     await asleep(Var.STICKER_INTERVAL)
     await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
 
-    batch_buttons = []
+    required_qualities = ("480", "720", "1080")
+    uploaded_by_quality = {}
     for qual in Var.QUALS:
         qual_msg_ids = []
         os.makedirs("encode", exist_ok=True)
@@ -218,7 +202,11 @@ async def process_batch_anime(anime_name, torrent_url, audio):
                 await rep.report(f"Encoding failed for {vfile} ({qual}p)", "error")
                 continue
 
-            msg = await TgUploader(stat_msg).upload(encoded_path, qual)
+            try:
+                msg = await TgUploader(stat_msg).upload(encoded_path, qual)
+            except Exception as e:
+                await rep.report(f"Upload failed for {ep_upname} ({qual}p): {e}", "error")
+                msg = None
             if msg:
                 qual_msg_ids.append(msg.id)
             try:
@@ -227,16 +215,49 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             except Exception:
                 pass
 
-        if qual_msg_ids:
+        if len(qual_msg_ids) == episode_count:
             first_id = min(qual_msg_ids)
             last_id = max(qual_msg_ids)
             batch_string = f"get-{first_id * abs(Var.FILE_STORE)}-{last_id * abs(Var.FILE_STORE)}"
-            batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
-            btn_text = f"{btn_formatter.get(qual, qual+'p')}"
-            batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
-            if post_msg and batch_buttons:
-                btns = [batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]
-                await editMessage(post_msg, caption, InlineKeyboardMarkup(btns))
+            uploaded_by_quality[qual] = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
+        else:
+            await rep.report(
+                f"{qual}p incomplete for {cleaned_name}: "
+                f"{len(qual_msg_ids)}/{episode_count} episodes uploaded",
+                "error",
+            )
+
+    if all(q in uploaded_by_quality for q in required_qualities):
+        buttons = [[
+            InlineKeyboardButton(
+                btn_formatter.get(q, q + "p"),
+                url=uploaded_by_quality[q],
+            )
+            for q in required_qualities
+        ]]
+        try:
+            post_msg = await bot.send_photo(
+                channel_to_use,
+                photo=poster_url,
+                caption=caption,
+                reply_markup=InlineKeyboardMarkup(buttons),
+            )
+        except Exception as e:
+            await rep.report(f"Failed to send batch poster: {e}", "error")
+            post_msg = None
+
+        await mirror_to_main_channel(
+            post_msg=post_msg,
+            photo_url=poster_url,
+            caption=caption,
+            channel_to_use=channel_to_use,
+        )
+    else:
+        await rep.report(
+            f"Final post withheld: one or more required qualities "
+            f"are missing for {cleaned_name}",
+            "error",
+        )
 
     await stat_msg.delete()
     import logging
