@@ -183,9 +183,6 @@ async def process_batch_anime(anime_name, torrent_url, audio):
         text=f"<blockquote>‣ <b>Anime Name :</b> <b><i>{anime_name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
     )
 
-    await asleep(Var.STICKER_INTERVAL)
-    await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
-
     required_qualities = ("480", "720", "1080")
     uploaded_by_quality = {}
     for qual in Var.QUALS:
@@ -235,9 +232,10 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             )
             for q in required_qualities
         ]]
+        # Publish the anime post
         try:
             post_msg = await bot.send_photo(
-                channel_to_use,
+                chat_id=channel_to_use,
                 photo=poster_url,
                 caption=caption,
                 reply_markup=InlineKeyboardMarkup(buttons),
@@ -246,6 +244,18 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             await rep.report(f"Failed to send batch poster: {e}", "error")
             post_msg = None
 
+        # Send the Ongoing Anime Time banner underneath the post
+        if post_msg:
+            try:
+                await bot.send_photo(
+                    chat_id=channel_to_use,
+                    photo="ongoing_anime_time.png",
+                    reply_to_message_id=post_msg.id,
+                )
+            except Exception as e:
+                await rep.report(f"Failed to send Ongoing Anime Time banner: {e}", "warning")
+
+        # Preserve the existing main-channel mirroring
         await mirror_to_main_channel(
             post_msg=post_msg,
             photo_url=poster_url,
