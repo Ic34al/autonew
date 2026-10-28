@@ -81,12 +81,12 @@ class Var:
     LOW_END_RENAME = True
 
     BOT_USERNAME = getenv('BOT_USERNAME', "uchiha_Sasuke_itachi_bot")
-    CREATION_USERNAME = getenv('CREATION_USERNAME', "OtakuFlix")
+    CREATION_USERNAME = getenv('CREATION_USERNAME', "Ongoing Anime Time")
     
     SEND_SCHEDULE = getenv("SEND_SCHEDULE", "False").lower() == "true"
     SCHEDULE_TYPE = getenv("SCHEDULE_TYPE", "sub").lower()
 
-    BRAND_UNAME = getenv("BRAND_UNAME", "@OtakuFlix_Net")
+    BRAND_UNAME = getenv("BRAND_UNAME", "@Ongoing_Anime_Time")
 
     LOW_END_FFMPEG = getenv("LOW_END_FFMPEG", 'ffmpeg -i "{}" -metadata title="{}" -metadata:s:s title="{}" -metadata:s:a title="{}" -metadata:s:v title="{}" -c copy "{}" -y')
     FFCODE_HDRi = getenv("FFCODE_HDRi") or """ffmpeg -i '{}' -progress '{}' -preset superfast -c:v libx264 -s 1920x1080 -pix_fmt yuv420p -crf 30 -c:a libopus -b:a 32k -c:s copy -map 0 -ac 2 -ab 32k -vbr 2 -level 3.1 '{}' -y"""
