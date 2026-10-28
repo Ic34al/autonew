@@ -456,19 +456,18 @@ async def find_existing_anime_channel(anime_name: str):
             return channel_id
     return None
 
-async def send_sticker_to_channel(channel, sticker_id):
-    """Send the Ongoing Anime Time branded banner instead of the old sticker."""
+async def send_sticker_to_channel(channel, sticker_id=None):
+    """Send Ongoing Anime Time branding instead of the old banner."""
     if not Var.SEND_STICKER:
         return
-    banner_path = "thumb.jpg"
+    banner_path = "ongoing_anime_time.png"
     try:
-        if not os.path.exists(banner_path):
-            print(f"Branding banner not found: {banner_path}")
+        if not os.path.isfile(banner_path):
+            print(f"ERROR: {banner_path} not found in repository root.")
             return
         await bot.send_photo(
             chat_id=channel,
-            photo=banner_path,
-            caption="✨ Ongoing Anime Time"
+            photo=banner_path
         )
     except Exception as e:
         print(f"Failed to send Ongoing Anime Time banner: {e}")
