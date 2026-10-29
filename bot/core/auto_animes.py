@@ -1838,10 +1838,39 @@ async def get_animes(name, torrent, force=False):
             await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
             await asleep(1.5)
             
-            stat_msg = await bot.send_message(
-                chat_id=channel_to_use,
-                text=f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
+            status_text = (
+                f"<blockquote>‣ <b>Anime Name :</b> "
+                f"<b><i>{name}</i></b></blockquote>\n\n"
+                "<pre><i>Downloading...</i></pre>"
             )
+
+            stat_msg = None
+            existing_status_id = qual_data.get("status_msg_id")
+
+            if existing_status_id:
+                try:
+                    stat_msg = await bot.get_messages(
+                        channel_to_use,
+                        message_ids=int(existing_status_id),
+                    )
+                    if not stat_msg or getattr(stat_msg, "empty", False):
+                        stat_msg = None
+                    else:
+                        await editMessage(stat_msg, status_text)
+                except Exception:
+                    stat_msg = None
+
+            if stat_msg is None:
+                stat_msg = await bot.send_message(
+                    chat_id=channel_to_use,
+                    text=status_text,
+                )
+                await db.saveAnimeStatus(
+                    ani_id,
+                    ep_no,
+                    stat_msg.id,
+                )
+                qual_data["status_msg_id"] = stat_msg.id
             
             await asleep(Var.STICKER_INTERVAL)
             await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
@@ -1849,7 +1878,12 @@ async def get_animes(name, torrent, force=False):
             dl_path = await download_torrent(torrent, name)
             if not dl_path or not ospath.exists(dl_path):
                 await rep.report(f"File Download Incomplete for {name}, Try Again", "error")
-                await stat_msg.delete()
+                await editMessage(
+                    stat_msg,
+                    f"<blockquote>‣ <b>Anime Name :</b> "
+                    f"<b><i>{name}</i></b></blockquote>\n\n"
+                    "<pre><i>Failed — will retry on the next attempt.</i></pre>",
+                )
                 return
             
             post_id = post_msg.id
@@ -1911,7 +1945,12 @@ async def get_animes(name, torrent, force=False):
                             out_path = await FFEncoder(stat_msg, dl_path, filename, qual, is_movie=is_movie).start_encode()
                         except Exception as e:
                             await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await stat_msg.delete()
+                            await editMessage(
+                                stat_msg,
+                                f"<blockquote>‣ <b>Anime Name :</b> "
+                                f"<b><i>{name}</i></b></blockquote>\n\n"
+                                "<pre><i>Encoding failed — will retry.</i></pre>",
+                            )
                             return
                         await rep.report("Successfully Compressed Now Going To Upload...", "info")
                         
@@ -1921,7 +1960,12 @@ async def get_animes(name, torrent, force=False):
                             msg = await TgUploader(stat_msg).upload(out_path, qual)
                         except Exception as e:
                             await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await stat_msg.delete()
+                            await editMessage(
+                                stat_msg,
+                                f"<blockquote>‣ <b>Anime Name :</b> "
+                                f"<b><i>{name}</i></b></blockquote>\n\n"
+                                "<pre><i>Upload failed — will retry.</i></pre>",
+                            )
                             return
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         
