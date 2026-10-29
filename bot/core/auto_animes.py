@@ -244,16 +244,28 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             await rep.report(f"Failed to send batch poster: {e}", "error")
             post_msg = None
 
-        # Send the Ongoing Anime Time banner underneath the post
+        # Send animated Ongoing Anime Time banner beneath the anime post.
         if post_msg:
             try:
-                await bot.send_photo(
-                    chat_id=channel_to_use,
-                    photo="ongoing_anime_time.png",
-                    reply_to_message_id=post_msg.id,
-                )
+                banner_path = "ongoing_anime_time.gif"
+
+                if os.path.isfile(banner_path):
+                    await bot.send_animation(
+                        chat_id=channel_to_use,
+                        animation=banner_path,
+                        reply_to_message_id=post_msg.id,
+                    )
+                else:
+                    await rep.report(
+                        f"Banner file not found: {banner_path}",
+                        "warning",
+                    )
+
             except Exception as e:
-                await rep.report(f"Failed to send Ongoing Anime Time banner: {e}", "warning")
+                await rep.report(
+                    f"Failed to send Ongoing Anime Time GIF: {e}",
+                    "warning",
+                )
 
         # Preserve the existing main-channel mirroring
         await mirror_to_main_channel(
@@ -457,20 +469,30 @@ async def find_existing_anime_channel(anime_name: str):
     return None
 
 async def send_sticker_to_channel(channel, sticker_id=None):
-    """Send Ongoing Anime Time branding instead of the old banner."""
-    if not Var.SEND_STICKER:
+    """Send the animated Ongoing Anime Time GIF banner."""
+    if not getattr(Var, "SEND_STICKER", False):
         return
-    banner_path = "ongoing_anime_time.png"
+
+    banner_path = "ongoing_anime_time.gif"
+
     try:
         if not os.path.isfile(banner_path):
-            print(f"ERROR: {banner_path} not found in repository root.")
+            await rep.report(
+                f"Banner file not found: {banner_path}",
+                "warning",
+            )
             return
-        await bot.send_photo(
+
+        await bot.send_animation(
             chat_id=channel,
-            photo=banner_path
+            animation=banner_path,
         )
+
     except Exception as e:
-        print(f"Failed to send Ongoing Anime Time banner: {e}")
+        await rep.report(
+            f"Failed to send Ongoing Anime Time GIF: {e}",
+            "warning",
+        )
 
 async def validate_channel_id(channel_id):
     if not channel_id:
