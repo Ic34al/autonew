@@ -1629,6 +1629,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 async def get_animes(name, torrent, force=False):
+    ani_task_key = None
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -1655,9 +1656,10 @@ async def get_animes(name, torrent, force=False):
                     
         upload_mode = await db.get_upload_mode()
         print(f"get_animes: upload_mode={upload_mode}")
-        if upload_mode == "low_end":
+                if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
             await process_low_end(name, torrent)
+            return
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -1675,12 +1677,23 @@ async def get_animes(name, torrent, force=False):
         ep_no = str(ep_no) if ep_no else None
         
         encoding_enabled = await db.get_encoding()
-        if ani_id not in ani_cache['ongoing']:
-            ani_cache['ongoing'].add(ani_id)
-        elif not force:
+        # Prevent duplicate uploads of the same episode.
+        if ani_id is not None and ep_no is not None:
+            ani_task_key = ("episode", str(ani_id), str(ep_no))
+        else:
+            ani_task_key = ("torrent", str(torrent).strip())
+
+        if not force and (
+            ani_task_key in ani_cache["ongoing"]
+            or ani_task_key in ani_cache["completed"]
+        ):
+            await rep.report(
+                f"Skipping duplicate episode: {name} | {torrent}",
+                "warning",
+            )
             return
-        if not force and ani_id in ani_cache['completed']:
-            return
+
+        ani_cache["ongoing"].add(ani_task_key)
         
         if force or (not (ani_data := await db.getAnime(ani_id)) \
             or (ani_data and not (qual_data := ani_data.get(ep_no))) \
@@ -1898,9 +1911,15 @@ async def get_animes(name, torrent, force=False):
 
             if encoding_enabled:
                 await aioremove(dl_path)
-        ani_cache['completed'].add(ani_id)
+        if ani_task_key is not None:
+            ani_cache["completed"].add(ani_task_key)
+
     except Exception as error:
         await rep.report(format_exc(), "error")
+
+    finally:
+        if ani_task_key is not None:
+            ani_cache["ongoing"].discard(ani_task_key)
 
 
 async def extra_utils(msg_id, out_path):
