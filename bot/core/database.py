@@ -26,7 +26,19 @@ class MongoDB:
             {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
             upsert=True,
         )
+    async def saveAnimeStatus(self, ani_id, ep, status_msg_id):
+        if ani_id is None or ep is None or status_msg_id is None:
+            return
 
+        await self.__animes.update_one(
+            {"_id": ani_id},
+            {
+                "$set": {
+                    f"{str(ep)}.status_msg_id": int(status_msg_id)
+                }
+            },
+            upsert=True,
+        )
     async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
         if ep is None:
             ep = "default_ep"
