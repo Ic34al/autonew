@@ -81,7 +81,27 @@ async def load_settings():
             Var.FORCE_PHOTO = force_photo
     except Exception:
         pass
-    Var.SEND_SCHEDULE = await db.get_send_schedule()
+        try:
+        db_schedule_setting = await db.get_send_schedule()
+
+        env_schedule_setting = (
+            environ.get("SEND_SCHEDULE", "False").lower() == "true"
+        )
+
+        if "SEND_SCHEDULE" in environ:
+            Var.SEND_SCHEDULE = env_schedule_setting
+        elif db_schedule_setting is not None:
+            Var.SEND_SCHEDULE = db_schedule_setting
+        else:
+            Var.SEND_SCHEDULE = False
+
+    except Exception as e:
+        LOGS.warning(
+            f"Could not load schedule setting from database: {e}"
+        )
+        Var.SEND_SCHEDULE = (
+            environ.get("SEND_SCHEDULE", "False").lower() == "true"
+        )
     Var.LOW_END_RENAME = await db.get_low_end_rename()
     Var.FSUB_CHATS = await db.list_fsubs()
     static_admins = getattr(Var, "ADMINS", [])
