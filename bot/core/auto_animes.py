@@ -249,7 +249,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             try:
                 await bot.send_photo(
                     chat_id=channel_to_use,
-                    photo="ongoing_anime_time.png",
+                    photo="ongoing_anime_time.gif",
                     reply_to_message_id=post_msg.id,
                 )
             except Exception as e:
@@ -460,7 +460,7 @@ async def send_sticker_to_channel(channel, sticker_id=None):
     """Send Ongoing Anime Time branding instead of the old banner."""
     if not Var.SEND_STICKER:
         return
-    banner_path = "ongoing_anime_time.png"
+    banner_path = "ongoing_anime_time.gif"
     try:
         if not os.path.isfile(banner_path):
             print(f"ERROR: {banner_path} not found in repository root.")
