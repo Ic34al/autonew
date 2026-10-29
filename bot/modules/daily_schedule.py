@@ -7,7 +7,7 @@ import pytz
 from aiohttp import ClientSession, ClientTimeout
 
 from bot import bot, Var
-
+from pyrogram.enums import ParseMode
 LOGGER = logging.getLogger(__name__)
 
 IST = pytz.timezone("Asia/Kolkata")
@@ -124,7 +124,7 @@ async def send_daily_schedule(chat_id, reply_to_message_id=None):
                     chat_id=chat_id,
                     photo=str(BANNER_PATH),
                     caption="✦ <b>TODAY'S ANIME SCHEDULE</b> ✦",
-                    parse_mode="html",
+                    parse_mode=ParseMode.HTML,
                     reply_to_message_id=reply_to_message_id,
                 )
             except Exception:
@@ -152,7 +152,7 @@ async def send_daily_schedule(chat_id, reply_to_message_id=None):
             await bot.send_message(
                 chat_id=chat_id,
                 text=chunk,
-                parse_mode="html",
+                parse_mode=ParseMode.HTML,
                 reply_to_message_id=(
                     banner_message.id
                     if index == 0 and banner_message
