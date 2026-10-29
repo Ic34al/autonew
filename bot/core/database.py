@@ -39,6 +39,17 @@ class MongoDB:
             },
             upsert=True,
         )
+    async def getAnime(self, ani_id):
+        if ani_id is None:
+            return {}
+
+        anime_data = await self.__animes.find_one({"_id": ani_id})
+
+        if not anime_data:
+            return {}
+
+        anime_data.pop("_id", None)
+        return anime_data
     async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
         if ep is None:
             ep = "default_ep"
