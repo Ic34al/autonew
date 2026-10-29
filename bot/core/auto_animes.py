@@ -1343,7 +1343,13 @@ async def process_low_end(name, torrent_url, force=False):
 
 async def fetch_animes():
     await rep.report("Fetching Anime Started !!!", "info")
-    last_rss_entries = {}
+    scheduled_links = set()
+
+    async def run_feed_task(feed, link):
+        try:
+            await get_animes(feed.title, feed.link)
+        finally:
+            scheduled_links.discard(link)
     while True:
         await asleep(15)
         mode, upload_mode = await asyncio.gather(db.get_mode(), db.get_upload_mode())
@@ -1363,41 +1369,27 @@ async def fetch_animes():
                 valid_feeds = []
                 seen_links = set()
 
-                for rss_url, feed in zip(rss_urls, feeds):
+                for feed in feeds:
                     if not feed or not hasattr(feed, "link"):
                         continue
 
-                    current_link = str(feed.link).strip()
-                    if not current_link:
+                    link = str(feed.link).strip()
+                    if not link or link in seen_links:
                         continue
 
-                    last_link = last_rss_entries.get(rss_url)
+                    seen_links.add(link)
+                    valid_feeds.append(feed)
 
-                    if current_link != last_link:
-                        last_rss_entries[rss_url] = current_link
+                for feed in valid_feeds:
+                    link = str(feed.link).strip()
 
-                        # Avoid processing the same torrent from multiple feeds.
-                        if current_link not in seen_links:
-                            seen_links.add(current_link)
-                            valid_feeds.append(feed)
-
-                anime_links = [
-                    str(feed.link).strip()
-                    for feed in valid_feeds
-                ]
-                anime_datas = await asyncio.gather(*(db.getAnime(link) for link in anime_links))
-
-                for feed, ani_data in zip(valid_feeds, anime_datas):
-                    ep_no = None
-                    match = re.search(r'[-\s](\d+)\s*\(', feed.title)
-                    if match:
-                        ep_no = match.group(1)
-                    if not ep_no:
-                        ep_no = "1"
-                    ep_data = ani_data.get(str(ep_no), {}) if ani_data else {}
-                    if ep_data.get("completed"):
+                    if link in scheduled_links:
                         continue
-                    bot_loop.create_task(get_animes(feed.title, feed.link))
+
+                    scheduled_links.add(link)
+                    bot_loop.create_task(
+                        run_feed_task(feed, link)
+                    )
             except Exception as e:
                 await rep.report(f"Anime fetch error: {str(e)}", "error")
 
