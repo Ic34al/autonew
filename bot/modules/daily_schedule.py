@@ -16,7 +16,7 @@ SCHEDULE_URL = (
     "?f=schedule&h=true&tz=Asia/Kolkata"
 )
 
-BANNER_PATH = Path("today_anime_schedule.jpg")
+BANNER_PATH = Path("today_anime_schedule.JPG")
 
 
 def parse_release_time(value):
