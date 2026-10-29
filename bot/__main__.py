@@ -125,7 +125,6 @@ async def main():
         tasks = [
             create_task(queue_loop()),
             create_task(fetch_animes()),
-            create_task(fetch_manga()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')
