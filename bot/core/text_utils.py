@@ -315,56 +315,6 @@ class AniLister:
             self.__vars['seasonYear'] = self.__ani_year
         else:
             self.__vars = {'search': self.__ani_name}
-
-    async def post_data(self):
-        global _anime_anilist_last_call
-        async with _anime_anilist_lock:
-            now = asyncio.get_event_loop().time()
-            wait_time = 1 - (now - _anime_anilist_last_call)
-            if wait_time > 0:
-                await asyncio.sleep(wait_time)
-            _anime_anilist_last_call = asyncio.get_event_loop().time()
-        query = MOVIE_GRAPHQL_QUERY if self.is_movie else ANIME_GRAPHQL_QUERY
-        async with ClientSession() as sess:
-            async with sess.post(self.__api, json={'query': query, 'variables': self.__vars}) as resp:
-                if resp.status == 429:
-                    return (resp.status, None, resp.headers)
-                try:
-                    return (resp.status, await resp.json(), resp.headers)
-                except Exception:
-                    return (resp.status, None, resp.headers)
-
-    async def get_anidata(self, retry_count=0, max_retries=Var.MAX_RETRIES):
-        res_code, resp_json, res_heads = await self.post_data()
-        while res_code == 404 and self.__ani_year > 2020:
-            self.__update_vars()
-            await rep.report(f"AniList Query Name: {self.__ani_name}, Retrying with {self.__ani_year}", "warning", log=False)
-            res_code, resp_json, res_heads = await self.post_data()
-
-        if res_code == 404:
-            self.__update_vars(year=False)
-            res_code, resp_json, res_heads = await self.post_data()
-
-        if res_code == 200 and resp_json:
-            return resp_json.get('data', {}).get('Media', {}) or {}
-        elif res_code == 429:
-            if retry_count >= max_retries:
-                await rep.report(f"AniList API FloodWait: {res_code}, Max retries reached. Skipping.", "error")
-                return {}
-            f_timer = int(res_heads.get('Retry-After', 60))
-            await rep.report(f"AniList API FloodWait: {res_code}, Sleeping for {f_timer} !! (Retry {retry_count+1}/{max_retries})", "error")
-            await asleep(f_timer)
-            return await self.get_anidata(retry_count=retry_count+1, max_retries=max_retries)
-        elif res_code in [500, 501, 502]:
-            if retry_count >= max_retries:
-                await rep.report(f"AniList Server API Error: {res_code}, Max retries reached. Skipping.", "error")
-                return {}
-            await rep.report(f"AniList Server API Error: {res_code}, Waiting 5s to Try Again !! (Retry {retry_count+1}/{max_retries})", "error")
-            await asleep(5)
-            return await self.get_anidata(retry_count=retry_count+1, max_retries=max_retries)
-        else:
-            await rep.report(f"AniList API Error: {res_code}", "error", log=False)
-            return {}
     
 class MangaLister:
     def __init__(self, manga_name: str, year: int) -> None:
