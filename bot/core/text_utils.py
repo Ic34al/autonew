@@ -3,7 +3,7 @@ from calendar import month_name
 from datetime import datetime
 from random import choice
 from asyncio import sleep as asleep
-from aiohttp import ClientSession
+from aiohttp import ClientSession, ClientTimeout
 from anitopy import parse
 import re
 from bot import Var, bot
