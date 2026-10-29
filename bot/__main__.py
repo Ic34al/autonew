@@ -81,7 +81,7 @@ async def load_settings():
             Var.FORCE_PHOTO = force_photo
     except Exception:
         pass
-            try:
+    try:
         db_schedule_setting = await db.get_send_schedule()
 
         env_schedule_setting = (
