@@ -338,8 +338,34 @@ class FFEncoder:
         await aiorename(self.dl_path, dl_npath)
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
-        LOGS.info(f'Using FFmpeg command: {ffcode}')
 
+        # Limit FFmpeg memory usage on small Heroku dynos.
+        if ffcode and ffcode.startswith("ffmpeg "):
+            ffcode = ffcode.replace(
+                "ffmpeg ",
+                "ffmpeg -filter_threads 1 -filter_complex_threads 1 ",
+                1,
+            )
+
+        if ffcode:
+            output_name = f"'{out_npath}'"
+            double_output_name = f'"{out_npath}"'
+
+            if output_name in ffcode:
+                ffcode = ffcode.replace(
+                    output_name, f"-threads 1 {output_name}", 1
+                )
+            elif double_output_name in ffcode:
+                ffcode = ffcode.replace(
+                    double_output_name,
+                    f"-threads 1 {double_output_name}",
+                    1,
+                )
+            elif out_npath in ffcode:
+                ffcode = ffcode.replace(
+                    out_npath, f"-threads 1 {out_npath}", 1
+                )
+        LOGS.info(f'Using FFmpeg command: {
         if not ffcode:
             LOGS.error("No FFmpeg command generated")
             ffcode = None
@@ -366,7 +392,11 @@ class FFEncoder:
                 await rep.report(f"Failed to build fallback ffmpeg command: {e}", "error")
                 return None
 
-        self.__proc = await create_subprocess_shell(ffcode, stdout=PIPE, stderr=PIPE)
+self.__proc = await create_subprocess_shell(
+    ffcode,
+    stdout=asyncio.subprocess.DEVNULL,
+    stderr=asyncio.subprocess.DEVNULL,
+)
         proc_pid = self.__proc.pid
         ffpids_cache.append(proc_pid)
 
@@ -402,7 +432,9 @@ class FFEncoder:
             return self.out_path
         else:
             try:
-                error_message = (await self.__proc.stderr.read()).decode().strip()
+error_message = (
+    f"FFmpeg exited with return code {return_code}"
+)
             except Exception:
                 error_message = "(failed to read stderr)"
             LOGS.error(f"Encoding failed with error: {error_message}")
