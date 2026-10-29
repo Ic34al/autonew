@@ -1933,8 +1933,8 @@ async def get_animes(name, torrent, force=False):
                             else:
                                 btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
                             await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
-                                                await db.saveAnime(ani_id, ep_no, qual, post_id)
-                                                qual_data[qual] = True
+                        await db.saveAnime(ani_id, ep_no, qual, post_id)
+                        qual_data[qual] = True
                         bot_loop.create_task(extra_utils(msg_id, out_path))
             finally:
                 ffLock.release()
