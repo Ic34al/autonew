@@ -1629,7 +1629,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 async def get_animes(name, torrent, force=False):
-    ani_task_key = None
+    ani_task_keys = set()
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -1677,27 +1677,73 @@ async def get_animes(name, torrent, force=False):
         ep_no = str(ep_no) if ep_no else None
         
         encoding_enabled = await db.get_encoding()
-        # Prevent duplicate uploads of the same episode.
-        if ani_id is not None and ep_no is not None:
-            ani_task_key = ("episode", str(ani_id), str(ep_no))
-        else:
-            ani_task_key = ("torrent", str(torrent).strip())
 
-        if not force and (
-            ani_task_key in ani_cache["ongoing"]
-            or ani_task_key in ani_cache["completed"]
+        # Use AniList ID and canonical series title to identify episodes.
+        title_data = aniInfo.adata.get("title") or {}
+        stable_title = (
+            title_data.get("english")
+            or title_data.get("romaji")
+            or title_data.get("native")
+            or aniInfo.pdata.get("anime_title")
+            or name
+        )
+
+        ani_task_keys = set()
+
+        if ani_id is not None and ep_no is not None:
+            ani_task_keys.add(
+                ("episode", str(ani_id), str(ep_no))
+            )
+
+        if ep_no is not None:
+            title_key = normalize_anime_name_for_search(stable_title)
+            ani_task_keys.add(
+                ("title_episode", title_key, str(ep_no))
+            )
+
+        if not ani_task_keys:
+            ani_task_keys.add(
+                ("torrent", str(torrent).strip())
+            )
+
+        # Do not start another task for the same episode.
+        if not force and any(
+            key in ani_cache["ongoing"]
+            or key in ani_cache["completed"]
+            for key in ani_task_keys
         ):
             await rep.report(
-                f"Skipping duplicate episode: {name} | {torrent}",
+                f"Duplicate episode skipped: {name}",
                 "warning",
             )
             return
 
-        ani_cache["ongoing"].add(ani_task_key)
+        ani_cache["ongoing"].update(ani_task_keys)
         
-        if force or (not (ani_data := await db.getAnime(ani_id)) \
-            or (ani_data and not (qual_data := ani_data.get(ep_no))) \
-            or (ani_data and qual_data and not all(qual for qual in qual_data.values()))):
+        ani_data = (
+            await db.getAnime(ani_id)
+            if ani_id is not None
+            else {}
+        )
+
+        qual_data = (
+            ani_data.get(ep_no, {})
+            if ani_data and ep_no is not None
+            else {}
+        )
+
+        required_quals = (
+            list(Var.QUALS)
+            if encoding_enabled
+            else ["HDRi"]
+        )
+
+        missing_quals = [
+            qual for qual in required_quals
+            if not qual_data.get(qual, False)
+        ]
+
+        if force or missing_quals:
             
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n{name}", "warning")
@@ -1718,55 +1764,81 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
                 channel_to_use = Var.MAIN_CHANNEL
             
+            # Reuse the existing announcement when retrying an episode.
             post_msg = None
-            photo_path = None
-            all_banners = await db.list_anime_banners()
-            banner_url = None
-            
-            for banner_key, url in all_banners:
-                if banner_key.lower() in name.lower():
-                    banner_url = url
-                    break
-            
-            if banner_url:
-                photo_url = banner_url
-            elif hasattr(Var, 'ANIME') and Var.ANIME in name:
-                photo_url = Var.CUSTOM_BANNER
-            else:
-                photo_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
-            
-            caption = await aniInfo.get_caption()
-            try:
-                fontchanger_status = await db.get_fontchanger()
-                if fontchanger_status == "on":
-                    caption = obfuscate_text_for_copyright(caption)
-            except Exception as e:
-                await rep.report(f"Error applying font changer: {e}", "warning")
-            
-            try:
-                if photo_path is not None:
-                    with open(photo_path, 'rb') as photo_file:
-                        post_msg = await bot.send_photo(
-                            channel_to_use,
-                            photo=photo_url,
-                            caption=caption
-                        )
+            existing_post_id = (
+                ani_data.get("msg_id")
+                if ani_data else None
+            )
+
+            if existing_post_id:
+                try:
+                    post_msg = await bot.get_messages(
+                        channel_to_use,
+                        message_ids=int(existing_post_id),
+                    )
+                    if getattr(post_msg, "empty", False):
+                        post_msg = None
+                except Exception as e:
+                    await rep.report(
+                        f"Could not reuse existing anime post: {e}",
+                        "warning",
+                    )
+                    post_msg = None
+
+            if post_msg is None:
+                all_banners = await db.list_anime_banners()
+                banner_url = None
+
+                for banner_key, url in all_banners:
+                    if banner_key.lower() in name.lower():
+                        banner_url = url
+                        break
+
+                if banner_url:
+                    photo_url = banner_url
+                elif hasattr(Var, "ANIME") and Var.ANIME in name:
+                    photo_url = Var.CUSTOM_BANNER
                 else:
+                    photo_url = aniInfo.adata.get(
+                        "poster_url",
+                        "https://i.ibb.co/NdG0PXdx/not-found.png",
+                    )
+
+                caption = await aniInfo.get_caption()
+
+                try:
+                    fontchanger_status = await db.get_fontchanger()
+                    if fontchanger_status == "on":
+                        caption = obfuscate_text_for_copyright(caption)
+                except Exception as e:
+                    await rep.report(
+                        f"Error applying font changer: {e}",
+                        "warning",
+                    )
+
+                try:
                     post_msg = await bot.send_photo(
                         channel_to_use,
                         photo=photo_url,
-                        caption=caption
+                        caption=caption,
                     )
-            except Exception as e:
-                await rep.report(f"Failed to send initial post: {e}", "error")
-                return
-            
-            await mirror_to_main_channel(
-                post_msg=post_msg,
-                photo_url=photo_url,
-                caption=post_msg.caption.html if post_msg.caption else "",
-                channel_to_use=channel_to_use
-            )
+                except Exception as e:
+                    await rep.report(
+                        f"Failed to send initial post: {e}",
+                        "error",
+                    )
+                    return
+
+                await mirror_to_main_channel(
+                    post_msg=post_msg,
+                    photo_url=photo_url,
+                    caption=(
+                        post_msg.caption.html
+                        if post_msg.caption else ""
+                    ),
+                    channel_to_use=channel_to_use,
+                )
             
             await asleep(1.5)
             print(f"Using channel: {channel_to_use} for anime: {cleaned_name}")
@@ -1824,9 +1896,17 @@ async def get_animes(name, torrent, force=False):
                     if post_msg:
                         await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
                     await db.saveAnime(ani_id, ep_no, "HDRi", post_id)
+                    qual_data[qual] = True
                     bot_loop.create_task(extra_utils(msg_id, dl_path))
                 else:
                     for qual in Var.QUALS:
+                        if not force and qual_data.get(qual, False):
+                            await rep.report(
+                                f"Skipping already uploaded {qual}p for {name}",
+                                "info",
+                            )
+                            continue
+
                         filename = await aniInfo.get_upname(qual)
                         anime_format = aniInfo.adata.get("format", "").lower()
                         is_movie = anime_format == "movie"
@@ -1911,15 +1991,14 @@ async def get_animes(name, torrent, force=False):
 
             if encoding_enabled:
                 await aioremove(dl_path)
-        if ani_task_key is not None:
-            ani_cache["completed"].add(ani_task_key)
+        if ani_task_keys:
+            ani_cache["completed"].update(ani_task_keys)
 
     except Exception as error:
         await rep.report(format_exc(), "error")
 
     finally:
-        if ani_task_key is not None:
-            ani_cache["ongoing"].discard(ani_task_key)
+        ani_cache["ongoing"].difference_update(ani_task_keys)
 
 
 async def extra_utils(msg_id, out_path):
