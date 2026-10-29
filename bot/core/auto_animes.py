@@ -1839,7 +1839,7 @@ async def get_animes(name, torrent, force=False):
             await asleep(1.5)
             
             stat_msg = await bot.send_message(
-                chat_id=channel_to_use, 
+                chat_id=channel_to_use,
                 text=f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
             )
             
@@ -1934,6 +1934,7 @@ async def get_animes(name, torrent, force=False):
                                 btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
                             await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
                         await db.saveAnime(ani_id, ep_no, qual, post_id)
+                                                qual_data[qual] = True
                         bot_loop.create_task(extra_utils(msg_id, out_path))
             finally:
                 ffLock.release()
