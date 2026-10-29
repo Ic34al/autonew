@@ -1758,10 +1758,7 @@ async def get_animes(name, torrent, force=False):
             
             # Reuse the existing announcement when retrying an episode.
             post_msg = None
-            existing_post_id = (
-                ani_data.get("msg_id")
-                if ani_data else None
-            )
+            existing_post_id = qual_data.get("msg_id")
 
             if existing_post_id:
                 try:
@@ -1821,7 +1818,11 @@ async def get_animes(name, torrent, force=False):
                         "error",
                     )
                     return
-
+                await db.saveAnimePost(
+                    ani_id,
+                    ep_no,
+                    post_msg.id,
+                )
                 await mirror_to_main_channel(
                     post_msg=post_msg,
                     photo_url=photo_url,
