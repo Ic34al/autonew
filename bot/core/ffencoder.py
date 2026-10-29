@@ -365,7 +365,7 @@ class FFEncoder:
                 ffcode = ffcode.replace(
                     out_npath, f"-threads 1 {out_npath}", 1
                 )
-        LOGS.info(f'Using FFmpeg command: {
+        LOGS.info(f'Using FFmpeg command: {ffcode}')
         if not ffcode:
             LOGS.error("No FFmpeg command generated")
             ffcode = None
@@ -392,11 +392,11 @@ class FFEncoder:
                 await rep.report(f"Failed to build fallback ffmpeg command: {e}", "error")
                 return None
 
-self.__proc = await create_subprocess_shell(
-    ffcode,
-    stdout=asyncio.subprocess.DEVNULL,
-    stderr=asyncio.subprocess.DEVNULL,
-)
+        self.__proc = await create_subprocess_shell(
+            ffcode,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
         proc_pid = self.__proc.pid
         ffpids_cache.append(proc_pid)
 
@@ -431,14 +431,14 @@ self.__proc = await create_subprocess_shell(
             LOGS.info(f"Encoding successful! Output file: {self.out_path}")
             return self.out_path
         else:
-            try:
-error_message = (
-    f"FFmpeg exited with return code {return_code}"
-)
-            except Exception:
-                error_message = "(failed to read stderr)"
+            error_message = (
+                f"FFmpeg exited with return code {return_code}"
+            )
             LOGS.error(f"Encoding failed with error: {error_message}")
-            await rep.report(f"Encoding failed: {error_message[:200]}...", "error")
+            await rep.report(
+                f"Encoding failed: {error_message}",
+                "error",
+            )
             return None
     
     async def cancel_encode(self):
