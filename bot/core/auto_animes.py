@@ -1361,18 +1361,30 @@ async def fetch_animes():
                     feeds = await asyncio.gather(*(getfeed(url) for url in rss_urls))
 
                 valid_feeds = []
+                seen_links = set()
+
                 for rss_url, feed in zip(rss_urls, feeds):
-                    if not feed or not hasattr(feed, 'link'):
+                    if not feed or not hasattr(feed, "link"):
                         continue
-                    
-                    current_link = feed.link
+
+                    current_link = str(feed.link).strip()
+                    if not current_link:
+                        continue
+
                     last_link = last_rss_entries.get(rss_url)
-                    
+
                     if current_link != last_link:
                         last_rss_entries[rss_url] = current_link
-                        valid_feeds.append(feed)
 
-                anime_links = [feed.link for feed in valid_feeds]
+                        # Avoid processing the same torrent from multiple feeds.
+                        if current_link not in seen_links:
+                            seen_links.add(current_link)
+                            valid_feeds.append(feed)
+
+                anime_links = [
+                    str(feed.link).strip()
+                    for feed in valid_feeds
+                ]
                 anime_datas = await asyncio.gather(*(db.getAnime(link) for link in anime_links))
 
                 for feed, ani_data in zip(valid_feeds, anime_datas):
