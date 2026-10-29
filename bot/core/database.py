@@ -17,9 +17,15 @@ class MongoDB:
     async def add_user(self, user_id: int):
         await self.__db.users.update_one({'_id': user_id}, {'$set': {'_id': user_id}}, upsert=True)
 
-    async def getAnime(self, ani_id):
-        botset = await self.__animes.find_one({'_id': ani_id})
-        return botset or {}
+    async def saveAnimePost(self, ani_id, ep, post_id):
+        if ani_id is None or ep is None or post_id is None:
+            return
+
+        await self.__animes.update_one(
+            {"_id": ani_id},
+            {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
+            upsert=True,
+        )
 
     async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
         if ep is None:
