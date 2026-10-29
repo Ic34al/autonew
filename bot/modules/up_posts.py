@@ -106,120 +106,18 @@ async def shell(client, message):
 @bot.on_message(filters.command("ongoing"))
 @new_task
 async def ongoing_animes(client, message):
-    if not getattr(Var, "SEND_SCHEDULE", True):
-        await message.reply_text("<blockquote><b>Ongoing schedule feature is disabled.</b></blockquote>")
+    if not getattr(Var, "SEND_SCHEDULE", False):
+        await message.reply_text(
+            "The anime schedule feature is disabled."
+        )
         return
-    
-    schedule_type = getattr(Var, "SCHEDULE_TYPE", "dub")
-    
-    try:
-        ist = pytz.timezone('Asia/Kolkata')
-        current_time_ist = datetime.now(ist)
-        current_day = current_time_ist.strftime("%A")
-        
-        if schedule_type == "dub":
-            async with ClientSession() as ses:
-                res = await ses.get("https://myanimelist.net/forum/?topicid=1692966")
-                if res.status != 200:
-                    await message.reply_text("<blockquote><b>Failed to fetch dub schedule from MAL.</b></blockquote>")
-                    return
-                
-                html_content = await res.text()
-                tree = lh.fromstring(html_content)
-                
-                schedule_text = "<b><blockquote>Today's Anime Schedule:</blockquote></b>\n\n"
 
-                day_sections = tree.xpath(f"//li[contains(text(), '{current_day}')]")
-                if day_sections:
-                    anime_list = day_sections[0].xpath(".//following-sibling::ul[1]/li")
-                    for anime in anime_list:
-                        title = anime.xpath(".//a/text()")
-                        if title:
-                            info = anime.xpath(".//text()")
-                            episodes = next((i for i in info if "Episodes:" in i), "")
-                            ep_nums = re.search(r'Episodes: (\d+)/(\d+|\?\?)', episodes)
-                            if ep_nums:
-                                current_ep = ep_nums.group(1).zfill(2)
-                                total_ep = ep_nums.group(2)
-                                ep_str = f"{current_ep}/{total_ep}"
-                            else:
-                                ep_str = "??/??"
-                            CHANNEL = Var.BRAND_UNAME.strip('@')
-                            schedule_text += f'<b><blockquote>EP: {ep_str} — <a href="https://t.me/{CHANNEL}/">{title[0]}</a></blockquote></b>\n'
-                    
-                    sched_photo = getattr(Var, 'SCHEDULE_PHOTO', None)
-                    if not sched_photo:
-                        try:
-                            sched_photo = await db.get_schedule_photo()
-                        except Exception as e:
-                            LOGGER.warning(f"Failed to get schedule photo from DB: {e}")
-                            sched_photo = None
+    from bot.modules.daily_schedule import send_daily_schedule
 
-                    if sched_photo and str(sched_photo).strip() and str(sched_photo) not in ['0', 'None', '']:
-                        try:
-                            await message.reply_photo(
-                                photo=sched_photo,
-                                caption=schedule_text
-                            )
-                            return
-                        except Exception as e:
-                            LOGGER.error(f"Failed to send photo: {e}")
-                    
-                    await message.reply_text(schedule_text)
-                    return
-                
-        else:
-            async with ClientSession() as ses:
-                res = await ses.get("https://subsplease.org/api/?f=schedule&h=true&tz=Asia/Kolkata")
-                if res.status != 200:
-                    await message.reply_text("<blockquote><b>Failed to fetch schedule from SubsPlease.</b></blockquote>")
-                    return
-                data = await res.text()
-                aniContent = jloads(data).get("schedule", [])
-        
-        if not aniContent:
-            await message.reply_text("<blockquote><b>No anime schedule found for today.</b></blockquote>")
-            return
-        
-        text = "<blockquote><b>Today's Anime Schedule</b></blockquote>\n\n"
-        for i in aniContent:
-            try:
-                aname = TextEditor(i["title"])
-                await aname.load_anilist()
-                title = aname.adata.get('title', {}).get('english') or i['title']
-            except Exception as e:
-                LOGGER.warning(f"Failed to load AniList data for {i['title']}: {e}")
-                title = i['title']
-            
-            CHANNEL = Var.BRAND_UNAME.strip('@')
-            text += (
-                f'<b><blockquote>{i["time"]} ── <a href="https://t.me/{CHANNEL}/">{title}</a></blockquote></b>\n'
-            )
-        
-        sched_photo = getattr(Var, 'SCHEDULE_PHOTO', None)
-        if not sched_photo:
-            try:
-                sched_photo = await db.get_schedule_photo()
-            except Exception as e:
-                LOGGER.warning(f"Failed to get schedule photo from DB: {e}")
-                sched_photo = None
-
-        if sched_photo and str(sched_photo).strip() and str(sched_photo) not in ['0', 'None', '']:
-            try:
-                caption = text
-                await message.reply_photo(
-                    photo=sched_photo, 
-                    caption=caption
-                )
-                return
-            except Exception as e:
-                LOGGER.error(f"Failed to send photo: {e}")
-        
-        await message.reply_text(text)
-        
-    except Exception as err:
-        LOGGER.error(f"Error in ongoing_animes: {err}")
-        await message.reply_text(f"<blockquote><b>Error: {str(err)}</b></blockquote>", parse_mode="html")
+    await send_daily_schedule(
+        chat_id=message.chat.id,
+        reply_to_message_id=message.id,
+    )
 
 async def upcoming_animes():
     global TD_SCHR
