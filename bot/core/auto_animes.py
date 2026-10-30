@@ -151,6 +151,7 @@ class MongoDB:
                 {"$set": update_data},
                 upsert=True,
             )
+
             print(f"Successfully updated anime {ani_id} episode {ep}")
 
         except Exception as e:
