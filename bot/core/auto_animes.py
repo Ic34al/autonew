@@ -1841,24 +1841,19 @@ async def get_animes(name, torrent, force=False):
                     )
 
                 
-                thumbnail_path = None
+thumbnail_path = await create_anime_thumbnail(
+    image_url=photo_url,
+    anime_title=cleaned_name,
+    episode=ep_no if ep_no is not None else "TBA",
+    output_name=f"episode_{uuid.uuid4().hex}.jpg",
+    metadata=anime_metadata,
+)
 
-                try:
-                    anime_metadata = aniInfo.adata or {}
-
-                    thumbnail_path = await create_anime_thumbnail(
-                        image_url=photo_url,
-                        anime_title=cleaned_name,
-                        episode=ep_no if ep_no is not None else "TBA",
-                        output_name=f"episode_{uuid.uuid4().hex}.jpg",
-                        metadata=anime_metadata,
-                    )
-
-                    post_msg = await bot.send_photo(
-                        channel_to_use,
-                        photo=thumbnail_path or photo_url,
-                        caption=caption,
-                    )
+post_msg = await bot.send_photo(
+    channel_to_use,
+    photo=thumbnail_path or photo_url,
+    caption=caption,
+)
 
                 except Exception as e:
                     await rep.report(
