@@ -451,6 +451,34 @@ class AniLister:
                 max_retries=max_retries,
             )
 
+        if res_code == 404:
+            try:
+                fallback_media = await fetch_anilist_v2(
+                    self.__ani_name,
+                    datetime.now().year,
+                    is_movie=self.is_movie,
+                )
+                if fallback_media:
+                    await rep.report(
+                        f"AniList metadata recovered through fallback: {self.__ani_name}",
+                        "warning",
+                        log=False,
+                    )
+                    return fallback_media
+            except Exception as exc:
+                await rep.report(
+                    f"AniList fallback failed: {exc}",
+                    "warning",
+                    log=False,
+                )
+
+            await rep.report(
+                f"AniList HTTP 404; no metadata found for {self.__ani_name}. Continuing without metadata.",
+                "warning",
+                log=False,
+            )
+            return {}
+
         await rep.report(
             f"AniList request failed with HTTP {res_code} "
             f"for {self.__ani_name}",
