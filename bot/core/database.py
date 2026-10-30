@@ -148,17 +148,16 @@ class MongoDB:
 
         if post_id is not None:
             update_data[f"{ep}.msg_id"] = int(post_id)
-
-       try:
+        try:
             await self.__animes.update_one(
                 {"_id": ani_id},
                 {"$set": update_data},
                 upsert=True,
             )
-        print(f"Successfully updated anime {ani_id}, episode {ep}, quality {qual}")
-    except Exception as e:
-        print(f"Error updating anime {ani_id}, episode {ep}: {e}")
-        raise
+            print(f"Successfully updated anime {ani_id}, episode {ep}, quality {qual}")
+        except Exception as e:
+            print(f"Error updating anime {ani_id}, episode {ep}: {e}")
+            raise
         
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
         query = {"anime_name": anime_name.lower()}
