@@ -586,3 +586,465 @@ async def get_anilist_titles_from_cleaned(name: str) -> list:
     except Exception as e:
         await rep.report(f"get_anilist_titles_from_cleaned error: {e}", "warning")
         return []
+class TextEditor:
+    def __init__(self, name):
+        self.__name = name
+        self.adata = {}
+        self.pdata = parse(name)
+
+    async def load_anilist(self):
+        api_source = await db.get_api_source() if hasattr(db, 'get_api_source') else "default"
+        cache_names = []
+        is_movie = is_movie_title(self.__name)
+        manual_name = MANUAL_ANILIST_NAMES.get(self.__name)
+
+        if api_source == "v2":
+            for option in [(False, False), (False, True), (True, False), (True, True)]:
+                search_name = await self.parse_name(*option)
+
+                if search_name in cache_names:
+                    continue
+
+                cache_names.append(search_name)
+
+                media = await fetch_anilist_v2(
+                    search_name,
+                    datetime.now().year,
+                    is_movie=is_movie,
+                )
+
+                if media:
+                    self.adata = {
+                        "id": media.get("id"),
+                        "title": media.get("title", {}),
+                        "description": media.get("description"),
+                        "episodes": media.get("episodes"),
+                        "averageScore": media.get("averageScore"),
+                        "coverImage": media.get("coverImage", {}),
+                        "bannerImage": media.get("bannerImage"),
+                        "genres": media.get("genres", []),
+                        "status": media.get("status"),
+                        "siteUrl": media.get("siteUrl"),
+                        "format": media.get("format"),
+                        "startDate": media.get("startDate"),
+                        "endDate": media.get("endDate"),
+                        "season": media.get("season"),
+                        "seasonYear": media.get("seasonYear"),
+                        "studios": media.get("studios", {}),
+                        "duration": media.get("duration"),
+                    }
+                    break
+
+            return
+
+        if manual_name:
+            self.adata = await AniLister(
+                manual_name,
+                datetime.now().year,
+                is_movie=is_movie,
+            ).get_anidata()
+
+            if self.adata:
+                return
+
+        for option in [(False, False), (False, True), (True, False), (True, True)]:
+            ani_name = await self.parse_name(*option)
+
+            if ani_name in cache_names:
+                continue
+
+            cache_names.append(ani_name)
+
+            self.adata = await AniLister(
+                ani_name,
+                datetime.now().year,
+                is_movie=is_movie,
+            ).get_anidata()
+
+            if self.adata:
+                break
+
+    async def load_jikan(self):
+        async with ClientSession() as sess:
+            query = self.pdata.get("anime_title")
+            url = f"https://api.jikan.moe/v4/anime?q={query}"
+
+            async with sess.get(url) as resp:
+                data = await resp.json()
+
+                if data.get("data"):
+                    anime = data["data"][0]
+
+                    self.adata = {
+                        "title": {
+                            "english": anime.get("title_english"),
+                            "romaji": anime.get("title"),
+                            "native": anime.get("title_japanese"),
+                        },
+                        "format": anime.get("type"),
+                        "genres": [
+                            g["name"] for g in anime.get("genres", [])
+                        ],
+                        "averageScore": anime.get("score"),
+                        "status": anime.get("status"),
+                        "episodes": anime.get("episodes"),
+                        "description": anime.get("synopsis"),
+                        "siteUrl": anime.get("url"),
+                        "startDate": anime.get("aired", {}).get("from", {}),
+                        "endDate": anime.get("aired", {}).get("to", {}),
+                        "duration": anime.get("duration"),
+                    }
+
+    async def load_info(self):
+        api = await db.get_api_source()
+
+        if api == "jikan":
+            await self.load_jikan()
+
+            ani = AniLister(
+                self.pdata.get("anime_title"),
+                datetime.now().year,
+            )
+
+            ani_data = await ani.get_anidata()
+
+            if ani_data:
+                self.adata["poster_url"] = (
+                    f"https://img.anili.st/media/{ani_data.get('id')}"
+                )
+                self.adata["id"] = ani_data.get("id")
+                self.adata["bannerImage"] = ani_data.get("bannerImage")
+                self.adata["coverImage"] = ani_data.get("coverImage", {})
+                self.adata["studios"] = ani_data.get("studios", {})
+                self.adata["season"] = ani_data.get("season")
+                self.adata["seasonYear"] = ani_data.get("seasonYear")
+            else:
+                self.adata["poster_url"] = (
+                    "https://i.ibb.co/NdG0PXdx/not-found.png"
+                )
+
+        else:
+            await self.load_anilist()
+
+            if self.adata and self.adata.get("id"):
+                self.adata["poster_url"] = (
+                    f"https://img.anili.st/media/{self.adata.get('id')}"
+                )
+            else:
+                self.adata["poster_url"] = (
+                    "https://i.ibb.co/NdG0PXdx/not-found.png"
+                )
+
+    @handle_logs
+    async def get_id(self):
+        ani_id = self.adata.get("id")
+
+        if ani_id and str(ani_id).isdigit():
+            return ani_id
+
+    @handle_logs
+    async def parse_name(self, no_s=False, no_y=False):
+        anime_name = self.pdata.get("anime_title")
+        anime_season = self.pdata.get("anime_season")
+        anime_year = self.pdata.get("anime_year")
+
+        if is_movie_title(self.__name):
+            name = anime_name or self.__name
+            name = re.sub(r"(19|20)\d{2}", "", name)
+            name = re.sub(r"\[.*?\]|\(.*?\)", "", name)
+            name = re.sub(r"[._]", " ", name)
+            name = re.sub(r"\s+", " ", name).strip()
+            return name
+
+        if anime_name:
+            pname = anime_name
+
+            if not no_s and self.pdata.get("episode_number") and anime_season:
+                pname += f" {anime_season}"
+
+            if not no_y and anime_year:
+                pname += f" {anime_year}"
+
+            return pname
+
+        return self.__name
+
+    @handle_logs
+    async def get_poster(self):
+        if anime_id := await self.get_id():
+            return f"https://img.anili.st/media/{anime_id}"
+
+        return "https://i.ibb.co/NdG0PXdx/not-found.png"
+
+    @handle_logs
+    async def get_upname(self, qual=""):
+        anime_name = self.pdata.get("anime_title") or self.__name
+
+        codec = (
+            'HEVC' if 'libx265' in ffargs[qual]
+            else 'AV1' if 'libaom-av1' in ffargs[qual]
+            else ''
+        )
+
+        if self.pdata.get("audio_type"):
+            lang = self.pdata["audio_type"]
+        else:
+            name_lower = self.__name.lower()
+
+            if any(x in name_lower for x in ['multi-audio', 'multi audio']):
+                lang = 'Multi'
+            elif any(x in name_lower for x in ['dual-audio', 'dual audio']):
+                lang = 'Dual'
+            elif any(x in name_lower for x in [
+                'english-audio', 'english audio',
+                'english dub', 'english-dub'
+            ]):
+                lang = 'Dub'
+            else:
+                lang = 'Sub'
+
+        ani_s = self.pdata.get('anime_season', '01')
+
+        anime_season = (
+            str(ani_s[-1])
+            if isinstance(ani_s, list) and ani_s
+            else str(ani_s)
+        )
+
+        ep_no = self.pdata.get("episode_number")
+
+        if ep_no:
+            ep_no_str = str(ep_no).zfill(2)
+
+            return (
+                f"[S{anime_season}-{ep_no_str}] {anime_name} "
+                f"{'['+qual+'p]' if qual else ''} "
+                f"{'['+codec.upper()+'] ' if codec else ''}"
+                f"[{lang}] {Var.BRAND_UNAME}.mkv"
+            )
+
+        return (
+            f"[S0-01] {anime_name} "
+            f"{'['+qual+'p]' if qual else ''} "
+            f"{'['+codec.upper()+'] ' if codec else ''}"
+            f"[{lang}] {Var.BRAND_UNAME}.mkv"
+        )
+
+    @handle_logs
+    async def get_caption(self):
+        def parse_date(date_val):
+            if isinstance(date_val, dict):
+                if (
+                    date_val.get("day")
+                    and date_val.get("year")
+                    and date_val.get("month")
+                ):
+                    return (
+                        f"{month_name[date_val['month']]} "
+                        f"{date_val['day']}, {date_val['year']}"
+                    )
+
+            elif isinstance(date_val, str) and date_val:
+                try:
+                    dt = datetime.fromisoformat(
+                        date_val.replace("Z", "+00:00")
+                    )
+                    return f"{month_name[dt.month]} {dt.day}, {dt.year}"
+                except Exception:
+                    return date_val
+
+            return "N/A"
+
+        sd = self.adata.get("startDate", {})
+        ed = self.adata.get("endDate", {})
+
+        startdate = parse_date(sd)
+        enddate = parse_date(ed)
+
+        ep_no = self.pdata.get("episode_number")
+        ani_s = self.pdata.get("anime_season", "01")
+
+        if isinstance(ani_s, list) and ani_s:
+            anime_season = str(ani_s[-1])
+        elif isinstance(ani_s, str) and ani_s.isdigit():
+            anime_season = ani_s
+        else:
+            anime_season = "01"
+
+        anime_format = (self.adata.get("format") or "").lower()
+        is_movie = anime_format == "movie" or is_movie_title(self.__name)
+
+        try:
+            ep_no_str = str(int(ep_no)).zfill(2) if ep_no else "01"
+        except (ValueError, TypeError):
+            ep_no_str = "01"
+
+        if self.adata.get("title"):
+            titles = self.adata["title"]
+        else:
+            titles = {}
+
+        anime_name = self.pdata.get("anime_title") or self.__name
+
+        title = (
+            titles.get("english")
+            or titles.get("romaji")
+            or titles.get("native")
+            or anime_name
+        )
+
+        status = self.adata.get("status", "RELEASING")
+        genres = ", ".join(self.adata.get("genres") or [])
+        duration = self.adata.get("duration", "N/A")
+
+        if self.pdata.get("audio_type"):
+            lang = self.pdata["audio_type"]
+        else:
+            name_lower = self.__name.lower()
+
+            if any(x in name_lower for x in ['multi-audio', 'multi audio']):
+                lang = "Multi"
+            elif any(x in name_lower for x in ['dual-audio', 'dual audio']):
+                lang = "English & Japanese"
+            elif any(x in name_lower for x in [
+                'english-audio', 'english audio',
+                'english dub', 'english-dub'
+            ]):
+                lang = "English"
+            else:
+                lang = "Japanese"
+
+        desc = self.adata.get("description") or "N/A"
+
+        if len(desc) > 200:
+            desc = desc[:200] + "..."
+
+        template = MOVIE_CAPTION if is_movie else CAPTION_FORMAT
+
+        return template.format(
+            title=title,
+            form=self.adata.get("format") or "N/A",
+            genres=genres,
+            avg_score=(
+                f"{self.adata.get('averageScore')}%"
+                if self.adata.get("averageScore")
+                else "N/A"
+            ),
+            status=status,
+            anime_season=anime_season,
+            start_date=startdate,
+            lang=lang,
+            end_date=enddate,
+            t_eps=self.adata.get("episodes") or "N/A",
+            plot=desc,
+            ep_no=ep_no_str,
+            surl=self.adata.get("siteUrl"),
+            dura=duration,
+            cred=Var.BRAND_UNAME,
+        )
+
+
+def parse_manga_title(raw_title: str) -> dict:
+    title_parts = {
+        "title": "",
+        "volume": "N/A",
+        "chapter": "N/A",
+        "chapter_title": "N/A",
+    }
+
+    if not raw_title:
+        return title_parts
+
+    parts = raw_title.split(":", 1)
+    title_parts["title"] = parts[0].strip()
+
+    vol_match = re.search(
+        r"Vol\.?\s*(\d+)",
+        raw_title,
+        re.IGNORECASE,
+    )
+
+    ch_match = re.search(
+        r"Ch\.?\s*(\d+)",
+        raw_title,
+        re.IGNORECASE,
+    )
+
+    if vol_match:
+        title_parts["volume"] = f"Vol.{vol_match.group(1)}"
+
+    if ch_match:
+        title_parts["chapter"] = f"Ch.{ch_match.group(1)}"
+
+    if len(parts) > 1:
+        chapter_title = parts[1].strip()
+
+        chapter_title = re.sub(
+            r"^(?:Vol\.?\s*\d+\s*)?(?:Ch\.?\s*\d+\s*)?[-:]?\s*",
+            "",
+            chapter_title,
+        )
+
+        if chapter_title:
+            title_parts["chapter_title"] = chapter_title
+
+    return title_parts
+
+
+def get_manga_filename(raw_title: str, brand_channel: str) -> str:
+    parts = parse_manga_title(raw_title)
+
+    filename = "[FM] "
+
+    if parts["volume"] != "N/A" and parts["chapter"] != "N/A":
+        vol_num = parts["volume"].replace("Vol.", "")
+        ch_num = parts["chapter"].replace("Ch.", "")
+        filename += f"[V{vol_num}-C{ch_num}] "
+
+    elif parts["chapter"] != "N/A":
+        ch_num = parts["chapter"].replace("Ch.", "")
+        filename += f"[C{ch_num}] "
+
+    filename += f"{parts['title']} {brand_channel}"
+
+    return filename
+
+
+async def get_manga_caption(manga_info: dict, raw_title: str) -> str:
+    title_parts = parse_manga_title(raw_title)
+
+    anilist_data = {
+        "title": title_parts["title"],
+        "status": manga_info.get("status", "N/A"),
+        "genres": ", ".join(manga_info.get("genres", [])) or "N/A",
+        "description": manga_info.get("description", "N/A"),
+    }
+
+    if anilist_data["description"] != "N/A":
+        anilist_data["description"] = re.sub(
+            r"<[^>]+>",
+            "",
+            anilist_data["description"],
+        )
+
+        desc_lines = [
+            line
+            for line in anilist_data["description"].split("\n")
+            if not line.startswith(("(Source:", "Note:"))
+        ]
+
+        anilist_data["description"] = "\n".join(desc_lines)
+
+        if len(anilist_data["description"]) > 200:
+            anilist_data["description"] = (
+                anilist_data["description"][:200] + "..."
+            )
+
+    return MANGA_CAPTION_FORMAT.format(
+        title=anilist_data["title"],
+        status=anilist_data["status"],
+        volume=title_parts["volume"],
+        chapter=title_parts["chapter"],
+        genres=anilist_data["genres"],
+        description=anilist_data["description"],
+    )
