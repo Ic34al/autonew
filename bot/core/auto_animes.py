@@ -18,6 +18,7 @@ from .text_utils import TextEditor, MangaLister
 from .ffencoder import FFEncoder
 from .tguploader import TgUploader
 from .text_utils import get_manga_filename, parse_manga_title, get_manga_caption, obfuscate_text_for_copyright
+from bot.core.anime_thumbnail import create_anime_thumbnail
 from .reporter import rep
 import datetime
 import asyncio
@@ -1839,18 +1840,39 @@ async def get_animes(name, torrent, force=False):
                         "warning",
                     )
 
+                
+                thumbnail_path = None
+
                 try:
+                    anime_metadata = aniInfo.adata or {}
+
+                    thumbnail_path = await create_anime_thumbnail(
+                        image_url=photo_url,
+                        anime_title=cleaned_name,
+                        episode=ep_no if ep_no is not None else "TBA",
+                        output_name=f"episode_{uuid.uuid4().hex}.jpg",
+                        metadata=anime_metadata,
+                    )
+
                     post_msg = await bot.send_photo(
                         channel_to_use,
-                        photo=photo_url,
+                        photo=thumbnail_path or photo_url,
                         caption=caption,
                     )
+
                 except Exception as e:
                     await rep.report(
                         f"Failed to send initial post: {e}",
                         "error",
                     )
                     return
+
+                finally:
+                    if thumbnail_path and os.path.isfile(thumbnail_path):
+                        try:
+                            os.remove(thumbnail_path)
+                        except OSError:
+                            pass
                 await db.saveAnimePost(
                     ani_id,
                     ep_no,
