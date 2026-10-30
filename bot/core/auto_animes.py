@@ -1704,10 +1704,26 @@ async def get_animes(name, torrent, force=False):
             or key in ani_cache["completed"]
             for key in ani_task_keys
         ):
-            await rep.report(
-                f"Duplicate episode skipped: {name}",
-                "warning",
+            # Prevent repeated duplicate warning spam.
+            warning_key = tuple(sorted(ani_task_keys, key=str))
+
+            warned_duplicates = ani_cache.setdefault(
+                "duplicate_warnings", set()
             )
+
+            if warning_key not in warned_duplicates:
+                await rep.report(
+                    f"Duplicate episode skipped: {name}",
+                    "warning",
+                )
+
+                warned_duplicates.add(warning_key)
+
+                # Keep the warning cache from growing indefinitely.
+                if len(warned_duplicates) > 2000:
+                    warned_duplicates.clear()
+                    warned_duplicates.add(warning_key)
+
             return
 
         ani_cache["ongoing"].update(ani_task_keys)
