@@ -25,6 +25,53 @@ class MongoDB:
             {"_id": ani_id},
             {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
             upsert=True,
+        )   
+    async def claimAnimeEpisode(self, ani_id, ep, token):
+        """Claim an episode globally across all bot workers."""
+        if ani_id is None or ep is None:
+            return True
+
+        key = f"anime:{ani_id}:episode:{str(ep)}"
+        now = datetime.datetime.utcnow()
+        expires = now + datetime.timedelta(hours=12)
+
+        try:
+            await self.__db.episode_locks.update_one(
+                {
+                    "_id": key,
+                    "$or": [
+                        {"expires_at": {"$exists": False}},
+                        {"expires_at": {"$lte": now}},
+                    ],
+                },
+                {
+                    "$set": {
+                        "token": token,
+                        "expires_at": expires,
+                    }
+                },
+                upsert=True,
+            )
+            return True
+
+        except Exception as e:
+            # An active lock already owns this episode.
+            if "duplicate key" in str(e).lower() or "E11000" in str(e):
+                return False
+
+            raise
+
+    async def releaseAnimeEpisode(self, ani_id, ep, token):
+        if ani_id is None or ep is None or not token:
+            return
+
+        key = f"anime:{ani_id}:episode:{str(ep)}"
+
+        await self.__db.episode_locks.delete_one(
+            {
+                "_id": key,
+                "token": token,
+            }
         )
     async def saveAnimeStatus(self, ani_id, ep, status_msg_id):
         if ani_id is None or ep is None or status_msg_id is None:
