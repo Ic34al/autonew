@@ -17,49 +17,42 @@ class MongoDB:
     async def add_user(self, user_id: int):
         await self.__db.users.update_one({'_id': user_id}, {'$set': {'_id': user_id}}, upsert=True)
 
-    async def saveAnimePost(self, ani_id, ep, post_id):
-        if ani_id is None or ep is None or post_id is None:
+        async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
+        if ani_id is None:
             return
 
-        await self.__animes.update_one(
-            {"_id": ani_id},
-            {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
-            upsert=True,
-        )   
-    async def claimAnimeEpisode(self, ani_id, ep, token):
-        """Claim an episode globally across all bot workers."""
-        if ani_id is None or ep is None:
-            return True
+        if ep is None:
+            ep = "default_ep"
 
-        key = f"anime:{ani_id}:episode:{str(ep)}"
-        now = datetime.datetime.utcnow()
-        expires = now + datetime.timedelta(hours=12)
+        ep = str(ep)
+        allowed_quals = Var.QUALS + ["HDRi", "pdf"]
+
+        if qual not in allowed_quals:
+            print(f"Error: Invalid quality type ({qual})")
+            return
+
+        update_data = {
+            f"{ep}.{qual}": True,
+            f"{ep}.timestamp": datetime.datetime.now(),
+        }
+
+        if gdrive_link:
+            update_data[f"{ep}.{qual}_gdrive"] = gdrive_link
+
+        if post_id is not None:
+            update_data[f"{ep}.msg_id"] = int(post_id)
 
         try:
-            await self.__db.episode_locks.update_one(
-                {
-                    "_id": key,
-                    "$or": [
-                        {"expires_at": {"$exists": False}},
-                        {"expires_at": {"$lte": now}},
-                    ],
-                },
-                {
-                    "$set": {
-                        "token": token,
-                        "expires_at": expires,
-                    }
-                },
+            await self.__animes.update_one(
+                {"_id": ani_id},
+                {"$set": update_data},
                 upsert=True,
             )
-            return True
+
+            print(f"Successfully updated anime {ani_id} episode {ep}")
 
         except Exception as e:
-            # An active lock already owns this episode.
-            if "duplicate key" in str(e).lower() or "E11000" in str(e):
-                return False
-
-            raise
+            print(f"Error updating anime {ani_id} episode {ep}: {e}")
 
     async def releaseAnimeEpisode(self, ani_id, ep, token):
         if ani_id is None or ep is None or not token:
@@ -128,28 +121,36 @@ class MongoDB:
         anime_data.pop("_id", None)
         return anime_data
     async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
+        if ani_id is None:
+            return
+
         if ep is None:
             ep = "default_ep"
+
         ep = str(ep)
-        allowed_quals = Var.QUALS + ["pdf"]
-        quals = (await self.getAnime(ani_id)).get(ep, {qual: False for qual in Var.QUALS})
+        allowed_quals = list(Var.QUALS) + ["HDRi", "pdf"]
+
         if qual not in allowed_quals:
             print(f"Error: Invalid quality type ({qual})")
             return
-        quals[qual] = True
-        timestamp = datetime.datetime.now()
-        quals["timestamp"] = timestamp
-        
+
+        update_data = {
+            f"{ep}.{qual}": True,
+            f"{ep}.timestamp": datetime.datetime.now(),
+        }
+
         if gdrive_link:
-            quals[f"{qual}_gdrive"] = gdrive_link
-            
-        quals = {key if key is not None else "default_key": value for key, value in quals.items()}
+            update_data[f"{ep}.{qual}_gdrive"] = gdrive_link
+
+        if post_id is not None:
+            update_data[f"{ep}.msg_id"] = int(post_id)
 
         try:
-            await self.__animes.update_one({'_id': ani_id}, {'$set': {ep: quals}}, upsert=True)
-            if post_id:
-                await self.__animes.update_one({'_id': ani_id}, {'$set': {"msg_id": post_id}}, upsert=True)
-
+            await self.__animes.update_one(
+                {"_id": ani_id},
+                {"$set": update_data},
+                upsert=True,
+            )
             print(f"Successfully updated anime {ani_id} episode {ep}")
 
         except Exception as e:
