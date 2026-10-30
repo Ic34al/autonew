@@ -127,41 +127,39 @@ class MongoDB:
 
         anime_data.pop("_id", None)
         return anime_data
-    async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
-        if ep is None:
-            ep = "default_ep"
-        ep = str(ep)
-        allowed_quals = Var.QUALS + ["pdf"]
-        quals = (await self.getAnime(ani_id)).get(ep, {qual: False for qual in Var.QUALS})
-        if qual not in allowed_quals:
-            print(f"Error: Invalid quality type ({qual})")
-            return
-        quals[qual] = True
-        timestamp = datetime.datetime.now()
-        quals["timestamp"] = timestamp
-        
-        if gdrive_link:
-            quals[f"{qual}_gdrive"] = gdrive_link
-            
-        quals = {key if key is not None else "default_key": value for key, value in quals.items()}
+async def saveAnime(self, ani_id, ep, qual, post_id=None, gdrive_link=None):
+    if ani_id is None:
+        return
 
-        try:
-            await self.__animes.update_one({'_id': ani_id}, {'$set': {ep: quals}}, upsert=True)
-            if post_id:
-                await self.__animes.update_one({'_id': ani_id}, {'$set': {"msg_id": post_id}}, upsert=True)
+    ep = str(ep if ep is not None else "default_ep")
+    allowed_quals = list(Var.QUALS) + ["HDRi", "pdf"]
 
-            print(f"Successfully updated anime {ani_id} episode {ep}")
+    if qual not in allowed_quals:
+        print(f"Error: Invalid quality type ({qual})")
+        return
 
-        except Exception as e:
-            print(f"Error updating anime {ani_id} episode {ep}: {e}")
+    update_data = {
+        f"{ep}.{qual}": True,
+        f"{ep}.timestamp": datetime.datetime.now(),
+    }
 
-    async def add_anime_channel_mapping(self, anime_name: str, channel: str):
-        await self.__anime_channels.update_one(
-            {"anime_name": anime_name.lower()},
-            {"$set": {"channel_id": channel}},
-            upsert=True
+    if gdrive_link:
+        update_data[f"{ep}.{qual}_gdrive"] = gdrive_link
+
+    if post_id is not None:
+        update_data[f"{ep}.msg_id"] = int(post_id)
+
+    try:
+        await self.__animes.update_one(
+            {"_id": ani_id},
+            {"$set": update_data},
+            upsert=True,
         )
-
+        print(f"Successfully updated anime {ani_id}, episode {ep}, quality {qual}")
+    except Exception as e:
+        print(f"Error updating anime {ani_id}, episode {ep}: {e}")
+        raise
+        
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
         query = {"anime_name": anime_name.lower()}
         if channel is not None:
