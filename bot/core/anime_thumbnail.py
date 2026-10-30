@@ -123,13 +123,43 @@ async def download_image(session, url):
 
 
 def crop_cover(image, size):
-    return ImageOps.fit(
-        image.convert("RGB"),
+    """
+    Fill the landscape canvas without cutting off the original artwork.
+    Uses a blurred background to fill empty space when the source is portrait.
+    """
+    image = image.convert("RGB")
+    target_w, target_h = size
+
+    # Landscape sources are cropped very lightly to fill the canvas.
+    if image.width / image.height >= target_w / target_h:
+        return ImageOps.fit(
+            image,
+            size,
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5),
+        )
+
+    # Portrait artwork: preserve the complete original image.
+    background = ImageOps.fit(
+        image,
         size,
         method=Image.Resampling.LANCZOS,
         centering=(0.5, 0.5),
+    ).filter(
+        __import__("PIL.ImageFilter", fromlist=["GaussianBlur"]).GaussianBlur(24)
     )
 
+    foreground = ImageOps.contain(
+        image,
+        size,
+        method=Image.Resampling.LANCZOS,
+    )
+
+    x = (target_w - foreground.width) // 2
+    y = (target_h - foreground.height) // 2
+
+    background.paste(foreground, (x, y))
+    return background
 
 def rounded_image(canvas, image, box, radius=15):
     x1, y1, x2, y2 = box
