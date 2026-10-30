@@ -232,7 +232,9 @@ def format_anime_entry(item):
     )
 
 
-def build_caption_parts(items, now):
+def build_schedule_message(items, now):
+    """Build the complete daily anime schedule in one message."""
+
     header = (
         "✦ <b>TODAY | ANIME SCHEDULE</b> ✦\n"
         "━━━━━━━━━━━━━━━━━━━━\n\n"
@@ -246,39 +248,21 @@ def build_caption_parts(items, now):
     )
 
     if not items:
-        return (
-            header + "No anime releases found for today." + footer,
-            [],
-        )
+        return header + "No anime releases found for today." + footer
 
-    entries = []
-    remaining = []
-
-    for item in items:
-        entry = format_anime_entry(item)
-
-        candidate_entries = entries + [entry]
-        candidate = (
-            header
-            + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(
-                candidate_entries
-            )
-            + footer
-        )
-
-        # Leave room below Telegram's 1024-character caption limit.
-        if len(candidate) <= CAPTION_LIMIT:
-            entries.append(entry)
-        else:
-            remaining.append(entry)
-
-    caption = (
-        header
-        + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(entries)
-        + footer
+    body = "\n\n━━━━━━━━━━━━━━━━━━━━\n\n".join(
+        format_anime_entry(item) for item in items
     )
 
-    return caption, remaining
+    message = header + body + footer
+
+    if len(message) > 4096:
+        raise ValueError(
+            f"Schedule exceeds Telegram's 4096-character limit: "
+            f"{len(message)} characters."
+        )
+
+    return message
 
 
 async def fetch_today_schedule():
@@ -316,80 +300,16 @@ async def send_daily_schedule(
                 session,
             )
 
-        caption, remaining = build_caption_parts(items, now)
+        message = build_schedule_message(items, now)
 
-        photo_message = None
-
-        # Send the original image with the schedule directly underneath.
-        if BANNER_PATH.is_file():
-            try:
-                photo_message = await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=str(BANNER_PATH),
-                    caption=caption,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=reply_to_message_id,
-                )
-            except Exception:
-                LOGGER.exception(
-                    "Could not send the original photo with its caption."
-                )
-        else:
-            LOGGER.error(
-                "Original anime photo missing: %s",
-                BANNER_PATH,
-            )
-
-        # If the photo cannot be sent, send the schedule as text.
-        if photo_message is None:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=caption,
-                parse_mode=ParseMode.HTML,
-                reply_to_message_id=reply_to_message_id,
-                disable_web_page_preview=True,
-            )
-
-        # Send only entries that could not fit into the photo caption.
-        if remaining:
-            chunks = []
-            current = ""
-
-            for entry in remaining:
-                candidate = (
-                    current
-                    + "\n\n━━━━━━━━━━━━━━━━━━━━\n\n"
-                    + entry
-                    if current
-                    else entry
-                )
-
-                if len(candidate) > 3500 and current:
-                    chunks.append(current)
-                    current = entry
-                else:
-                    current = candidate
-
-            if current:
-                chunks.append(current)
-
-            for index, chunk in enumerate(chunks):
-                continuation = (
-                    "✦ <b>MORE ANIME RELEASES</b> ✦\n\n"
-                    + chunk
-                )
-
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=continuation,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=(
-                        photo_message.id
-                        if photo_message
-                        else reply_to_message_id
-                    ),
-                    disable_web_page_preview=True,
-                )
+        # Send all anime releases in ONE Telegram message.
+        await bot.send_message(
+            chat_id=chat_id,
+            text=message,
+            parse_mode=ParseMode.HTML,
+            reply_to_message_id=reply_to_message_id,
+            disable_web_page_preview=True,
+        )
 
         return True
 
