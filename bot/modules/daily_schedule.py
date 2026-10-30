@@ -8,6 +8,7 @@ import pytz
 from aiohttp import ClientSession, ClientTimeout
 
 from bot import bot, Var
+from bot.modules.schedule_image import create_schedule_image
 from pyrogram.enums import ParseMode
 
 LOGGER = logging.getLogger(__name__)
@@ -302,14 +303,37 @@ async def send_daily_schedule(
 
         message = build_schedule_message(items, now)
 
-        # Send all anime releases in ONE Telegram message.
-        await bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            parse_mode=ParseMode.HTML,
-            reply_to_message_id=reply_to_message_id,
-            disable_web_page_preview=True,
-        )
+        image_path = None
+
+        try:
+            image_path = create_schedule_image(items, now)
+
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=image_path,
+                caption=message,
+                parse_mode=ParseMode.HTML,
+                reply_to_message_id=reply_to_message_id,
+            )
+
+        except Exception as exc:
+            logging.exception(
+                "Schedule image sending failed: %s",
+                exc,
+            )
+
+            await bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode=ParseMode.HTML,
+                reply_to_message_id=reply_to_message_id,
+                disable_web_page_preview=True,
+            )
+
+        finally:
+            if image_path:
+                from pathlib import Path
+                Path(image_path).unlink(missing_ok=True)
 
         return True
 
