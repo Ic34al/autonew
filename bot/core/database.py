@@ -159,7 +159,7 @@ class MongoDB:
             print(f"Error updating anime {ani_id}, episode {ep}: {e}")
             raise
         
-        async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
+    async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
         query = {"anime_name": anime_name.lower()}
         if channel is not None:
             query["channel_id"] = int(channel) if str(channel).lstrip("-").isdigit() else channel
