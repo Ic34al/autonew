@@ -114,7 +114,9 @@ async def get_english_title(session, original_title, cache):
         )
 
         # AniList search may return ambiguous matches.
-        match = match or results[0]
+if not match:
+    cache[key] = original_title
+    return original_title
         titles = match.get("title") or {}
 
         # English title has priority.
