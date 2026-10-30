@@ -1,3 +1,4 @@
+import uuid
 from asyncio import gather, create_task, sleep as asleep, Event
 from asyncio.subprocess import PIPE
 from os import path as ospath, system, remove
@@ -1621,6 +1622,10 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 async def get_animes(name, torrent, force=False):
+    episode_claim_token = uuid.uuid4().hex
+    episode_claimed = False
+    ani_id = None
+    ep_no = None
     ani_task_keys = set()
     mode = await db.get_mode()
     if mode != "anime":
@@ -1752,7 +1757,19 @@ async def get_animes(name, torrent, force=False):
         ]
 
         if force or missing_quals:
-            
+            if ani_id is not None and ep_no is not None:
+                episode_claimed = await db.claimAnimeEpisode(
+                    ani_id,
+                    ep_no,
+                    episode_claim_token,
+                )
+
+                if not episode_claimed:
+                    await rep.report(
+                        f"Episode already processing; duplicate blocked: {name}",
+                        "warning",
+                    )
+                    return
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n{name}", "warning")
                 return
@@ -2052,6 +2069,19 @@ async def get_animes(name, torrent, force=False):
         await rep.report(format_exc(), "error")
 
     finally:
+        if episode_claimed:
+            try:
+                await db.releaseAnimeEpisode(
+                    ani_id,
+                    ep_no,
+                    episode_claim_token,
+                )
+            except Exception as e:
+                await rep.report(
+                    f"Episode lock release failed: {e}",
+                    "error",
+                )
+
         ani_cache["ongoing"].difference_update(ani_task_keys)
 
 
