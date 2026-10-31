@@ -20,7 +20,33 @@ class MongoDB:
     async def saveAnimePost(self, ani_id, ep, post_id):
         if ani_id is None or ep is None or post_id is None:
             return
+    async def saveAnimeMainPost(self, ani_id, ep, main_post_id):
+        if ani_id is None or ep is None or main_post_id is None:
+            return
 
+        await self.__animes.update_one(
+            {"_id": ani_id},
+            {"$set": {f"{str(ep)}.main_msg_id": int(main_post_id)}},
+            upsert=True,
+        )
+
+    async def getAnimeMainPost(self, ani_id, ep):
+        if ani_id is None or ep is None:
+            return None
+
+        anime_data = await self.__animes.find_one(
+            {"_id": ani_id},
+            {f"{str(ep)}.main_msg_id": 1},
+        )
+
+        if not anime_data:
+            return None
+
+        episode_data = anime_data.get(str(ep), {})
+        if not isinstance(episode_data, dict):
+            return None
+
+        return episode_data.get("main_msg_id")
         await self.__animes.update_one(
             {"_id": ani_id},
             {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
