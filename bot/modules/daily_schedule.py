@@ -227,29 +227,31 @@ def telegram_utf16_length(value):
 
 
 def format_anime_entry(item):
+    # Keep every title, release time, and status while using one compact line.
     title = escape(small_caps(item["title"]))
-    link = CHANNEL_URL
+    status = "✅" if item["status"] == "Released" else "⏳"
     return (
-        f'››  <a href="{link}">{title}</a>\n'
-        f'›› {small_caps("time")} : {escape(item["time"])}\n'
-        f'›› {small_caps("status")} : '
-        f'{"✅ Released" if item["status"] == "Released" else "⏳ Upcoming"}'
+        f'›› <a href="{CHANNEL_URL}">{title}</a>'
+        f' • {escape(item["time"])} {status}'
     )
 
 
 def build_schedule_message(items, now):
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\n"
-    divider = "────────────────────"
+    divider = "────────────"
     if not items:
         return header + divider + "\n›› No anime releases found today.\n" + divider
 
+    # One entry per line; retain all entries and the existing single-photo format.
     blocks = [format_anime_entry(item) for item in items]
-    message = header + divider + "\n" + ( "\n" + divider + "\n" ).join(blocks) + "\n" + divider
+    message = header + divider + "\n" + "\n".join(blocks) + "\n" + divider
+
     # Telegram photo captions are limited to 1,024 UTF-16 code units.
+    # Never truncate entries or silently omit anime.
     if telegram_utf16_length(message) > 1024:
         raise ValueError(
-            "Today's complete schedule is longer than Telegram's 1,024-character "
-            "photo-caption limit; refusing to split it or silently omit anime."
+            "The complete schedule still exceeds Telegram's 1,024-character "
+            "photo-caption limit after compact formatting; no anime were omitted."
         )
     return message
 
