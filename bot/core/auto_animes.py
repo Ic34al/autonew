@@ -577,7 +577,7 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
 
     except Exception as e:
         await rep.report(f"Mirror Error: {e}", "error")
-
+    return main_post
 async def fetch_manga():
     await rep.report("Fetching Manga Started !!!", "info")
     processed_urls = set()
@@ -1809,6 +1809,7 @@ async def get_animes(name, torrent, force=False):
             
             # Reuse the existing announcement when retrying an episode.
             post_msg = None
+            main_post = None
             existing_post_id = qual_data.get("msg_id")
 
             if existing_post_id:
@@ -1896,7 +1897,7 @@ async def get_animes(name, torrent, force=False):
                     ep_no,
                     post_msg.id,
                 )
-                await mirror_to_main_channel(
+                main_post = await mirror_to_main_channel(
                     post_msg=post_msg,
                     photo_url=photo_url,
                     caption=(
@@ -2098,7 +2099,78 @@ async def get_animes(name, torrent, force=False):
                         bot_loop.create_task(extra_utils(msg_id, out_path))
             finally:
                 ffLock.release()
-            
+            # Build the final download buttons using the latest uploaded file IDs.
+            saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
+
+            if not isinstance(saved_file_ids, dict):
+                saved_file_ids = {}
+
+            final_buttons = []
+
+            for saved_qual in required_quals:
+                saved_id = saved_file_ids.get(saved_qual)
+
+                if not saved_id:
+                    continue
+
+                try:
+                    encoded = await encode(
+                        "get-" + str(int(saved_id) * abs(Var.FILE_STORE))
+                    )
+
+                    label = (
+                        RAW_BTN
+                        if saved_qual == "HDRi"
+                        else btn_formatter.get(
+                            saved_qual,
+                            saved_qual + "p",
+                        )
+                    )
+
+                    final_buttons.append([
+                        InlineKeyboardButton(
+                            label,
+                            url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}",
+                        )
+                    ])
+
+                except Exception as e:
+                    await rep.report(
+                        f"Failed to create {saved_qual} download button: {e}",
+                        "warning",
+                    )
+
+            final_markup = (
+                InlineKeyboardMarkup(final_buttons)
+                if final_buttons
+                else None
+            )
+
+            # Update the original anime-channel post.
+            if post_msg and final_markup:
+                try:
+                    await post_msg.edit_reply_markup(
+                        reply_markup=final_markup
+                    )
+                except Exception as e:
+                    await rep.report(
+                        f"Failed to update original post buttons: {e}",
+                        "warning",
+                    )
+
+            # Update the mirrored main-channel post.
+            if main_post and final_markup:
+                try:
+                    await main_post.edit_reply_markup(
+                        reply_markup=final_markup
+                    )
+                except Exception as e:
+                    await rep.report(
+                        f"Failed to update main-channel buttons: {e}",
+                        "warning",
+                    )
+
+            await stat_msg.delete()
             await stat_msg.delete()
             try:
                 pending = await db.get_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
