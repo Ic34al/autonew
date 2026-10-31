@@ -1727,7 +1727,7 @@ async def get_animes(name, torrent, force=False):
                 await stat_msg.delete()
                 return
             
-            post_id = int(time() * 1000000)
+            post_id = int(datetime.datetime.now().timestamp() * 1000000)
             ffEvent = Event()
             ff_queued[post_id] = ffEvent
             
