@@ -1,4 +1,3 @@
-import uuid
 from asyncio import gather, create_task, sleep as asleep, Event
 from asyncio.subprocess import PIPE
 from os import path as ospath, system, remove
@@ -18,7 +17,6 @@ from .text_utils import TextEditor, MangaLister
 from .ffencoder import FFEncoder
 from .tguploader import TgUploader
 from .text_utils import get_manga_filename, parse_manga_title, get_manga_caption, obfuscate_text_for_copyright
-from bot.core.anime_thumbnail import create_anime_thumbnail
 from .reporter import rep
 import datetime
 import asyncio
@@ -37,23 +35,23 @@ import hashlib
 MAX_ABOUT_LEN = 255
 
 btn_formatter = {
-    'HDRi':'𝗛𝗗𝗥𝗶𝗽',
-    '1080':'𝟭𝟬𝟴𝟬𝗣', 
-    '720':'𝟳𝟮𝟬𝗣',
-    '480':'𝟰𝟴𝟬𝗣',
-    '360':'𝟯𝟲𝟬𝗣',
-    '240':'𝟮𝟰𝟬𝗣',
-    '144':'𝟭𝟰𝟰𝗣'
+    'HDRi':'ððð¥ð¶ð½',
+    '1080':'ð­ð¬ð´ð¬ð£', 
+    '720':'ð³ð®ð¬ð£',
+    '480':'ð°ð´ð¬ð£',
+    '360':'ð¯ð²ð¬ð£',
+    '240':'ð®ð°ð¬ð£',
+    '144':'ð­ð°ð°ð£'
 }
 
-#RAW_BTN = "𝗥𝗔𝗪"
-RAW_BTN = "𝗛𝗗𝗥𝗶𝗽"
-MANGA_BTN = "𝗥𝗲𝗮𝗱 𝗡𝗼𝘄"
-MANGA_READ_BUTTON = "𝗥𝗲𝗮𝗱 𝗡𝗼𝘄"
-MANGA_CHNL_BUTTON = "𝗝𝗼𝗶𝗻 𝗖𝗵𝗮𝗻𝗻𝗲𝗹"
-DOWNLOAD_BTN = "𝗗𝗼𝘄𝗻𝗹𝗼𝗮𝗱 𝗡𝗼𝘄"
-DOWNLOAD_ANIME_BTN = "𝗗𝗼𝘄𝗻𝗹𝗼𝗮𝗱 𝗡𝗼𝘄"
-DOWNLAOD_CHNL_BTN = "𝗝𝗼𝗶𝗻 𝗖𝗵𝗮𝗻𝗻𝗲𝗹"
+#RAW_BTN = "ð¥ððª"
+RAW_BTN = "ððð¥ð¶ð½"
+MANGA_BTN = "ð¥ð²ð®ð± ð¡ð¼ð"
+MANGA_READ_BUTTON = "ð¥ð²ð®ð± ð¡ð¼ð"
+MANGA_CHNL_BUTTON = "ðð¼ð¶ð» ððµð®ð»ð»ð²ð¹"
+DOWNLOAD_BTN = "ðð¼ðð»ð¹ð¼ð®ð± ð¡ð¼ð"
+DOWNLOAD_ANIME_BTN = "ðð¼ðð»ð¹ð¼ð®ð± ð¡ð¼ð"
+DOWNLAOD_CHNL_BTN = "ðð¼ð¶ð» ððµð®ð»ð»ð²ð¹"
 
 import hashlib
 import time
@@ -82,7 +80,7 @@ def patch_caption_episode(caption, episode_count):
     except Exception:
         episode_count = 1
     return re.sub(
-        r"(❍\s*𝗘𝗽𝗶𝘀𝗼𝗱𝗲:\s*<i>)[^<]+(</i>)",
+        r"(â\s*ðð½ð¶ðð¼ð±ð²:\s*<i>)[^<]+(</i>)",
         f"\\1{episode_count}\\2",
         caption
     )
@@ -164,7 +162,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     caption = await aniInfo.get_caption()
 
     caption = re.sub(
-        r"(❍\s*𝗘𝗽𝗶𝘀𝗼𝗱𝗲:\s*<i>)[^<]+(</i>)",
+        r"(â\s*ðð½ð¶ðð¼ð±ð²:\s*<i>)[^<]+(</i>)",
         lambda m: f"{m.group(1)}1-{episode_count}{m.group(2)}",
         caption
     )
@@ -176,17 +174,36 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     except Exception as e:
         await rep.report(f"Error applying font changer: {e}", "warning")
 
+    try:
+        post_msg = await bot.send_photo(
+            channel_to_use,
+            photo=poster_url,
+            caption=caption
+        )
+    except Exception as e:
+        await rep.report(f"Failed to send batch poster: {e}", "error")
+        post_msg = None
+
+    await mirror_to_main_channel(
+        post_msg=post_msg,
+        photo_url=poster_url,
+        caption=caption,
+        channel_to_use=channel_to_use
+    )
+
     await asleep(1.5)
     await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
     await asleep(1.5)
 
     stat_msg = await bot.send_message(
         chat_id=channel_to_use,
-        text=f"<blockquote>‣ <b>Anime Name :</b> <b><i>{anime_name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
+        text=f"<blockquote>â£ <b>Anime Name :</b> <b><i>{anime_name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
     )
 
-    required_qualities = ("480", "720", "1080")
-    uploaded_by_quality = {}
+    await asleep(Var.STICKER_INTERVAL)
+    await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
+
+    batch_buttons = []
     for qual in Var.QUALS:
         qual_msg_ids = []
         os.makedirs("encode", exist_ok=True)
@@ -201,11 +218,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
                 await rep.report(f"Encoding failed for {vfile} ({qual}p)", "error")
                 continue
 
-            try:
-                msg = await TgUploader(stat_msg).upload(encoded_path, qual)
-            except Exception as e:
-                await rep.report(f"Upload failed for {ep_upname} ({qual}p): {e}", "error")
-                msg = None
+            msg = await TgUploader(stat_msg).upload(encoded_path, qual)
             if msg:
                 qual_msg_ids.append(msg.id)
             try:
@@ -214,62 +227,16 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             except Exception:
                 pass
 
-        if len(qual_msg_ids) == episode_count:
+        if qual_msg_ids:
             first_id = min(qual_msg_ids)
             last_id = max(qual_msg_ids)
             batch_string = f"get-{first_id * abs(Var.FILE_STORE)}-{last_id * abs(Var.FILE_STORE)}"
-            uploaded_by_quality[qual] = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
-        else:
-            await rep.report(
-                f"{qual}p incomplete for {cleaned_name}: "
-                f"{len(qual_msg_ids)}/{episode_count} episodes uploaded",
-                "error",
-            )
-
-    if all(q in uploaded_by_quality for q in required_qualities):
-        buttons = [[
-            InlineKeyboardButton(
-                btn_formatter.get(q, q + "p"),
-                url=uploaded_by_quality[q],
-            )
-            for q in required_qualities
-        ]]
-        # Publish the anime post
-        try:
-            post_msg = await bot.send_photo(
-                chat_id=channel_to_use,
-                photo=poster_url,
-                caption=caption,
-                reply_markup=InlineKeyboardMarkup(buttons),
-            )
-        except Exception as e:
-            await rep.report(f"Failed to send batch poster: {e}", "error")
-            post_msg = None
-
-        # Send the Ongoing Anime Time banner underneath the post
-        if post_msg:
-            try:
-                await bot.send_photo(
-                    chat_id=channel_to_use,
-                    photo="ongoing_anime_time.gif",
-                    reply_to_message_id=post_msg.id,
-                )
-            except Exception as e:
-                await rep.report(f"Failed to send Ongoing Anime Time banner: {e}", "warning")
-
-        # Preserve the existing main-channel mirroring
-        await mirror_to_main_channel(
-            post_msg=post_msg,
-            photo_url=poster_url,
-            caption=caption,
-            channel_to_use=channel_to_use,
-        )
-    else:
-        await rep.report(
-            f"Final post withheld: one or more required qualities "
-            f"are missing for {cleaned_name}",
-            "error",
-        )
+            batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
+            btn_text = f"{btn_formatter.get(qual, qual+'p')}"
+            batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
+            if post_msg and batch_buttons:
+                btns = [batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]
+                await editMessage(post_msg, caption, InlineKeyboardMarkup(btns))
 
     await stat_msg.delete()
     import logging
@@ -350,7 +317,7 @@ def clean_anime_title(title: str) -> str:
 def extract_base_anime_name(name: str) -> str:
     cleaned = name
     # Remove special CJK brackets and punctuation marks early
-    cleaned = re.sub(r'[【】\(\)\[\]{}「」『』<>《》\u3010\u3011]', '', cleaned)
+    cleaned = re.sub(r'[ãã\(\)\[\]{}ãããã<>ãã\u3010\u3011]', '', cleaned)
     cleaned = re.sub(r'^\[[^\]]+\]\s*', '', cleaned)
     cleaned = re.sub(r'\s*-\s*\d+\s*(\([^\)]*\))?', '', cleaned)
     cleaned = re.sub(r'\s*S\d{1,2}E\d{1,3}', '', cleaned, flags=re.IGNORECASE)
@@ -368,7 +335,7 @@ def extract_base_anime_name(name: str) -> str:
 
 def normalize_anime_name_for_search(name: str) -> str:
     # Remove special CJK brackets and punctuation early
-    cleaned = re.sub(r'[【】\(\)\[\]{}"「」『』<>《》\u3010\u3011]', '', name)
+    cleaned = re.sub(r'[ãã\(\)\[\]{}"ãããã<>ãã\u3010\u3011]', '', name)
     base_name = extract_base_anime_name(cleaned)
     normalized = re.sub(r'\s+', ' ', base_name.lower().strip())
     return normalized
@@ -458,21 +425,12 @@ async def find_existing_anime_channel(anime_name: str):
             return channel_id
     return None
 
-async def send_sticker_to_channel(channel, sticker_id=None):
-    """Send Ongoing Anime Time branding instead of the old banner."""
-    if not Var.SEND_STICKER:
-        return
-    banner_path = "ongoing_anime_time.gif"
-    try:
-        if not os.path.isfile(banner_path):
-            print(f"ERROR: {banner_path} not found in repository root.")
-            return
-        await bot.send_photo(
-            chat_id=channel,
-            photo=banner_path
-        )
-    except Exception as e:
-        print(f"Failed to send Ongoing Anime Time banner: {e}")
+async def send_sticker_to_channel(channel, sticker_id):
+    if Var.SEND_STICKER and sticker_id:
+        try:
+            await bot.send_sticker(channel, sticker_id)
+        except Exception as e:
+            print(f"Failed to send sticker: {e}")
 
 async def validate_channel_id(channel_id):
     if not channel_id:
@@ -561,7 +519,7 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
                             await send_sticker_to_channel(backup_id, Var.STICKER_ID)
                         else:
                             try:
-                                await rep.report(f"Backup mode set to '{backup_mode}' — not recognized as archive; marking pending backup.", "warning")
+                                await rep.report(f"Backup mode set to '{backup_mode}' â not recognized as archive; marking pending backup.", "warning")
                                 if post_msg:
                                     await db.add_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
                                 elif main_post:
@@ -576,7 +534,7 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
 
     except Exception as e:
         await rep.report(f"Mirror Error: {e}", "error")
-    return main_post
+
 async def fetch_manga():
     await rep.report("Fetching Manga Started !!!", "info")
     processed_urls = set()
@@ -735,7 +693,7 @@ async def process_manga_chapter(title, chapter_url, manual=False):
 
         status_msg = await bot.send_message(
             Var.MAIN_CHANNEL,
-            f"<blockquote><b>‣ Manga Name:</b> <i>{title}</i></blockquote>\n\n<pre>Processing...</pre>"
+            f"<blockquote><b>â£ Manga Name:</b> <i>{title}</i></blockquote>\n\n<pre>Processing...</pre>"
         )
 
         manga_name = title.split(":")[0].strip()
@@ -749,30 +707,30 @@ async def process_manga_chapter(title, chapter_url, manual=False):
         file_store_msg = None
         try:
             await status_msg.edit_text(
-                f"<blockquote><b>‣ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Downloading images...</pre>"
+                f"<blockquote><b>â£ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Downloading images...</pre>"
             )
             images = await get_mangadex_images(chapter_url)
             if not isinstance(images, list) or not images or not all(isinstance(i, str) and i.strip() for i in images):
                 await rep.report(f"Upload failed: No images found or bad image data for {title}", "error")
                 await status_msg.edit_text(
-                    f"<blockquote><b>‣ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>No images found. Skipping.</pre>"
+                    f"<blockquote><b>â£ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>No images found. Skipping.</pre>"
                 )
                 return
 
             await status_msg.edit_text(
-                f"<blockquote><b>‣ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Creating PDF...</pre>"
+                f"<blockquote><b>â£ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Creating PDF...</pre>"
             )
 
             pdf_path = await images_to_pdf(safe_title, images, manga_dir)
             if not pdf_path or not ospath.exists(pdf_path):
                 await rep.report(f"PDF creation failed for {title}", "error")
                 await status_msg.edit_text(
-                    f"<blockquote><b>‣ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>PDF creation failed.</pre>"
+                    f"<blockquote><b>â£ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>PDF creation failed.</pre>"
                 )
                 return
 
             await status_msg.edit_text(
-                f"<blockquote><b>‣ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Uploading...</pre>"
+                f"<blockquote><b>â£ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Uploading...</pre>"
             )
 
             file_caption = get_manga_filename(title, Var.BRAND_UNAME)
@@ -826,7 +784,7 @@ async def process_manga_chapter(title, chapter_url, manual=False):
                 custom_channel = await get_or_create_manga_channel(title, manga_info)
                 if custom_channel and custom_channel != Var.FILE_STORE:
                     await status_msg.edit_text(
-                        f"<blockquote><b>‣ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Mirroring to custom channel...</pre>"
+                        f"<blockquote><b>â£ Manga Name :</b> <i>{title}</i></blockquote>\n\n<pre>Mirroring to custom channel...</pre>"
                     )
 
                     custom_msg = await bot.send_document(
@@ -855,7 +813,7 @@ async def process_manga_chapter(title, chapter_url, manual=False):
                             await rep.report(f"Failed to create custom channel links: {e}", "warning")
 
             await status_msg.edit_text(
-                f"<blockquote><b>‣ Manga Name:</b> <i>{title}</i></blockquote>\n\n<pre>Sending main post...</pre>"
+                f"<blockquote><b>â£ Manga Name:</b> <i>{title}</i></blockquote>\n\n<pre>Sending main post...</pre>"
             )
 
             caption = await get_manga_caption(manga_info, title)
@@ -1177,26 +1135,17 @@ async def process_low_end(name, torrent_url, force=False):
 
             stat_msg = await bot.send_message(
                 chat_id=channel_to_use, 
-                text=f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
+                text=f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
             )
 
             await asleep(Var.STICKER_INTERVAL)
             await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
 
-            file_store_links = await db.getAnimeFileIds(ani_id, ep_no)
-            if not isinstance(file_store_links, dict):
-                file_store_links = {}
-
+            file_store_links = {}
             buttons = []
             btns = []
             post_id = post_msg.id
             for qual in ["480", "720", "1080"]:
-                if file_store_links.get(qual):
-                    await rep.report(
-                        f"Skipping already uploaded {qual}p for {name}",
-                        "info",
-                    )
-                    continue
                 rss_link = Var.RSS_LOW_END.get(qual)
                 if not rss_link:
                     continue
@@ -1204,10 +1153,10 @@ async def process_low_end(name, torrent_url, force=False):
                 if not feed or not feed.get("link"):
                     continue
 
-                await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>")
+                await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>")
                 dl_path = await download_torrent(feed["link"])
                 if not dl_path:
-                    await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to download {qual}p</i></pre>")
+                    await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to download {qual}p</i></pre>")
                     continue
 
                 if Var.LOW_END_RENAME:
@@ -1215,7 +1164,7 @@ async def process_low_end(name, torrent_url, force=False):
                         filename = await aniInfo.get_upname(qual)
                         anime_format = aniInfo.adata.get("format", "").lower()
                         is_movie = anime_format == "movie"
-                        await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
+                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
                         await asleep(1.5)
                         await rep.report("Starting Encode...", "info")
                         try:
@@ -1225,7 +1174,7 @@ async def process_low_end(name, torrent_url, force=False):
                             await stat_msg.delete()
                             return
                         await rep.report("Successfully Compressed Now Going To Upload...", "info")
-                        await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
+                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
                         await asleep(1.5)
                         try:
                             msg = await TgUploader(stat_msg).upload(out_path, qual)
@@ -1235,21 +1184,14 @@ async def process_low_end(name, torrent_url, force=False):
                             return
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         msg_id = msg.id
-                        file_store_links[qual] = int(msg_id)
-
-                        await db.saveAnimeFileId(
-                            ani_id,
-                            ep_no,
-                            qual,
-                            msg_id,
-                        )
-
-                        await db.saveAnime(
-                            ani_id,
-                            ep_no,
-                            qual,
-                            post_id,
-                        )
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        if post_msg:
+                            if len(btns) != 0 and len(btns[-1]) == 1:
+                                btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
+                            else:
+                                btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
+                            await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
+                        await db.saveAnime(ani_id, ep_no, qual, post_id)
                         bot_loop.create_task(extra_utils(msg_id, out_path))
 
                         gdrive_status = await db.get_gdrive_upload()
@@ -1277,7 +1219,7 @@ async def process_low_end(name, torrent_url, force=False):
                         grouped_buttons = [all_buttons[i:i+2] for i in range(0, len(all_buttons), 2)]
                         await editMessage(post_msg, await aniInfo.get_caption(), InlineKeyboardMarkup(grouped_buttons))
                 else:
-                    await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
+                    await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
             all_buttons = []
             for qual, msg_id in file_store_links.items():
@@ -1361,13 +1303,7 @@ async def process_low_end(name, torrent_url, force=False):
 
 async def fetch_animes():
     await rep.report("Fetching Anime Started !!!", "info")
-    scheduled_links = set()
-
-    async def run_feed_task(feed, link):
-        try:
-            await get_animes(feed.title, feed.link)
-        finally:
-            scheduled_links.discard(link)
+    last_rss_entries = {}
     while True:
         await asleep(15)
         mode, upload_mode = await asyncio.gather(db.get_mode(), db.get_upload_mode())
@@ -1385,29 +1321,31 @@ async def fetch_animes():
                     feeds = await asyncio.gather(*(getfeed(url) for url in rss_urls))
 
                 valid_feeds = []
-                seen_links = set()
-
-                for feed in feeds:
-                    if not feed or not hasattr(feed, "link"):
+                for rss_url, feed in zip(rss_urls, feeds):
+                    if not feed or not hasattr(feed, 'link'):
                         continue
+                    
+                    current_link = feed.link
+                    last_link = last_rss_entries.get(rss_url)
+                    
+                    if current_link != last_link:
+                        last_rss_entries[rss_url] = current_link
+                        valid_feeds.append(feed)
 
-                    link = str(feed.link).strip()
-                    if not link or link in seen_links:
+                anime_links = [feed.link for feed in valid_feeds]
+                anime_datas = await asyncio.gather(*(db.getAnime(link) for link in anime_links))
+
+                for feed, ani_data in zip(valid_feeds, anime_datas):
+                    ep_no = None
+                    match = re.search(r'[-\s](\d+)\s*\(', feed.title)
+                    if match:
+                        ep_no = match.group(1)
+                    if not ep_no:
+                        ep_no = "1"
+                    ep_data = ani_data.get(str(ep_no), {}) if ani_data else {}
+                    if ep_data.get("completed"):
                         continue
-
-                    seen_links.add(link)
-                    valid_feeds.append(feed)
-
-                for feed in valid_feeds:
-                    link = str(feed.link).strip()
-
-                    if link in scheduled_links:
-                        continue
-
-                    scheduled_links.add(link)
-                    bot_loop.create_task(
-                        run_feed_task(feed, link)
-                    )
+                    bot_loop.create_task(get_animes(feed.title, feed.link))
             except Exception as e:
                 await rep.report(f"Anime fetch error: {str(e)}", "error")
 
@@ -1428,7 +1366,7 @@ async def get_or_create_anime_channel(name: str, aniInfo):
             await rep.report(f"Found banner-only mapping for {normalized_name} (no channel_id)", "info")
             channel_creation = await db.get_channel_creation()
             if channel_creation and Var.USER_SESSION:
-                await rep.report("Banner-only mapping found — creating channel because channel creation is enabled", "info")
+                await rep.report("Banner-only mapping found â creating channel because channel creation is enabled", "info")
                 new_channel = await create_anime_channel(name, aniInfo)
                 if new_channel:
                     await db.add_anime_channel_mapping(normalized_name, new_channel)
@@ -1493,16 +1431,16 @@ async def create_anime_channel(name, aniInfo):
 
         if is_movie:
             description = (
-                f"• Movie: {title}\n"
-                f"• Status: {status}\n"
-                f"• Genres: {genres_formatted}\n\n"
+                f"â¢ Movie: {title}\n"
+                f"â¢ Status: {status}\n"
+                f"â¢ Genres: {genres_formatted}\n\n"
                 f"Powered by @{Var.BOT_USERNAME}"
             )
         else:
             description = (
-                f"• Anime: {title}\n"
-                f"• Status: {status}\n"
-                f"• Genres: {genres_formatted}\n\n"
+                f"â¢ Anime: {title}\n"
+                f"â¢ Status: {status}\n"
+                f"â¢ Genres: {genres_formatted}\n\n"
                 f"Powered by @{Var.BOT_USERNAME}"
             )
 
@@ -1584,26 +1522,26 @@ async def create_anime_channel(name, aniInfo):
             if is_movie:
                 caption = f"""<b><blockquote>{display_title}</blockquote>
 
-<blockquote>‣ Genres : {genres}
-‣ Type : {anime_type}
-‣ Average Rating : {avg_rating}
-‣ Status : {status}
-‣ Release Date : {start_date.get("year", '')}-{start_date.get("month", '')}-{start_date.get("day", '')}
-‣ Duration : {runtime} minutes</blockquote>
-<blockquote expandable>‣ Synopsis : <i>{desc}</i></blockquote expandable>
+<blockquote>â£ Genres : {genres}
+â£ Type : {anime_type}
+â£ Average Rating : {avg_rating}
+â£ Status : {status}
+â£ Release Date : {start_date.get("year", '')}-{start_date.get("month", '')}-{start_date.get("day", '')}
+â£ Duration : {runtime} minutes</blockquote>
+<blockquote expandable>â£ Synopsis : <i>{desc}</i></blockquote expandable>
 </b>"""
             else:
                 caption = f"""<b><blockquote>{display_title}</blockquote>
 
-<blockquote>‣ Genres : {genres}
-‣ Type : {anime_type}
-‣ Average Rating : {avg_rating}
-‣ Status : {status}
-‣ First aired : {start_date.get("year", '')}-{start_date.get("month", '')}-{start_date.get("day", '')}
-‣ Last aired : {end_date.get("year", '')}-{end_date.get("month", '')}-{end_date.get("day", '')}
-‣ Runtime : {runtime} minutes
-‣ No of episodes : {episodes}</blockquote>
-<blockquote expandable>‣ Synopsis : <i>{desc}</i></blockquote expandable>
+<blockquote>â£ Genres : {genres}
+â£ Type : {anime_type}
+â£ Average Rating : {avg_rating}
+â£ Status : {status}
+â£ First aired : {start_date.get("year", '')}-{start_date.get("month", '')}-{start_date.get("day", '')}
+â£ Last aired : {end_date.get("year", '')}-{end_date.get("month", '')}-{end_date.get("day", '')}
+â£ Runtime : {runtime} minutes
+â£ No of episodes : {episodes}</blockquote>
+<blockquote expandable>â£ Synopsis : <i>{desc}</i></blockquote expandable>
 </b>"""
 
 
@@ -1613,14 +1551,10 @@ async def create_anime_channel(name, aniInfo):
                 caption=caption
             )
 
-            if Var.SEND_STICKER and os.path.exists("thumb.jpg"):
-                await user_client.send_photo(
-                    chat_id=channel_id,
-                    photo="thumb.jpg",
-                    caption="✨ Ongoing Anime Time"
-                )
+            STICKER_ID = "CAACAgUAAxkBAAIERmhruO6M5RpLtZjb2yrvPJxTuw0IAAIzEwACTrLwVSdrhgIPuK1TNgQ"
+            await user_client.send_sticker(channel_id, STICKER_ID)
 
-            await rep.report("Intro poster, caption, and banner sent to channel", "info")
+            await rep.report("Intro poster, caption, and sticker sent to channel", "info")
 
         except Exception as e:
             await rep.report(f"Failed to send intro content: {e}", "warning")
@@ -1639,11 +1573,6 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 async def get_animes(name, torrent, force=False):
-    episode_claim_token = uuid.uuid4().hex
-    episode_claimed = False
-    ani_id = None
-    ep_no = None
-    ani_task_keys = set()
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -1673,7 +1602,6 @@ async def get_animes(name, torrent, force=False):
         if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
             await process_low_end(name, torrent)
-            return
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -1691,102 +1619,17 @@ async def get_animes(name, torrent, force=False):
         ep_no = str(ep_no) if ep_no else None
         
         encoding_enabled = await db.get_encoding()
-
-        # Use AniList ID and canonical series title to identify episodes.
-        title_data = aniInfo.adata.get("title") or {}
-        stable_title = (
-            title_data.get("english")
-            or title_data.get("romaji")
-            or title_data.get("native")
-            or aniInfo.pdata.get("anime_title")
-            or name
-        )
-
-        ani_task_keys = set()
-
-        if ani_id is not None and ep_no is not None:
-            ani_task_keys.add(
-                ("episode", str(ani_id), str(ep_no))
-            )
-
-        if ep_no is not None:
-            title_key = normalize_anime_name_for_search(stable_title)
-            ani_task_keys.add(
-                ("title_episode", title_key, str(ep_no))
-            )
-
-        if not ani_task_keys:
-            ani_task_keys.add(
-                ("torrent", str(torrent).strip())
-            )
-
-        # Do not start another task for the same episode.
-        if not force and any(
-            key in ani_cache["ongoing"]
-            or key in ani_cache["completed"]
-            for key in ani_task_keys
-        ):
-            # Prevent repeated duplicate warning spam.
-            warning_key = tuple(sorted(ani_task_keys, key=str))
-
-            warned_duplicates = ani_cache.setdefault(
-                "duplicate_warnings", set()
-            )
-
-            if warning_key not in warned_duplicates:
-                await rep.report(
-                    f"Duplicate episode skipped: {name}",
-                    "warning",
-                )
-
-                warned_duplicates.add(warning_key)
-
-                # Keep the warning cache from growing indefinitely.
-                if len(warned_duplicates) > 2000:
-                    warned_duplicates.clear()
-                    warned_duplicates.add(warning_key)
-
+        if ani_id not in ani_cache['ongoing']:
+            ani_cache['ongoing'].add(ani_id)
+        elif not force:
             return
-
-        ani_cache["ongoing"].update(ani_task_keys)
+        if not force and ani_id in ani_cache['completed']:
+            return
         
-        ani_data = (
-            await db.getAnime(ani_id)
-            if ani_id is not None
-            else {}
-        )
-
-        qual_data = (
-            ani_data.get(ep_no, {})
-            if ani_data and ep_no is not None
-            else {}
-        )
-
-        required_quals = (
-            list(Var.QUALS)
-            if encoding_enabled
-            else ["HDRi"]
-        )
-
-        missing_quals = [
-            qual for qual in required_quals
-            if not qual_data.get(qual, False)
-        ]
-
-        if force or missing_quals:
-            if ani_id is not None and ep_no is not None:
-                episode_claimed = await db.claimAnimeEpisode(
-                    ani_id,
-                    ep_no,
-                    episode_claim_token,
-                )
-
-                if not episode_claimed:
-                    await rep.report(
-                        f"Episode already processing; duplicate blocked: {name}",
-                        "warning",
-                    )
-                    return
+        if force or (not (ani_data := await db.getAnime(ani_id)) \
+            or (ani_data and not (qual_data := ani_data.get(ep_no))) \
+            or (ani_data and qual_data and not all(qual for qual in qual_data.values()))):
+            
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n{name}", "warning")
                 return
@@ -1806,164 +1649,65 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
                 channel_to_use = Var.MAIN_CHANNEL
             
-            # Reuse the existing announcement when retrying an episode.
             post_msg = None
-            main_post = None
-            existing_post_id = qual_data.get("msg_id")
-            existing_main_post_id = qual_data.get("main_msg_id")
-
-            if existing_main_post_id:
-                try:
-                    main_post = await bot.get_messages(
-                        Var.MAIN_CHANNEL,
-                        message_ids=int(existing_main_post_id),
-                    )
-                    if getattr(main_post, "empty", False):
-                        main_post = None
-                except Exception as e:
-                    await rep.report(
-                        f"Could not reuse existing main-channel post: {e}",
-                        "warning",
-                    )
-                    main_post = None
-            if existing_post_id:
-                try:
-                    post_msg = await bot.get_messages(
-                        channel_to_use,
-                        message_ids=int(existing_post_id),
-                    )
-                    if getattr(post_msg, "empty", False):
-                        post_msg = None
-                except Exception as e:
-                    await rep.report(
-                        f"Could not reuse existing anime post: {e}",
-                        "warning",
-                    )
-                    post_msg = None
-
-            if post_msg is None:
-                all_banners = await db.list_anime_banners()
-                banner_url = None
-
-                for banner_key, url in all_banners:
-                    if banner_key.lower() in name.lower():
-                        banner_url = url
-                        break
-
-                if banner_url:
-                    photo_url = banner_url
-                elif hasattr(Var, "ANIME") and Var.ANIME in name:
-                    photo_url = Var.CUSTOM_BANNER
+            photo_path = None
+            all_banners = await db.list_anime_banners()
+            banner_url = None
+            
+            for banner_key, url in all_banners:
+                if banner_key.lower() in name.lower():
+                    banner_url = url
+                    break
+            
+            if banner_url:
+                photo_url = banner_url
+            elif hasattr(Var, 'ANIME') and Var.ANIME in name:
+                photo_url = Var.CUSTOM_BANNER
+            else:
+                photo_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
+            
+            caption = await aniInfo.get_caption()
+            try:
+                fontchanger_status = await db.get_fontchanger()
+                if fontchanger_status == "on":
+                    caption = obfuscate_text_for_copyright(caption)
+            except Exception as e:
+                await rep.report(f"Error applying font changer: {e}", "warning")
+            
+            try:
+                if photo_path is not None:
+                    with open(photo_path, 'rb') as photo_file:
+                        post_msg = await bot.send_photo(
+                            channel_to_use,
+                            photo=photo_url,
+                            caption=caption
+                        )
                 else:
-                    photo_url = aniInfo.adata.get(
-                        "poster_url",
-                        "https://i.ibb.co/NdG0PXdx/not-found.png",
-                    )
-
-                caption = await aniInfo.get_caption()
-
-                try:
-                    fontchanger_status = await db.get_fontchanger()
-                    if fontchanger_status == "on":
-                        caption = obfuscate_text_for_copyright(caption)
-                except Exception as e:
-                    await rep.report(
-                        f"Error applying font changer: {e}",
-                        "warning",
-                    )
-
-                
-
-                thumbnail_path = None
-
-                try:
-                    anime_metadata = aniInfo.adata or {}
-
-                    thumbnail_path = await create_anime_thumbnail(
-                        image_url=photo_url,
-                        anime_title=cleaned_name,
-                        episode=ep_no if ep_no is not None else "TBA",
-                        output_name=f"episode_{uuid.uuid4().hex}.jpg",
-                        metadata=anime_metadata,
-                    )
-
                     post_msg = await bot.send_photo(
                         channel_to_use,
-                        photo=thumbnail_path or photo_url,
-                        caption=caption,
+                        photo=photo_url,
+                        caption=caption
                     )
-
-                except Exception as e:
-                    await rep.report(
-                        f"Failed to send initial post: {e}",
-                        "error",
-                    )
-                    return
-
-                finally:
-                    if thumbnail_path and os.path.isfile(thumbnail_path):
-                        try:
-                            os.remove(thumbnail_path)
-                        except OSError:
-                            pass
-                await db.saveAnimePost(
-                    ani_id,
-                    ep_no,
-                    post_msg.id,
-                )
-                main_post = await mirror_to_main_channel(
-                    post_msg=post_msg,
-                    photo_url=photo_url,
-                    caption=(
-                        post_msg.caption.html
-                        if post_msg.caption else ""
-                    ),
-                    channel_to_use=channel_to_use,
-                )
-                if main_post:
-                    await db.saveAnimeMainPost(
-                        ani_id,
-                        ep_no,
-                        main_post.id,
-                    )
+            except Exception as e:
+                await rep.report(f"Failed to send initial post: {e}", "error")
+                return
+            
+            await mirror_to_main_channel(
+                post_msg=post_msg,
+                photo_url=photo_url,
+                caption=post_msg.caption.html if post_msg.caption else "",
+                channel_to_use=channel_to_use
+            )
+            
             await asleep(1.5)
             print(f"Using channel: {channel_to_use} for anime: {cleaned_name}")
             await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
             await asleep(1.5)
             
-            status_text = (
-                f"<blockquote>‣ <b>Anime Name :</b> "
-                f"<b><i>{name}</i></b></blockquote>\n\n"
-                "<pre><i>Downloading...</i></pre>"
+            stat_msg = await bot.send_message(
+                chat_id=channel_to_use, 
+                text=f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
             )
-
-            stat_msg = None
-            existing_status_id = qual_data.get("status_msg_id")
-
-            if existing_status_id:
-                try:
-                    stat_msg = await bot.get_messages(
-                        channel_to_use,
-                        message_ids=int(existing_status_id),
-                    )
-                    if not stat_msg or getattr(stat_msg, "empty", False):
-                        stat_msg = None
-                    else:
-                        await editMessage(stat_msg, status_text)
-                except Exception:
-                    stat_msg = None
-
-            if stat_msg is None:
-                stat_msg = await bot.send_message(
-                    chat_id=channel_to_use,
-                    text=status_text,
-                )
-                await db.saveAnimeStatus(
-                    ani_id,
-                    ep_no,
-                    stat_msg.id,
-                )
-                qual_data["status_msg_id"] = stat_msg.id
             
             await asleep(Var.STICKER_INTERVAL)
             await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
@@ -1971,12 +1715,7 @@ async def get_animes(name, torrent, force=False):
             dl_path = await download_torrent(torrent, name)
             if not dl_path or not ospath.exists(dl_path):
                 await rep.report(f"File Download Incomplete for {name}, Try Again", "error")
-                await editMessage(
-                    stat_msg,
-                    f"<blockquote>‣ <b>Anime Name :</b> "
-                    f"<b><i>{name}</i></b></blockquote>\n\n"
-                    "<pre><i>Failed — will retry on the next attempt.</i></pre>",
-                )
+                await stat_msg.delete()
                 return
             
             post_id = post_msg.id
@@ -1984,49 +1723,17 @@ async def get_animes(name, torrent, force=False):
             ff_queued[post_id] = ffEvent
             
             if ffLock.locked():
-                await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Queued to Encode...</i></pre>")
+                await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Queued to Encode...</i></pre>")
                 await rep.report("Added Task to Queue...", "info")
             
             await ffQueue.put(post_id)
             await ffEvent.wait()
             await ffLock.acquire()
             try:
-                saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
-
-                if not isinstance(saved_file_ids, dict):
-                    saved_file_ids = {}
-
                 btns = []
-
-                for saved_qual in required_quals:
-                    saved_id = saved_file_ids.get(saved_qual)
-
-                    if not saved_id:
-                        continue
-
-                    encoded = await encode(
-                        "get-" + str(int(saved_id) * abs(Var.FILE_STORE))
-                    )
-
-                    label = (
-                        RAW_BTN
-                        if saved_qual == "HDRi"
-                        else btn_formatter.get(
-                            saved_qual,
-                            saved_qual + "p",
-                        )
-                    )
-
-                    btns.append([
-                        InlineKeyboardButton(
-                            label,
-                            url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}",
-                        )
-                    ])
-
                 if not encoding_enabled:
                     filename = await aniInfo.get_upname("HDRi")
-                    await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Uploading...</i></pre>")
+                    await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Uploading...</i></pre>")
                     await asleep(1.5)
                     
                     anime_format = aniInfo.adata.get("format", "").lower()
@@ -2043,30 +1750,18 @@ async def get_animes(name, torrent, force=False):
                         msg = await TgUploader(stat_msg).upload(dl_path, "HDRi")
                     
                     msg_id = msg.id
-                    saved_file_ids["HDRi"] = int(msg_id)
-
-                    await db.saveAnimeFileId(
-                        ani_id,
-                        ep_no,
-                        "HDRi",
-                        msg_id,
-                    )
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                    btns.append([InlineKeyboardButton(f"{RAW_BTN}", url=link)])
+                    if post_msg:
+                        await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
                     await db.saveAnime(ani_id, ep_no, "HDRi", post_id)
-                    qual_data["HDRi"] = True
                     bot_loop.create_task(extra_utils(msg_id, dl_path))
                 else:
                     for qual in Var.QUALS:
-                        if not force and qual_data.get(qual, False):
-                            await rep.report(
-                                f"Skipping already uploaded {qual}p for {name}",
-                                "info",
-                            )
-                            continue
-
                         filename = await aniInfo.get_upname(qual)
                         anime_format = aniInfo.adata.get("format", "").lower()
                         is_movie = anime_format == "movie"
-                        await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
+                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
                         
                         await asleep(1.5)
                         await rep.report("Starting Encode...", "info")
@@ -2074,121 +1769,33 @@ async def get_animes(name, torrent, force=False):
                             out_path = await FFEncoder(stat_msg, dl_path, filename, qual, is_movie=is_movie).start_encode()
                         except Exception as e:
                             await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await editMessage(
-                                stat_msg,
-                                f"<blockquote>‣ <b>Anime Name :</b> "
-                                f"<b><i>{name}</i></b></blockquote>\n\n"
-                                "<pre><i>Encoding failed — will retry.</i></pre>",
-                            )
+                            await stat_msg.delete()
                             return
                         await rep.report("Successfully Compressed Now Going To Upload...", "info")
                         
-                        await editMessage(stat_msg, f"<blockquote>‣ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
+                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
                         await asleep(1.5)
                         try:
                             msg = await TgUploader(stat_msg).upload(out_path, qual)
                         except Exception as e:
                             await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await editMessage(
-                                stat_msg,
-                                f"<blockquote>‣ <b>Anime Name :</b> "
-                                f"<b><i>{name}</i></b></blockquote>\n\n"
-                                "<pre><i>Upload failed — will retry.</i></pre>",
-                            )
+                            await stat_msg.delete()
                             return
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         
                         msg_id = msg.id
-                        saved_file_ids[qual] = int(msg_id)
-
-                        await db.saveAnimeFileId(
-                            ani_id,
-                            ep_no,
-                            qual,
-                            msg_id,
-                        )
-
-                        await db.saveAnime(
-                            ani_id,
-                            ep_no,
-                            qual,
-                            post_id,
-                        )
-                        qual_data[qual] = True
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        if post_msg:
+                            if len(btns) != 0 and len(btns[-1]) == 1:
+                                btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
+                            else:
+                                btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
+                            await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
+                        await db.saveAnime(ani_id, ep_no, qual, post_id)
                         bot_loop.create_task(extra_utils(msg_id, out_path))
             finally:
                 ffLock.release()
-            # Build the final download buttons using the latest uploaded file IDs.
-            saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
-
-            if not isinstance(saved_file_ids, dict):
-                saved_file_ids = {}
-
-            final_buttons = []
-
-            for saved_qual in required_quals:
-                saved_id = saved_file_ids.get(saved_qual)
-
-                if not saved_id:
-                    continue
-
-                try:
-                    encoded = await encode(
-                        "get-" + str(int(saved_id) * abs(Var.FILE_STORE))
-                    )
-
-                    label = (
-                        RAW_BTN
-                        if saved_qual == "HDRi"
-                        else btn_formatter.get(
-                            saved_qual,
-                            saved_qual + "p",
-                        )
-                    )
-
-                    final_buttons.append([
-                        InlineKeyboardButton(
-                            label,
-                            url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}",
-                        )
-                    ])
-
-                except Exception as e:
-                    await rep.report(
-                        f"Failed to create {saved_qual} download button: {e}",
-                        "warning",
-                    )
-
-            final_markup = (
-                InlineKeyboardMarkup(final_buttons)
-                if final_buttons
-                else None
-            )
-
-            # Update the original anime-channel post.
-            if post_msg and final_markup:
-                try:
-                    await post_msg.edit_reply_markup(
-                        reply_markup=final_markup
-                    )
-                except Exception as e:
-                    await rep.report(
-                        f"Failed to update original post buttons: {e}",
-                        "warning",
-                    )
-
-            # Update the mirrored main-channel post.
-            if main_post and final_markup:
-                try:
-                    await main_post.edit_reply_markup(
-                        reply_markup=final_markup
-                    )
-                except Exception as e:
-                    await rep.report(
-                        f"Failed to update main-channel buttons: {e}",
-                        "warning",
-                    )
-
+            
             await stat_msg.delete()
             try:
                 pending = await db.get_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
@@ -2235,39 +1842,9 @@ async def get_animes(name, torrent, force=False):
 
             if encoding_enabled:
                 await aioremove(dl_path)
-        if ani_task_keys and ani_id is not None and ep_no is not None:
-            final_data = await db.getAnime(ani_id)
-
-            final_episode = (
-                final_data.get(ep_no, {})
-                if final_data
-                else {}
-            )
-
-            if all(
-                final_episode.get(q, False)
-                for q in required_quals
-            ):
-                ani_cache["completed"].update(ani_task_keys)
-
+        ani_cache['completed'].add(ani_id)
     except Exception as error:
         await rep.report(format_exc(), "error")
-
-    finally:
-        if episode_claimed:
-            try:
-                await db.releaseAnimeEpisode(
-                    ani_id,
-                    ep_no,
-                    episode_claim_token,
-                )
-            except Exception as e:
-                await rep.report(
-                    f"Episode lock release failed: {e}",
-                    "error",
-                )
-
-        ani_cache["ongoing"].difference_update(ani_task_keys)
 
 
 async def extra_utils(msg_id, out_path):
