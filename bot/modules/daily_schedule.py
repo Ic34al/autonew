@@ -210,16 +210,20 @@ async def prepare_schedule(schedule, now, session):
     return items
 
 
-SMALL_CAPS = str.maketrans({
-    "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ","g":"ɢ","h":"ʜ",
-    "i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ","m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ",
-    "q":"ǫ","r":"ʀ","s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x",
-    "y":"ʏ","z":"ᴢ"
-})
-
-
-def small_caps(value):
-    return str(value).translate(SMALL_CAPS)
+def style_e(value):
+    """Style E: mathematical sans-serif bold italic for schedule titles and time/status."""
+    output = []
+    for char in str(value):
+        code = ord(char)
+        if "A" <= char <= "Z":
+            output.append(chr(0x1D63C + code - ord("A")))
+        elif "a" <= char <= "z":
+            output.append(chr(0x1D656 + code - ord("a")))
+        elif "0" <= char <= "9":
+            output.append(chr(0x1D7EC + code - ord("0")))
+        else:
+            output.append(char)
+    return "".join(output)
 
 
 def telegram_utf16_length(value):
@@ -227,34 +231,28 @@ def telegram_utf16_length(value):
 
 
 def format_anime_entry(item):
-    # Keep every title, release time, and status while using one compact line.
-    title = escape(small_caps(item["title"]))
-    status = "✅" if item["status"] == "Released" else "⏳"
-    episode = escape(str(item.get("episode") or "TBA"))
-    return (
-        f'›› <a href="{CHANNEL_URL}">{title} EP {episode}</a>'
-        f' • {escape(item["time"])} {status}'
-    )
+    title = escape(style_e(item["title"]))
+    time_text = escape(style_e(item["time"]))
+    status = escape(style_e("Upcoming"))
+    return f'<a href="{CHANNEL_URL}">{title}</a>\\n{time_text} PM  ⏳ {status}'
 
 
 def build_schedule_message(items, now):
-    header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\n"
-    divider = "────────────"
+    header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
+    divider = "────────────────────"
     if not items:
-        return header + divider + "\n›› No anime releases found today.\n" + divider
+        return f"{header}\\n{divider}\\n›› No anime releases found today.\\n{divider}"
 
-    # One entry per line; retain all entries and the existing single-photo format.
+    # Every listing is Upcoming by request; don't infer an Airing/Released state from clock time.
     blocks = [format_anime_entry(item) for item in items]
-    message = header + divider + "\n" + "\n".join(blocks) + "\n" + divider
+    message = header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
 
-    # Telegram photo captions are limited to 1,024 UTF-16 code units.
-    # Never truncate entries or silently omit anime.
-    # Telegram enforces the limit on rendered caption text, not HTML markup.
+    # Photo captions are limited to 1,024 UTF-16 code units. Never silently omit entries.
     rendered_message = unescape(re.sub(r"<[^>]+>", "", message))
     if telegram_utf16_length(rendered_message) > 1024:
         raise ValueError(
-            "The complete schedule still exceeds Telegram's 1,024-character "
-            "photo-caption limit after compact formatting; no anime were omitted."
+            "The complete anime schedule exceeds Telegram's 1,024-character "
+            "photo-caption limit in the selected formatting. No anime were omitted."
         )
     return message
 
