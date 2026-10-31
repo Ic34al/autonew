@@ -20,6 +20,13 @@ class MongoDB:
     async def saveAnimePost(self, ani_id, ep, post_id):
         if ani_id is None or ep is None or post_id is None:
             return
+
+        await self.__animes.update_one(
+            {"_id": ani_id},
+            {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
+            upsert=True,
+        )
+
     async def saveAnimeMainPost(self, ani_id, ep, main_post_id):
         if ani_id is None or ep is None or main_post_id is None:
             return
@@ -47,11 +54,6 @@ class MongoDB:
             return None
 
         return episode_data.get("main_msg_id")
-        await self.__animes.update_one(
-            {"_id": ani_id},
-            {"$set": {f"{str(ep)}.msg_id": int(post_id)}},
-            upsert=True,
-        )   
     async def claimAnimeEpisode(self, ani_id, ep, token):
         """Claim an episode globally across all bot workers."""
         if ani_id is None or ep is None:
