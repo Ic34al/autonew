@@ -2079,7 +2079,7 @@ async def get_animes(name, torrent, force=False):
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         
                         msg_id = msg.id
-                        file_store_links[qual] = int(msg_id)
+                        saved_file_ids[qual] = int(msg_id)
 
                         await db.saveAnimeFileId(
                             ani_id,
