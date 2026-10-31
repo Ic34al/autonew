@@ -2444,7 +2444,7 @@ async def start_msg(client, message):
         except Exception as e:
             await message.reply(f"Error: {e}")
             if hasattr(temp, 'delete'):
-            await temp.delete()
+                await temp.delete()
             return
 
     if len(arg) == 2 and arg[0] == 'get':
