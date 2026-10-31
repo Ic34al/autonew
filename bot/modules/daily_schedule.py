@@ -98,22 +98,17 @@ async def get_english_title(session, original_title, cache):
             return original_title
 
         normalized = original_title.casefold().strip()
-
         match = next(
             (
                 anime for anime in results
                 if any(
                     (anime.get("title", {}).get(field) or "")
                     .casefold().strip() == normalized
-                    for field in ("english", "romaji")
+                    for field in ("english", "romaji", "native")
                 )
             ),
-            None,
+            results[0],
         )
-
-        if not match:
-            cache[key] = original_title
-            return original_title
         titles = match.get("title") or {}
 
         resolved = (
@@ -205,7 +200,7 @@ async def prepare_schedule(schedule, now, session):
             "datetime": release_datetime,
             "episode": episode,
             "status": (
-                "Aired"
+                "Released"
                 if now >= release_datetime
                 else "Upcoming"
             ),
@@ -235,21 +230,21 @@ def format_anime_entry(item):
     title = escape(small_caps(item["title"]))
     link = CHANNEL_URL
     return (
-        f'››  <a href="{link}">{title}</a>\\n'
-        f'›› {small_caps("time")} : {escape(item["time"])}\\n'
+        f'››  <a href="{link}">{title}</a>\n'
+        f'›› {small_caps("time")} : {escape(item["time"])}\n'
         f'›› {small_caps("status")} : '
         f'{"✅ Released" if item["status"] == "Released" else "⏳ Upcoming"}'
     )
 
 
 def build_schedule_message(items, now):
-    header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\\n"
+    header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\n"
     divider = "────────────────────"
     if not items:
-        return header + divider + "\\n›› No anime releases found today.\\n" + divider
+        return header + divider + "\n›› No anime releases found today.\n" + divider
 
     blocks = [format_anime_entry(item) for item in items]
-    message = header + divider + "\\n" + ( "\\n" + divider + "\\n" ).join(blocks) + "\\n" + divider
+    message = header + divider + "\n" + ( "\n" + divider + "\n" ).join(blocks) + "\n" + divider
     # Telegram photo captions are limited to 1,024 UTF-16 code units.
     if telegram_utf16_length(message) > 1024:
         raise ValueError(
