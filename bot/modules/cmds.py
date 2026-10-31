@@ -2342,13 +2342,15 @@ async def start_msg(client, message):
         if use_force:
             try:
                 await message.reply_photo(force_photo, caption=txt, reply_markup=InlineKeyboardMarkup(btns))
-                await temp.delete()
+                if hasattr(temp, 'delete'):
+            await temp.delete()
                 return
             except Exception:
                 pass
         return await editMessage(temp, txt, InlineKeyboardMarkup(btns))
     if len(txtargs) <= 1:
-        await temp.delete()
+        if hasattr(temp, 'delete'):
+            await temp.delete()
         btns = []
         for elem in Var.START_BUTTONS.split():
             try:
@@ -2423,6 +2425,7 @@ async def start_msg(client, message):
                     )
                 if nmsg and Var.AUTO_DEL:
                     sent_msgs.append(nmsg)
+            if hasattr(temp, 'delete'):
             await temp.delete()
             if sent_msgs and Var.AUTO_DEL:
                 async def auto_del(msgs, timer):
@@ -2440,6 +2443,7 @@ async def start_msg(client, message):
             return
         except Exception as e:
             await message.reply(f"Error: {e}")
+            if hasattr(temp, 'delete'):
             await temp.delete()
             return
 
@@ -2480,6 +2484,7 @@ async def start_msg(client, message):
                     message.chat.id,
                     reply_markup=msg.reply_markup if msg.reply_markup else None
                 )
+            if hasattr(temp, 'delete'):
             await temp.delete()
             if Var.AUTO_DEL:
                 async def auto_del(msg, timer):
