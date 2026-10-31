@@ -2343,7 +2343,7 @@ async def start_msg(client, message):
             try:
                 await message.reply_photo(force_photo, caption=txt, reply_markup=InlineKeyboardMarkup(btns))
                 if hasattr(temp, 'delete'):
-            await temp.delete()
+                    await temp.delete()
                 return
             except Exception:
                 pass
