@@ -215,38 +215,47 @@ async def prepare_schedule(schedule, now, session):
     return items
 
 
-def format_anime_entry(item):
-    title = escape(item["title"])
+SMALL_CAPS = str.maketrans({
+    "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ","g":"ɢ","h":"ʜ",
+    "i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ","m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ",
+    "q":"ǫ","r":"ʀ","s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x",
+    "y":"ʏ","z":"ᴢ"
+})
 
+
+def small_caps(value):
+    return str(value).translate(SMALL_CAPS)
+
+
+def telegram_utf16_length(value):
+    return len(value.encode("utf-16-le")) // 2
+
+
+def format_anime_entry(item):
+    title = escape(small_caps(item["title"]))
+    link = CHANNEL_URL
     return (
-        f"✦ <b>{title}</b>\n"
-        f"   ├─ <b>TIME:</b> {escape(item['time'])} IST\n"
-        f"   └─ <b>STATUS:</b> "
-        f"{'AIRED' if item['status'] == 'Aired' else 'UPCOMING'}"
+        f'››  <a href="{link}">{title}</a>\\n'
+        f'›› {small_caps("time")} : {escape(item["time"])}\\n'
+        f'›› {small_caps("status")} : '
+        f'{"✅ Released" if item["status"] == "Released" else "⏳ Upcoming"}'
     )
 
 
 def build_schedule_message(items, now):
-    header = (
-        "✦ <b>ONGOING ANIME TIME</b> ✦\n"
-        "━━━━━━━━━━━━━━━━━━━━\n\n"
-    )
-
+    header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\\n"
+    divider = "────────────────────"
     if not items:
-        return header + "<b>No anime releases found today.</b>"
+        return header + divider + "\\n›› No anime releases found today.\\n" + divider
 
-    body = "\n\n".join(
-        format_anime_entry(item) for item in items
-    )
-
-    message = header + body
-
-    if len(message) > 4096:
+    blocks = [format_anime_entry(item) for item in items]
+    message = header + divider + "\\n" + ( "\\n" + divider + "\\n" ).join(blocks) + "\\n" + divider
+    # Telegram photo captions are limited to 1,024 UTF-16 code units.
+    if telegram_utf16_length(message) > 1024:
         raise ValueError(
-            f"Schedule exceeds Telegram's 4096-character limit: "
-            f"{len(message)} characters."
+            "Today's complete schedule is longer than Telegram's 1,024-character "
+            "photo-caption limit; refusing to split it or silently omit anime."
         )
-
     return message
 
 
@@ -272,76 +281,47 @@ async def send_daily_schedule(
     chat_id,
     reply_to_message_id=None,
 ):
+    """Send the banner and the complete compact schedule as one photo post."""
     try:
         now = datetime.now(IST)
         raw_schedule = await fetch_today_schedule()
 
         timeout = ClientTimeout(total=20)
-
         async with ClientSession(timeout=timeout) as session:
-            items = await prepare_schedule(
-                raw_schedule,
-                now,
-                session,
-            )
+            items = await prepare_schedule(raw_schedule, now, session)
 
+        # Remove accidental duplicate feed rows without dropping different episode times.
+        unique = {}
+        for item in items:
+            key = (item["title"].casefold().strip(), item["datetime"])
+            unique[key] = item
+        items = sorted(unique.values(), key=lambda item: item["datetime"])
         message = build_schedule_message(items, now)
 
-        image_path = None
+        photo = getattr(Var, "SCHEDULE_PHOTO", None)
+        if not photo:
+            try:
+                photo = await __import__("bot.core.database", fromlist=["db"]).db.get_schedule_photo()
+            except Exception:
+                photo = None
+        if not photo and BANNER_PATH.is_file():
+            photo = str(BANNER_PATH)
 
-        try:
-            if BANNER_PATH.is_file():
-                image_path = str(BANNER_PATH)
+        if not photo:
+            LOGGER.error("Schedule banner is not configured; refusing to send a text-only or extra message.")
+            return False
 
-            if image_path:
-                await bot.send_photo(
-                    chat_id=chat_id,
-                    photo=image_path,
-                    caption=message,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=reply_to_message_id,
-                )
-            else:
-                await bot.send_message(
-                    chat_id=chat_id,
-                    text=message,
-                    parse_mode=ParseMode.HTML,
-                    reply_to_message_id=reply_to_message_id,
-                    disable_web_page_preview=True,
-                )
-
-        except Exception:
-            LOGGER.exception("Schedule banner sending failed.")
-
-            await bot.send_message(
-                chat_id=chat_id,
-                text=message,
-                parse_mode=ParseMode.HTML,
-                reply_to_message_id=reply_to_message_id,
-                disable_web_page_preview=True,
-            )
-
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=message,
+            parse_mode=ParseMode.HTML,
+            reply_to_message_id=reply_to_message_id,
+        )
         return True
 
     except Exception:
-        LOGGER.exception(
-            "Failed to send today's anime schedule."
-        )
-
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=(
-                    "⚠️ Could not fetch today's anime schedule. "
-                    "Please try again later."
-                ),
-                reply_to_message_id=reply_to_message_id,
-            )
-        except Exception:
-            LOGGER.exception(
-                "Could not send the schedule error message."
-            )
-
+        LOGGER.exception("Failed to send today's anime schedule.")
         return False
 
 
@@ -351,14 +331,9 @@ async def upcoming_animes():
         return
 
     main_channel = getattr(Var, "MAIN_CHANNEL", None)
-
     if not main_channel:
         LOGGER.error("MAIN_CHANNEL is not configured.")
         return
 
+    # One destination, one banner photo, one complete caption. No backup/extra post.
     await send_daily_schedule(main_channel)
-
-    backup_channel = getattr(Var, "BACKUP_CHANNEL", None)
-
-    if backup_channel:
-        await send_daily_schedule(backup_channel)
