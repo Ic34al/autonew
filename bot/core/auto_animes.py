@@ -1,4 +1,3 @@
-
 import uuid
 from asyncio import gather, create_task, sleep as asleep, Event
 from asyncio.subprocess import PIPE
@@ -1811,7 +1810,22 @@ async def get_animes(name, torrent, force=False):
             post_msg = None
             main_post = None
             existing_post_id = qual_data.get("msg_id")
+            existing_main_post_id = qual_data.get("main_msg_id")
 
+            if existing_main_post_id:
+                try:
+                    main_post = await bot.get_messages(
+                        Var.MAIN_CHANNEL,
+                        message_ids=int(existing_main_post_id),
+                    )
+                    if getattr(main_post, "empty", False):
+                        main_post = None
+                except Exception as e:
+                    await rep.report(
+                        f"Could not reuse existing main-channel post: {e}",
+                        "warning",
+                    )
+                    main_post = None
             if existing_post_id:
                 try:
                     post_msg = await bot.get_messages(
@@ -1906,7 +1920,12 @@ async def get_animes(name, torrent, force=False):
                     ),
                     channel_to_use=channel_to_use,
                 )
-            
+                if main_post:
+                    await db.saveAnimeMainPost(
+                        ani_id,
+                        ep_no,
+                        main_post.id,
+                    )
             await asleep(1.5)
             print(f"Using channel: {channel_to_use} for anime: {cleaned_name}")
             await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
