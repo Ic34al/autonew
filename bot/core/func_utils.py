@@ -113,51 +113,114 @@ async def sendMessage(chat, text, buttons=None, get_error=False, **kwargs):
         return str(e)
         
 async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
+    """
+    Edit either a normal Telegram text message or a media caption.
+    If this message has a registered backup copy, update that copy too.
+    """
+    if not msg:
+        return None
+
+    def _is_caption_message(message):
+        return any(
+            getattr(message, attr, None) is not None
+            for attr in ("photo", "video", "animation", "document", "audio", "voice", "video_note")
+        )
+
+    async def _edit_target(target, chat_id=None, message_id=None, is_caption=False):
+        while True:
+            try:
+                if chat_id is None:
+                    if is_caption:
+                        return await target.edit_caption(
+                            caption=text,
+                            reply_markup=buttons,
+                            **{k: v for k, v in kwargs.items() if k != "disable_web_page_preview"}
+                        )
+                    text_kwargs = dict(kwargs)
+                    text_kwargs.setdefault("disable_web_page_preview", True)
+                    return await target.edit_text(
+                        text=text,
+                        reply_markup=buttons,
+                        **text_kwargs
+                    )
+
+                if is_caption:
+                    caption_kwargs = {
+                        k: v for k, v in kwargs.items()
+                        if k != "disable_web_page_preview"
+                    }
+                    return await bot.edit_message_caption(
+                        chat_id=int(chat_id),
+                        message_id=int(message_id),
+                        caption=text,
+                        reply_markup=buttons,
+                        **caption_kwargs
+                    )
+
+                text_kwargs = dict(kwargs)
+                text_kwargs.setdefault("disable_web_page_preview", True)
+                return await bot.edit_message_text(
+                    chat_id=int(chat_id),
+                    message_id=int(message_id),
+                    text=text,
+                    reply_markup=buttons,
+                    **text_kwargs
+                )
+
+            except FloodWait as f:
+                await rep.report(f, "warning")
+                await asleep(f.value * 1.2)
+            except ReplyMarkupInvalid:
+                if buttons is None:
+                    raise
+                buttons = None
+            except MessageNotModified:
+                return None
+
     try:
-        if not msg:
-            return None
-        edited = await msg.edit_text(text=text, disable_web_page_preview=True,
-                                     reply_markup=buttons, **kwargs)
+        is_caption = _is_caption_message(msg)
+        edited = await _edit_target(
+            msg,
+            is_caption=is_caption
+        )
 
+        # Keep a linked backup post synchronized with the original post.
         try:
-            chat_id = None
-            msg_id = None
-            if hasattr(msg, 'chat') and getattr(msg.chat, 'id', None) is not None:
-                chat_id = msg.chat.id
-            elif getattr(msg, 'chat_id', None):
-                chat_id = msg.chat_id
-            if getattr(msg, 'message_id', None):
-                msg_id = msg.message_id
-            elif getattr(msg, 'id', None):
-                msg_id = msg.id
+            chat_id = getattr(getattr(msg, "chat", None), "id", None)
+            if chat_id is None:
+                chat_id = getattr(msg, "chat_id", None)
 
-            if chat_id and msg_id:
+            msg_id = getattr(msg, "id", None)
+            if msg_id is None:
+                msg_id = getattr(msg, "message_id", None)
+
+            if chat_id is not None and msg_id is not None:
                 mapping = await db.get_backup_mapping(int(chat_id), int(msg_id))
                 if mapping:
-                    backup_chat = mapping.get('backup_chat')
-                    backup_msg_id = mapping.get('backup_msg_id')
-                    try:
-                        await bot.edit_message_text(
-                            chat_id=int(backup_chat),
-                            message_id=int(backup_msg_id),
-                            text=text,
-                            disable_web_page_preview=True,
-                            reply_markup=buttons
-                        )
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+                    backup_chat = mapping.get("backup_chat")
+                    backup_msg_id = mapping.get("backup_msg_id")
+
+                    if backup_chat is not None and backup_msg_id is not None:
+                        try:
+                            await _edit_target(
+                                None,
+                                chat_id=backup_chat,
+                                message_id=backup_msg_id,
+                                is_caption=is_caption
+                            )
+                        except Exception as backup_error:
+                            await rep.report(
+                                f"Backup message update failed: {backup_error}",
+                                "warning"
+                            )
+        except Exception as mapping_error:
+            await rep.report(
+                f"Backup mapping/update check failed: {mapping_error}",
+                "warning"
+            )
 
         return edited
-    except FloodWait as f:
-        await rep.report(f, "warning")
-        sleep(f.value * 1.2)
-        return await editMessage(msg, text, buttons, get_error, **kwargs)
-    except ReplyMarkupInvalid:
-        return await editMessage(msg, text, None, get_error, **kwargs)
-    except (MessageNotModified, MessageIdInvalid):
-        pass
+
     except Exception as e:
         await rep.report(format_exc(), "error")
         if get_error:
