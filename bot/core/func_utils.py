@@ -134,14 +134,14 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                     if is_caption:
                         return await target.edit_caption(
                             caption=text,
-                            reply_markup=buttons,
+                            reply_markup=reply_markup,
                             **{k: v for k, v in kwargs.items() if k != "disable_web_page_preview"}
                         )
                     text_kwargs = dict(kwargs)
                     text_kwargs.setdefault("disable_web_page_preview", True)
                     return await target.edit_text(
                         text=text,
-                        reply_markup=buttons,
+                        reply_markup=reply_markup,
                         **text_kwargs
                     )
 
@@ -154,7 +154,7 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                         chat_id=int(chat_id),
                         message_id=int(message_id),
                         caption=text,
-                        reply_markup=buttons,
+                        reply_markup=reply_markup,
                         **caption_kwargs
                     )
 
@@ -164,7 +164,7 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                     chat_id=int(chat_id),
                     message_id=int(message_id),
                     text=text,
-                    reply_markup=buttons,
+                    reply_markup=reply_markup,
                     **text_kwargs
                 )
 
