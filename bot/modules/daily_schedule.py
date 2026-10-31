@@ -234,18 +234,18 @@ def format_anime_entry(item):
     title = escape(style_e(item["title"]))
     time_text = escape(style_e(item["time"]))
     status = escape(style_e("Upcoming"))
-    return f'<a href="{CHANNEL_URL}">{title}</a>\\n{time_text}  ⏳ {status}'
+    return f'<a href="{CHANNEL_URL}">{title}</a>\n{time_text}  ⏳ {status}'
 
 
 def build_schedule_message(items, now):
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\\n{divider}\\n›› No anime releases found today.\\n{divider}"
+        return f"{header}\n{divider}\n›› No anime releases found today.\n{divider}"
 
     # Always show Upcoming, regardless of the current clock time.
     blocks = [format_anime_entry(item) for item in items]
-    message = header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
+    message = header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
 
     rendered_message = unescape(re.sub(r"<[^>]+>", "", message))
     if telegram_utf16_length(rendered_message) > 1024:
