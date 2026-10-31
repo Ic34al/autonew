@@ -88,7 +88,7 @@ async def sendMessage(chat, text, buttons=None, get_error=False, **kwargs):
                 text=text,
                 disable_web_page_preview=True,
                 disable_notification=False,
-                reply_markup=reply_markup,
+                reply_markup=buttons,
                 **kwargs
             )
         else:
@@ -97,7 +97,7 @@ async def sendMessage(chat, text, buttons=None, get_error=False, **kwargs):
                 quote=True,
                 disable_web_page_preview=True,
                 disable_notification=False,
-                reply_markup=reply_markup,
+                reply_markup=buttons,
                 **kwargs
             )
     except FloodWait as f:
@@ -134,14 +134,14 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                     if is_caption:
                         return await target.edit_caption(
                             caption=text,
-                            reply_markup=reply_markup,
+                            reply_markup=buttons,
                             **{k: v for k, v in kwargs.items() if k != "disable_web_page_preview"}
                         )
                     text_kwargs = dict(kwargs)
                     text_kwargs.setdefault("disable_web_page_preview", True)
                     return await target.edit_text(
                         text=text,
-                        reply_markup=reply_markup,
+                        reply_markup=buttons,
                         **text_kwargs
                     )
 
@@ -154,7 +154,7 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                         chat_id=int(chat_id),
                         message_id=int(message_id),
                         caption=text,
-                        reply_markup=reply_markup,
+                        reply_markup=buttons,
                         **caption_kwargs
                     )
 
@@ -164,7 +164,7 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                     chat_id=int(chat_id),
                     message_id=int(message_id),
                     text=text,
-                    reply_markup=reply_markup,
+                    reply_markup=buttons,
                     **text_kwargs
                 )
 
