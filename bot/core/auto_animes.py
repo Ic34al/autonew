@@ -35,23 +35,23 @@ import hashlib
 MAX_ABOUT_LEN = 255
 
 btn_formatter = {
-    'HDRi':'ððð¥ð¶ð½',
-    '1080':'ð­ð¬ð´ð¬ð£', 
-    '720':'ð³ð®ð¬ð£',
-    '480':'ð°ð´ð¬ð£',
-    '360':'ð¯ð²ð¬ð£',
-    '240':'ð®ð°ð¬ð£',
-    '144':'ð­ð°ð°ð£'
+    "HDRi": "HDRip",
+    "1080": "1080p",
+    "720": "720p",
+    "480": "480p",
+    "360": "360p",
+    "240": "240p",
+    "144": "144p"
 }
 
-#RAW_BTN = "ð¥ððª"
-RAW_BTN = "ððð¥ð¶ð½"
-MANGA_BTN = "ð¥ð²ð®ð± ð¡ð¼ð"
-MANGA_READ_BUTTON = "ð¥ð²ð®ð± ð¡ð¼ð"
-MANGA_CHNL_BUTTON = "ðð¼ð¶ð» ððµð®ð»ð»ð²ð¹"
-DOWNLOAD_BTN = "ðð¼ðð»ð¹ð¼ð®ð± ð¡ð¼ð"
-DOWNLOAD_ANIME_BTN = "ðð¼ðð»ð¹ð¼ð®ð± ð¡ð¼ð"
-DOWNLAOD_CHNL_BTN = "ðð¼ð¶ð» ððµð®ð»ð»ð²ð¹"
+RAW_BTN = "HDRip"
+MANGA_BTN = "Read Now"
+MANGA_READ_BUTTON = "Read Now"
+MANGA_CHNL_BUTTON = "Join Channel"
+
+DOWNLOAD_BTN = "Download Now"
+DOWNLOAD_ANIME_BTN = "Download Anime"
+DOWNLAOD_CHNL_BTN = "Join Channel"
 
 import hashlib
 import time
@@ -449,10 +449,12 @@ async def validate_channel_id(channel_id):
 
 async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
     try:
+        main_post = None
+        backup_msg = None
         chat_info = await validate_channel_id(channel_to_use)
         if not chat_info:
             await rep.report(f"Cannot mirror from invalid channel: {channel_to_use}", "error")
-            return
+            return None, None
 
         buttons = None
         try:
@@ -468,7 +470,6 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
             await rep.report(f"Failed to construct buttons for mirror: {e}", "warning")
             buttons = None
 
-        main_post = None
         try:
             if channel_to_use != Var.MAIN_CHANNEL:
                 try:
@@ -531,8 +532,11 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
         except Exception as e:
             await rep.report(f"Error in mirror_to_main_channel backup flow: {e}", "error")
 
+        return main_post, backup_msg
+
     except Exception as e:
         await rep.report(f"Mirror Error: {e}", "error")
+        return main_post, backup_msg
 
 async def fetch_manga():
     await rep.report("Fetching Manga Started !!!", "info")
@@ -1121,7 +1125,7 @@ async def process_low_end(name, torrent_url, force=False):
                 await rep.report(f"Failed to send initial post: {e}", "error")
                 return
 
-            await mirror_to_main_channel(
+            main_post, backup_post = await mirror_to_main_channel(
                 post_msg=post_msg,
                 photo_url=photo_url,
                 caption=post_msg.caption.html if post_msg.caption else "",
@@ -1183,6 +1187,7 @@ async def process_low_end(name, torrent_url, force=False):
                             return
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         msg_id = msg.id
+                        file_store_links[qual] = msg_id
                         link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if post_msg:
                             if len(btns) != 0 and len(btns[-1]) == 1:
@@ -1209,28 +1214,31 @@ async def process_low_end(name, torrent_url, force=False):
                                     except Exception as e:
                                         await rep.report(f"GDrive upload failed for {check_name} - {qual}p: {e}", "error")
                                     break
-                        all_buttons.append(
-                            InlineKeyboardButton(
-                                f"{btn_formatter.get(q, q+'p')}",
-                                url=f"https://t.me/{Var.BOT_USERNAME}?start={enc}"
-                            )
-                        )
-                        grouped_buttons = [all_buttons[i:i+2] for i in range(0, len(all_buttons), 2)]
-                        await editMessage(post_msg, await aniInfo.get_caption(), InlineKeyboardMarkup(grouped_buttons))
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
+            quality_order = ["480", "720", "1080"]
             all_buttons = []
-            for qual, msg_id in file_store_links.items():
-                encoded = await encode('get-' + str(msg_id * abs(Var.FILE_STORE)))
+
+            for qual in quality_order:
+                msg_id = file_store_links.get(qual)
+                if not msg_id:
+                    continue
+
+                encoded = await encode(
+                    "get-" + str(msg_id * abs(Var.FILE_STORE))
+                )
                 all_buttons.append(
                     InlineKeyboardButton(
-                        f"{btn_formatter.get(qual, qual+'p')}",
+                        text=btn_formatter[qual],
                         url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
-            buttons = [all_buttons[i:i+2] for i in range(0, len(all_buttons), 2)]
+            grouped_buttons = [
+                all_buttons[i:i + 2]
+                for i in range(0, len(all_buttons), 2)
+            ]
 
             final_caption = await aniInfo.get_caption()
             try:
@@ -1238,8 +1246,37 @@ async def process_low_end(name, torrent_url, force=False):
                 if fontchanger_status == "on":
                     final_caption = obfuscate_text_for_copyright(final_caption)
             except Exception as e:
-                await rep.report(f"Error applying font changer: {e}", "warning")
-            await editMessage(post_msg, final_caption, InlineKeyboardMarkup(buttons))
+                await rep.report(
+                    f"Error applying font changer: {e}",
+                    "warning"
+                )
+
+            final_markup = (
+                InlineKeyboardMarkup(grouped_buttons)
+                if grouped_buttons else None
+            )
+
+            await editMessage(post_msg, final_caption, final_markup)
+
+            # Update main channel mirror.
+            if main_post and main_post.id != post_msg.id:
+                try:
+                    await editMessage(main_post, final_caption, final_markup)
+                except Exception as e:
+                    await rep.report(
+                        f"Main channel button update failed: {e}",
+                        "error"
+                    )
+
+            # Update archive backup channel mirror.
+            if backup_post:
+                try:
+                    await editMessage(backup_post, final_caption, final_markup)
+                except Exception as e:
+                    await rep.report(
+                        f"Backup channel button update failed: {e}",
+                        "error"
+                    )
 
             try:
                 pending = await db.get_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
