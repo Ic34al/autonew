@@ -432,8 +432,28 @@ class MongoDB:
         await self.fsub.delete_one({'_id': channel_id})
 
     async def list_fsubs(self):
+        """
+        Return only valid Telegram chat identifiers.
+        Older/invalid documents may have MongoDB ObjectId values in _id;
+        Pyrogram cannot use those as chat identifiers.
+        """
         docs = await self.fsub.find().to_list(length=None)
-        return [doc['_id'] for doc in docs]
+        chat_ids = []
+        for doc in docs:
+            value = doc.get("channel_id", doc.get("_id"))
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, int):
+                chat_ids.append(value)
+            elif isinstance(value, str):
+                value = value.strip()
+                if not value:
+                    continue
+                if value.lstrip("-").isdigit():
+                    chat_ids.append(int(value))
+                elif value.startswith("@"):
+                    chat_ids.append(value)
+        return list(dict.fromkeys(chat_ids))
 
     async def set_fsub_mode(self, channel_id: int, mode: str):
         await self.fsub.update_one({'_id': channel_id}, {'$set': {'mode': mode}}, upsert=True)
