@@ -2426,7 +2426,7 @@ async def start_msg(client, message):
                 if nmsg and Var.AUTO_DEL:
                     sent_msgs.append(nmsg)
             if hasattr(temp, 'delete'):
-            await temp.delete()
+                await temp.delete()
             if sent_msgs and Var.AUTO_DEL:
                 async def auto_del(msgs, timer):
                     await asleep(timer)
