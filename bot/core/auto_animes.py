@@ -2171,7 +2171,6 @@ async def get_animes(name, torrent, force=False):
                     )
 
             await stat_msg.delete()
-            await stat_msg.delete()
             try:
                 pending = await db.get_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
             except Exception:
