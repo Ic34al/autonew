@@ -1,6 +1,6 @@
 from asyncio import (
     create_task, create_subprocess_exec, create_subprocess_shell,
-    run as asyrun, all_tasks, gather, sleep as asleep, get_event_loop
+    run as asyrun, gather, sleep as asleep, get_event_loop
 )
 from aiofiles import open as aiopen
 from pyrogram import idle
@@ -126,6 +126,10 @@ async def load_settings():
     
 
 async def main():
+    # Keep references only to tasks created by this application.
+    # Pyrogram owns and manages its internal session tasks.
+    tasks = []
+    bot_started = False
     try:
         LOGS.info("Starting Web Server...")
         await start_server()
@@ -146,6 +150,7 @@ async def main():
         
         LOGS.info("Starting bot...")
         await bot.start()
+        bot_started = True
         await restart()
         
         LOGS.info("Starting tasks...")
@@ -165,9 +170,19 @@ async def main():
         LOGS.info('Shutting down...')
         if sch.running:
             sch.shutdown(wait=False)
-        await bot.stop()
-        for task in all_tasks():
-            task.cancel()
+
+        # Stop only application-owned background jobs. Do not cancel
+        # Pyrogram's recv_worker/ping_worker tasks directly.
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+
+        if tasks:
+            await gather(*tasks, return_exceptions=True)
+
+        if bot_started:
+            await bot.stop()
+
         await clean_up()
         LOGS.info('Cleanup complete!')
 
