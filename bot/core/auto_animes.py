@@ -1606,6 +1606,121 @@ async def create_anime_channel(name, aniInfo):
         await rep.report(f"Failed to create anime channel: {e}", "error")
         return None
 
+
+async def build_anime_soul_poster(anime_info, anime_name, output_path):
+    """Build a 16:9 ANIME SOUL dashboard poster from free AniList artwork."""
+    import io
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+
+    data = anime_info.adata or {}
+    titles = data.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or anime_name
+    season = anime_info.pdata.get("anime_season", "01")
+    if isinstance(season, list):
+        season = season[-1] if season else "01"
+    episode = anime_info.pdata.get("episode_number") or "01"
+    if isinstance(episode, list):
+        episode = episode[0] if episode else "01"
+    try:
+        season = str(int(season))
+    except Exception:
+        season = str(season)
+    try:
+        episode = str(int(episode)).zfill(2)
+    except Exception:
+        episode = str(episode)
+
+    cover = (data.get("coverImage") or {}).get("large")
+    banner = data.get("bannerImage")
+    art_url = banner or cover or data.get("poster_url")
+    if not art_url:
+        return None
+
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0), follow_redirects=True) as client:
+            response = await client.get(art_url)
+            response.raise_for_status()
+            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as exc:
+        await rep.report(f"ANIME SOUL poster artwork download failed: {exc}", "warning")
+        return None
+
+    W, H = 1280, 720
+    art = ImageOps.fit(art, (W, H), method=Image.Resampling.LANCZOS)
+    art = art.filter(ImageFilter.GaussianBlur(1.2))
+    overlay = Image.new("RGBA", (W, H), (5, 7, 13, 95))
+    canvas = Image.alpha_composite(art.convert("RGBA"), overlay)
+    draw = ImageDraw.Draw(canvas, "RGBA")
+
+    font_regular = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+    font_bold = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    def font(size, bold=False):
+        try:
+            return ImageFont.truetype(font_bold if bold else font_regular, size)
+        except Exception:
+            return ImageFont.load_default()
+
+    # Cinematic dark panels and red accent.
+    draw.rectangle((0, 0, 112, H), fill=(7, 9, 15, 238))
+    draw.rectangle((112, 0, 1280, 720), fill=(5, 7, 12, 48))
+    draw.rectangle((112, 0, 119, H), fill=(225, 42, 57, 255))
+    draw.rounded_rectangle((150, 36, 360, 78), radius=10, fill=(13, 16, 25, 220), outline=(225, 42, 57, 180), width=2)
+    draw.text((170, 47), "ANIME SOUL  /  STREAM", font=font(17, True), fill=(255, 255, 255, 255))
+    draw.text((42, 48), "A", font=font(38, True), fill=(239, 52, 66, 255))
+    for y, label in [(150, "HOME"), (220, "ANIME"), (290, "EPISODES"), (360, "LIBRARY")]:
+        draw.rounded_rectangle((18, y, 94, y+48), radius=9, fill=(225, 42, 57, 60) if label == "ANIME" else (255,255,255,12))
+        draw.text((29, y+16), label[:7], font=font(10, True), fill=(255,255,255,230))
+
+    # Main title block.
+    title_font = font(43, True)
+    title_lines = textwrap.wrap(str(title), width=27)[:2]
+    y = 112
+    for line in title_lines:
+        draw.text((158, y), line, font=title_font, fill=(255,255,255,255), stroke_width=1, stroke_fill=(0,0,0,180))
+        y += 52
+    draw.text((160, y+4), f"SEASON {season}   •   EPISODE {episode}", font=font(19, True), fill=(255, 76, 88, 255))
+    draw.text((160, y+43), "THE NEXT CHAPTER STARTS HERE", font=font(13, True), fill=(230,233,240,230))
+
+    # Right information panel.
+    panel_x = 850
+    draw.rounded_rectangle((panel_x, 82, 1245, 620), radius=18, fill=(7, 10, 17, 222), outline=(255,255,255,35), width=1)
+    draw.rectangle((panel_x+24, 110, panel_x+78, 114), fill=(230, 47, 63, 255))
+    draw.text((panel_x+24, 132), "SERIES OVERVIEW", font=font(15, True), fill=(255, 86, 98, 255))
+    synopsis = re.sub(r"<[^>]+>", "", str(data.get("description") or "Discover the story in this episode."))
+    synopsis = re.sub(r"\s+", " ", synopsis).strip()
+    synopsis_lines = textwrap.wrap(synopsis, width=39)[:8]
+    sy = 170
+    for line in synopsis_lines:
+        draw.text((panel_x+24, sy), line, font=font(14), fill=(235,238,244,245))
+        sy += 25
+
+    genres = data.get("genres") or []
+    genre_text = "  /  ".join(str(g) for g in genres[:3]) or "Anime"
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Studio information unavailable"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    meta = [("YEAR", str(year)), ("STATUS", status), ("STUDIO", str(studio)[:30]), ("GENRES", genre_text[:42])]
+    my = 390
+    for label, value in meta:
+        draw.text((panel_x+24, my), label, font=font(10, True), fill=(255, 91, 103, 255))
+        draw.text((panel_x+24, my+17), value, font=font(14, True), fill=(255,255,255,255))
+        my += 52
+
+    # Bottom navigation/thumbnail strip with crops from the same AniList key art.
+    draw.rectangle((120, 650, 1280, 720), fill=(5, 7, 12, 232))
+    for i in range(3):
+        thumb = ImageOps.fit(art, (118, 48), centering=(0.25 + i*0.25, 0.5))
+        canvas.alpha_composite(thumb.convert("RGBA"), (158 + i*132, 660))
+        draw.rectangle((158 + i*132, 660, 276 + i*132, 708), outline=(255,255,255,65), width=1)
+    draw.text((580, 670), "WATCH  •  DOWNLOAD  •  ENJOY", font=font(15, True), fill=(245,245,248,255))
+    draw.text((580, 695), "JOIN  @Ongoing_Anime_Time", font=font(12, True), fill=(255,82,96,255))
+
+    canvas.convert("RGB").save(output_path, "JPEG", quality=91, optimize=True)
+    return output_path
+
+
 async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
@@ -1709,11 +1824,20 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                if photo_path is not None:
+                # Prefer the branded 16:9 dashboard poster. If AniList artwork
+                # or rendering is unavailable, retain the existing banner/poster.
+                try:
+                    poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                    photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
+                except Exception as poster_error:
+                    await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
+                    photo_path = None
+
+                if photo_path and ospath.exists(photo_path):
                     with open(photo_path, 'rb') as photo_file:
                         post_msg = await bot.send_photo(
                             channel_to_use,
-                            photo=photo_url,
+                            photo=photo_file,
                             caption=caption
                         )
                 else:
