@@ -1,7 +1,8 @@
 import asyncio
 import logging
 from datetime import datetime
-from html import escape
+from html import escape, unescape
+import re
 from pathlib import Path
 
 import pytz
@@ -248,7 +249,9 @@ def build_schedule_message(items, now):
 
     # Telegram photo captions are limited to 1,024 UTF-16 code units.
     # Never truncate entries or silently omit anime.
-    if telegram_utf16_length(message) > 1024:
+    # Telegram enforces the limit on rendered caption text, not HTML markup.
+    rendered_message = unescape(re.sub(r"<[^>]+>", "", message))
+    if telegram_utf16_length(rendered_message) > 1024:
         raise ValueError(
             "The complete schedule still exceeds Telegram's 1,024-character "
             "photo-caption limit after compact formatting; no anime were omitted."
