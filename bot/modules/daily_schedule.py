@@ -196,7 +196,7 @@ async def prepare_schedule(schedule, now, session):
         items.append({
             "title": str(title),
             # Display local clock time only: no IST, AM, or PM.
-            "time": release_datetime.strftime("%I:%M").lstrip("0"),
+            "time": release_datetime.strftime("%I:%M %p").lstrip("0"),
             "datetime": release_datetime,
             "episode": episode,
             "status": (
@@ -211,7 +211,7 @@ async def prepare_schedule(schedule, now, session):
 
 
 def style_e(value):
-    """Style E: mathematical sans-serif bold italic for schedule titles and time/status."""
+    """Style E: mathematical sans-serif bold italic."""
     output = []
     for char in str(value):
         code = ord(char)
@@ -234,7 +234,7 @@ def format_anime_entry(item):
     title = escape(style_e(item["title"]))
     time_text = escape(style_e(item["time"]))
     status = escape(style_e("Upcoming"))
-    return f'<a href="{CHANNEL_URL}">{title}</a>\\n{time_text} PM  ⏳ {status}'
+    return f'<a href="{CHANNEL_URL}">{title}</a>\\n{time_text}  ⏳ {status}'
 
 
 def build_schedule_message(items, now):
@@ -243,16 +243,15 @@ def build_schedule_message(items, now):
     if not items:
         return f"{header}\\n{divider}\\n›› No anime releases found today.\\n{divider}"
 
-    # Every listing is Upcoming by request; don't infer an Airing/Released state from clock time.
+    # Always show Upcoming, regardless of the current clock time.
     blocks = [format_anime_entry(item) for item in items]
     message = header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
 
-    # Photo captions are limited to 1,024 UTF-16 code units. Never silently omit entries.
     rendered_message = unescape(re.sub(r"<[^>]+>", "", message))
     if telegram_utf16_length(rendered_message) > 1024:
         raise ValueError(
             "The complete anime schedule exceeds Telegram's 1,024-character "
-            "photo-caption limit in the selected formatting. No anime were omitted."
+            "photo-caption limit. No anime were omitted."
         )
     return message
 
