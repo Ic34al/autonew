@@ -174,34 +174,8 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     except Exception as e:
         await rep.report(f"Error applying font changer: {e}", "warning")
 
-    try:
-        post_msg = await bot.send_photo(
-            channel_to_use,
-            photo=poster_url,
-            caption=caption
-        )
-    except Exception as e:
-        await rep.report(f"Failed to send batch poster: {e}", "error")
-        post_msg = None
-
-    await mirror_to_main_channel(
-        post_msg=post_msg,
-        photo_url=poster_url,
-        caption=caption,
-        channel_to_use=channel_to_use
-    )
-
-    await asleep(1.5)
-    await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
-    await asleep(1.5)
-
-    stat_msg = await bot.send_message(
-        chat_id=channel_to_use,
-        text=f"<blockquote>â£ <b>Anime Name :</b> <b><i>{anime_name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
-    )
-
-    await asleep(Var.STICKER_INTERVAL)
-    await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
+    post_msg = None
+    stat_msg = await bot.send_message(chat_id=Var.LOG_CHANNEL, text=f"<b>Processing batch:</b> {anime_name}\nDownloading...")
 
     batch_buttons = []
     for qual in Var.QUALS:
@@ -234,11 +208,14 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
             btn_text = f"{btn_formatter.get(qual, qual+'p')}"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
-            if post_msg and batch_buttons:
+            if batch_buttons:
                 btns = [batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]
-                await editMessage(post_msg, caption, InlineKeyboardMarkup(btns))
 
     await stat_msg.delete()
+    if batch_buttons:
+        await bot.send_photo(Var.MAIN_CHANNEL, photo=poster_url, caption=caption, reply_markup=InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]))
+    else:
+        await rep.report(f"No batch qualities uploaded for {anime_name}; no Main Channel post sent", "warning")
     import logging
     if ospath.exists(batch_dir):
         logging.info(f"[CLEANUP] Removing batch_dir: {batch_dir}")
@@ -1115,39 +1092,14 @@ async def process_low_end(name, torrent_url, force=False):
             except Exception as e:
                 await rep.report(f"Error applying font changer: {e}", "warning")
 
-            try:
-                post_msg = await bot.send_photo(
-                    channel_to_use,
-                    photo=photo_url,
-                    caption=caption
-                )
-            except Exception as e:
-                await rep.report(f"Failed to send initial post: {e}", "error")
-                return
-
-            main_post, backup_post = await mirror_to_main_channel(
-                post_msg=post_msg,
-                photo_url=photo_url,
-                caption=post_msg.caption.html if post_msg.caption else "",
-                channel_to_use=channel_to_use
-            )
-
-            await asleep(1.5)
-            await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
-            await asleep(1.5)
-
-            stat_msg = await bot.send_message(
-                chat_id=channel_to_use, 
-                text=f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
-            )
-
-            await asleep(Var.STICKER_INTERVAL)
-            await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
+            post_msg = None
+            main_post = backup_post = None
+            stat_msg = await bot.send_message(chat_id=Var.LOG_CHANNEL, text=f"<b>Processing:</b> {name}\nDownloading...")
 
             file_store_links = {}
             buttons = []
             btns = []
-            post_id = post_msg.id
+            post_id = None
             for qual in ["480", "720", "1080"]:
                 rss_link = Var.RSS_LOW_END.get(qual)
                 if not rss_link:
@@ -1189,13 +1141,11 @@ async def process_low_end(name, torrent_url, force=False):
                         msg_id = msg.id
                         file_store_links[qual] = msg_id
                         link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
-                        if post_msg:
-                            if len(btns) != 0 and len(btns[-1]) == 1:
-                                btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
-                            else:
-                                btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
-                            await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
-                        await db.saveAnime(ani_id, ep_no, qual, post_id)
+                        if len(btns) != 0 and len(btns[-1]) == 1:
+                            btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
+                        else:
+                            btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
+                        await db.saveAnime(ani_id, ep_no, qual, None)
                         bot_loop.create_task(extra_utils(msg_id, out_path))
 
                         gdrive_status = await db.get_gdrive_upload()
@@ -1256,77 +1206,15 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            await editMessage(post_msg, final_caption, final_markup)
-
-            # Update main channel mirror.
-            if main_post and main_post.id != post_msg.id:
+            if file_store_links:
                 try:
-                    await editMessage(main_post, final_caption, final_markup)
+                    final_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=final_caption, reply_markup=final_markup)
+                    for uploaded_qual in file_store_links:
+                        await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
                 except Exception as e:
-                    await rep.report(
-                        f"Main channel button update failed: {e}",
-                        "error"
-                    )
-
-            # Update archive backup channel mirror.
-            if backup_post:
-                try:
-                    await editMessage(backup_post, final_caption, final_markup)
-                except Exception as e:
-                    await rep.report(
-                        f"Backup channel button update failed: {e}",
-                        "error"
-                    )
-
-            try:
-                pending = await db.get_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
-            except Exception:
-                pending = None
-
-            if pending:
-                try:
-                    try:
-                        db_backup = await db.get_backup_channel()
-                    except Exception:
-                        db_backup = None
-                    backup_id = db_backup or getattr(Var, 'BACKUP_CHANNEL', 0)
-
-                    if backup_id:
-                        backup_valid = await validate_channel_id(backup_id)
-                        if backup_valid:
-                            try:
-                                try:
-                                    updated_post = await bot.get_messages(channel_to_use, post_msg.id)
-                                    final_caption = updated_post.caption.html if updated_post.caption else ""
-                                    buttons_markup = updated_post.reply_markup
-                                except Exception as e:
-                                    await rep.report(f"Could not fetch updated post, using btns variable: {e}", "warning")
-                                    final_caption = post_msg.caption.html if post_msg.caption else ""
-                                    buttons_markup = InlineKeyboardMarkup(btns) if btns else None
-                                    
-                                backup_msg = await bot.send_photo(
-                                    backup_id,
-                                    photo=post_msg.photo.file_id if post_msg and post_msg.photo else None,
-                                    caption=final_caption,
-                                    reply_markup=buttons_markup if buttons_markup else None
-                                )
-                                await asleep(Var.STICKER_INTERVAL)
-                                await send_sticker_to_channel(backup_id, Var.STICKER_ID)
-
-                                try:
-                                    await db.add_backup_mapping(Var.MAIN_CHANNEL, post_msg.id, backup_id, backup_msg.id)
-                                except Exception as e:
-                                    await rep.report(f"Failed to save backup mapping after final post: {e}", "warning")
-
-                                try:
-                                    await db.del_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
-                                except Exception:
-                                    pass
-
-                            except Exception as e:
-                                await rep.report(f"Failed to create final backup post: {e}", "warning")
-                except Exception:
-                    pass
+                    await rep.report(f"Failed to publish completed episode to Main Channel: {e}", "error")
+            else:
+                await rep.report(f"No low-end qualities uploaded for {name}; no Main Channel post sent", "warning")
 
             if stat_msg:
                 await stat_msg.delete()
@@ -1751,6 +1639,7 @@ async def get_animes(name, torrent, force=False):
         if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
             await process_low_end(name, torrent)
+            return
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -1824,51 +1713,13 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                # Prefer the branded 16:9 dashboard poster. If AniList artwork
-                # or rendering is unavailable, retain the existing banner/poster.
-                try:
-                    poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
-                    photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
-                except Exception as poster_error:
-                    await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
-                    photo_path = None
-
-                if photo_path and ospath.exists(photo_path):
-                    with open(photo_path, 'rb') as photo_file:
-                        post_msg = await bot.send_photo(
-                            channel_to_use,
-                            photo=photo_file,
-                            caption=caption
-                        )
-                else:
-                    post_msg = await bot.send_photo(
-                        channel_to_use,
-                        photo=photo_url,
-                        caption=caption
-                    )
-            except Exception as e:
-                await rep.report(f"Failed to send initial post: {e}", "error")
-                return
-            
-            await mirror_to_main_channel(
-                post_msg=post_msg,
-                photo_url=photo_url,
-                caption=post_msg.caption.html if post_msg.caption else "",
-                channel_to_use=channel_to_use
-            )
-            
-            await asleep(1.5)
-            print(f"Using channel: {channel_to_use} for anime: {cleaned_name}")
-            await rep.report(f"Using channel: {channel_to_use} for anime: {cleaned_name}", "info")
-            await asleep(1.5)
-            
-            stat_msg = await bot.send_message(
-                chat_id=channel_to_use, 
-                text=f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>"
-            )
-            
-            await asleep(Var.STICKER_INTERVAL)
-            await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
+            except Exception as poster_error:
+                await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
+                photo_path = None
+            post_msg = None
+            stat_msg = await bot.send_message(chat_id=Var.LOG_CHANNEL, text=f"<b>Processing:</b> {name}\nDownloading...")
             
             dl_path = await download_torrent(torrent, name)
             if not dl_path or not ospath.exists(dl_path):
@@ -1876,7 +1727,7 @@ async def get_animes(name, torrent, force=False):
                 await stat_msg.delete()
                 return
             
-            post_id = post_msg.id
+            post_id = int(time() * 1000000)
             ffEvent = Event()
             ff_queued[post_id] = ffEvent
             
@@ -1889,6 +1740,7 @@ async def get_animes(name, torrent, force=False):
             await ffLock.acquire()
             try:
                 btns = []
+                uploaded_qualities = []
                 if not encoding_enabled:
                     filename = await aniInfo.get_upname("HDRi")
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Uploading...</i></pre>")
@@ -1912,7 +1764,8 @@ async def get_animes(name, torrent, force=False):
                     btns.append([InlineKeyboardButton(f"{RAW_BTN}", url=link)])
                     if post_msg:
                         await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
-                    await db.saveAnime(ani_id, ep_no, "HDRi", post_id)
+                    uploaded_qualities.append("HDRi")
+                    await db.saveAnime(ani_id, ep_no, "HDRi", None)
                     bot_loop.create_task(extra_utils(msg_id, dl_path))
                 else:
                     for qual in Var.QUALS:
@@ -1943,60 +1796,31 @@ async def get_animes(name, torrent, force=False):
                         
                         msg_id = msg.id
                         link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
-                        if post_msg:
-                            if len(btns) != 0 and len(btns[-1]) == 1:
-                                btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
-                            else:
-                                btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
-                            await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
-                        await db.saveAnime(ani_id, ep_no, qual, post_id)
+                        if len(btns) != 0 and len(btns[-1]) == 1:
+                            btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
+                        else:
+                            btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
+                        uploaded_qualities.append(qual)
+                        await db.saveAnime(ani_id, ep_no, qual, None)
                         bot_loop.create_task(extra_utils(msg_id, out_path))
             finally:
                 ffLock.release()
             
             await stat_msg.delete()
-            try:
-                pending = await db.get_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
-            except Exception:
-                pending = None
-
-            if pending:
+            if btns:
                 try:
-                    try:
-                        db_backup = await db.get_backup_channel()
-                    except Exception:
-                        db_backup = None
-                    backup_id = db_backup or getattr(Var, 'BACKUP_CHANNEL', 0)
-
-                    if backup_id:
-                        backup_valid = await validate_channel_id(backup_id)
-                        if backup_valid:
-                            try:
-                                final_caption = post_msg.caption.html if post_msg.caption else ""
-                                buttons_markup = InlineKeyboardMarkup(btns) if btns else None
-                                backup_msg = await bot.send_photo(
-                                    backup_id,
-                                    photo=post_msg.photo.file_id if post_msg and post_msg.photo else None,
-                                    caption=final_caption,
-                                    reply_markup=buttons_markup
-                                )
-                                await asleep(Var.STICKER_INTERVAL)
-                                await send_sticker_to_channel(backup_id, Var.STICKER_ID)
-
-                                try:
-                                    await db.add_backup_mapping(Var.MAIN_CHANNEL, post_msg.id, backup_id, backup_msg.id)
-                                except Exception as e:
-                                    await rep.report(f"Failed to save backup mapping after final post: {e}", "warning")
-
-                                try:
-                                    await db.del_pending_backup(Var.MAIN_CHANNEL, post_msg.id)
-                                except Exception:
-                                    pass
-
-                            except Exception as e:
-                                await rep.report(f"Failed to create final backup post: {e}", "warning")
-                except Exception:
-                    pass
+                    markup = InlineKeyboardMarkup(btns)
+                    if photo_path and ospath.exists(photo_path):
+                        with open(photo_path, 'rb') as photo_file:
+                            post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=markup)
+                    else:
+                        post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=markup)
+                    for uploaded_qual in uploaded_qualities:
+                        await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
+                except Exception as e:
+                    await rep.report(f"Failed to publish completed episode to Main Channel: {e}", "error")
+            else:
+                await rep.report(f"No qualities uploaded for {name}; no Main Channel post sent", "warning")
 
             if encoding_enabled:
                 await aioremove(dl_path)
