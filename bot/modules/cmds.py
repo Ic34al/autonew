@@ -2485,7 +2485,7 @@ async def start_msg(client, message):
                     reply_markup=msg.reply_markup if msg.reply_markup else None
                 )
             if hasattr(temp, 'delete'):
-            await temp.delete()
+                await temp.delete()
             if Var.AUTO_DEL:
                 async def auto_del(msg, timer):
                     await asleep(timer)
