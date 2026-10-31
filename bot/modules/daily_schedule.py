@@ -194,9 +194,8 @@ async def prepare_schedule(schedule, now, session):
 
         items.append({
             "title": str(title),
-            "time": release_datetime.strftime(
-                "%I:%M %p"
-            ).lstrip("0"),
+            # Display local clock time only: no IST, AM, or PM.
+            "time": release_datetime.strftime("%I:%M").lstrip("0"),
             "datetime": release_datetime,
             "episode": episode,
             "status": (
@@ -230,8 +229,9 @@ def format_anime_entry(item):
     # Keep every title, release time, and status while using one compact line.
     title = escape(small_caps(item["title"]))
     status = "✅" if item["status"] == "Released" else "⏳"
+    episode = escape(str(item.get("episode") or "TBA"))
     return (
-        f'›› <a href="{CHANNEL_URL}">{title}</a>'
+        f'›› <a href="{CHANNEL_URL}">{title} EP {episode}</a>'
         f' • {escape(item["time"])} {status}'
     )
 
