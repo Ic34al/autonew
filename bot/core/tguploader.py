@@ -55,7 +55,8 @@ class TgUploader:
                         f"    • Quality: {qual}p\n"
                         f"    • Folder ID: {folder_id or 'N/A'}"
                     )
-                    await bot.send_message(Var.LOG_CHANNEL, log_msg)
+                    # Logging must never block a quality upload (e.g. LOG_CHANNEL FloodWait).
+                    await rep.report(log_msg, "info", log=False)
                     file_id, shared_link = await gdrive.upload_file(path, folder_id)
                     if file_id and shared_link:
                         success_msg = (
@@ -63,12 +64,14 @@ class TgUploader:
                             f"    • File : {self.__name}\n"
                             f"    • Quality : {qual}p"
                         )
-                        await bot.send_message(Var.LOG_CHANNEL, success_msg)
+                        await rep.report(success_msg, "info", log=False)
                     else:
                         await rep.report(f"GDrive upload failed for {self.__name}, falling back to Telegram", "warning")
 
             log_msg = f"Starting upload for:\n{self.__name}"
-            await bot.send_message(Var.LOG_CHANNEL, log_msg)
+            # Do not send a separate Telegram log RPC before the actual file upload.
+            # A FloodWait/invalid log chat must not abort the episode quality.
+            await rep.report(log_msg, "info", log=False)
 
             if ospath.getsize(path) == 0:
                 await rep.report(f"File is empty: {path}", "error")

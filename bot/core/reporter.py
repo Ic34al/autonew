@@ -1,4 +1,4 @@
-from time import sleep
+import asyncio
 from pyrogram.errors import FloodWait
 from bot import Var, LOGS, bot
 
@@ -19,12 +19,20 @@ class Reporter:
         else:
             self.__logger.info(txt[0])
         if log and self.__cid != 0:
-            try:
-                await self.__client.send_message(self.__cid, f"{txt[0][:4096]}")
-            except FloodWait as f:
-                self.__logger.warning(str(f))
-                sleep(f.value * 1.5)
-            except Exception as err:
-                self.__logger.error(str(err))
+            # Reporter is best-effort: logging must never freeze the asyncio
+            # worker or interrupt encoding/uploading.
+            for attempt in range(2):
+                try:
+                    await self.__client.send_message(self.__cid, f"{txt[0][:4096]}")
+                    break
+                except FloodWait as f:
+                    self.__logger.warning(str(f))
+                    if attempt == 0:
+                        await asyncio.sleep(max(1, int(f.value) + 1))
+                    else:
+                        self.__logger.warning("Log message skipped after repeated FloodWait.")
+                except Exception as err:
+                    self.__logger.error(str(err))
+                    break
 
 rep = Reporter(bot, Var.LOG_CHANNEL, LOGS)
