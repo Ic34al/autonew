@@ -10,8 +10,9 @@ from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
 from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime
+from bot.core.text_utils import TextEditor
 from bot.core.database import db
-from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, encode, get_message_id, get_messages 
+from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
 from bot.core.auto_animes import get_animes
 from bot.core.gdrive import gdrive
 import glob
@@ -2631,6 +2632,118 @@ async def del_link_cmd(client, message: Message):
         await message.reply(f"<blockquote><b>Removed {link_type} RSS link:</b>\n<code>{link}</code></blockquote>")
     except Exception as e:
         await message.reply(f"<blockquote><b>Error: {str(e)}</b></blockquote>")
+
+@bot.on_message(filters.command("retry") & filters.user(Var.ADMINS))
+@new_task
+async def retry_todays_anime_cmd(client, message: Message):
+    """Retry unfinished anime episodes published today, strictly one at a time."""
+    if ani_cache.get("retry_queue_running"):
+        return await message.reply("<b>Retry queue is already running.</b>")
+    ani_cache["retry_queue_running"] = True
+    status = await message.reply("<b>Scanning today's anime RSS entries...</b>")
+    try:
+        mode = await db.get_mode()
+        if mode != "anime":
+            return await status.edit_text("<b>Switch bot mode to anime before using /retry.</b>")
+
+        upload_mode = await db.get_upload_mode()
+        if upload_mode == "low_end":
+            rss_urls = [Var.RSS_LOW_END.get(q) for q in ("480", "720", "1080") if Var.RSS_LOW_END.get(q)]
+            required_qualities = ("480", "720", "1080")
+        else:
+            rss_urls = list(Var.RSS_ITEMS_ANIME)
+            required_qualities = tuple(Var.QUALS)
+
+        from zoneinfo import ZoneInfo
+        from datetime import datetime, timezone
+        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        feeds = await gather(*(getfeeds(url) for url in rss_urls))
+        candidates = []
+        seen_links = set()
+
+        for entries in feeds:
+            for entry in entries:
+                link = getattr(entry, "link", None)
+                title = getattr(entry, "title", None)
+                published = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+                if not link or not title or link in seen_links or not published:
+                    continue
+                try:
+                    published_date = datetime(*published[:6], tzinfo=timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
+                except Exception:
+                    continue
+                if published_date != today:
+                    continue
+                seen_links.add(link)
+                candidates.append((title, link))
+
+        queue = []
+        for title, link in candidates:
+            try:
+                info = TextEditor(title)
+                await info.load_info()
+                ani_id = info.adata.get("id")
+                ep_no = info.pdata.get("episode_number")
+                if isinstance(ep_no, list):
+                    ep_no = ep_no[0] if ep_no else None
+                if ani_id is None or ep_no is None:
+                    continue
+                ep_no = str(ep_no)
+                saved = await db.getAnime(ani_id)
+                episode_data = saved.get(ep_no, {}) if isinstance(saved, dict) else {}
+                if not isinstance(episode_data, dict):
+                    episode_data = {}
+                if all(episode_data.get(q) for q in required_qualities) and episode_data.get("msg_id"):
+                    continue
+                queue.append((title, link))
+            except Exception as e:
+                await rep.report(f"/retry could not inspect {title}: {e}", "warning")
+
+        if not queue:
+            return await status.edit_text(
+                f"<b>No unfinished anime episodes found in today's RSS feeds.</b>\n"
+                f"<i>Checked {len(candidates)} today's entries.</i>"
+            )
+
+        await status.edit_text(
+            f"<b>Retry queue started.</b>\n"
+            f"Today's entries: <code>{len(candidates)}</code>\n"
+            f"Unfinished episodes: <code>{len(queue)}</code>\n"
+            f"<i>Processing one by one. Each episode must finish before the next starts.</i>"
+        )
+
+        completed = 0
+        failed = []
+        for index, (title, link) in enumerate(queue, start=1):
+            try:
+                await status.edit_text(
+                    f"<b>Retrying {index}/{len(queue)}</b>\n<code>{title}</code>\n"
+                    f"<i>Uploading before moving to the next anime...</i>"
+                )
+                await get_animes(title, link, force=True)
+                completed += 1
+            except Exception as e:
+                failed.append(title)
+                await rep.report(f"/retry failed for {title}: {e}", "error")
+                # Stop at the first failure; don't skip ahead of an unfinished anime.
+                break
+
+        summary = (
+            f"<b>/retry finished.</b>\n"
+            f"Queued: <code>{len(queue)}</code>\n"
+            f"Attempted: <code>{completed + len(failed)}</code>\n"
+            f"Failed: <code>{len(failed)}</code>"
+        )
+        if failed:
+            summary += f"\n<b>Stopped at:</b> <code>{failed[0]}</code>"
+        else:
+            summary += f"\n<i>Queue drained in order.</i>"
+        await status.edit_text(summary)
+    except Exception as e:
+        await status.edit_text(f"<b>/retry error:</b> <code>{e}</code>")
+        await rep.report(f"/retry command error: {e}", "error")
+    finally:
+        ani_cache["retry_queue_running"] = False
 
 @bot.on_message(filters.command("addtask") & filters.user(Var.ADMINS))
 @new_task
