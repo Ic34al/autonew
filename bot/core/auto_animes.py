@@ -1726,6 +1726,22 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
             lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
         return lines
 
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
     # Left poster branding and title overlay.
     left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
     left_draw = ImageDraw.Draw(left_overlay)
@@ -1740,10 +1756,10 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
     # Show the complete AniList title across lines instead of truncating it.
     left_title_font = font(38, True)
-    left_title_lines = wrapped(str(title), left_title_font, split_x - 84, 3)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
     if len(left_title_lines) == 3:
         left_title_font = font(32, True)
-        left_title_lines = wrapped(str(title), left_title_font, split_x - 84, 4)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
     left_title_y = 720 if len(left_title_lines) <= 2 else 690
     for title_line in left_title_lines:
         draw.text((42, left_title_y), title_line, font=left_title_font,
@@ -1752,12 +1768,23 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
               font=font(23, True), fill=(255,220,70))
 
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+
     # Wrap the complete AniList title instead of cutting it off with an ellipsis.
     title_font = font(50, True)
-    title_lines = wrapped(str(title), title_font, right_w, 3)
+    title_lines = wrap_complete(str(title), title_font, right_w)
     if len(title_lines) == 3:
         title_font = font(42, True)
-        title_lines = wrapped(str(title), title_font, right_w, 4)
+        title_lines = wrap_complete(str(title), title_font, right_w)
     title_y = 150
     for title_line in title_lines:
         draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
