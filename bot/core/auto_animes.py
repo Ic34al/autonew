@@ -406,24 +406,27 @@ async def find_existing_anime_channel(anime_name: str):
     return None
 
 async def send_sticker_to_channel(channel, sticker_id=None):
-    """Send the bundled Ongoing Anime Time sticker after a successful channel post."""
+    """Send the single compact sticker from the configured Ongoing Anime Time pack."""
     if not Var.SEND_STICKER:
         return
-    sticker_path = os.path.join(os.path.dirname(__file__), "..", "assets", "ongoing_anime_time.webp")
+    sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
     try:
-        if not os.path.isfile(sticker_path):
+        sticker_set = await bot.get_sticker_set(sticker_set_name)
+        stickers = getattr(sticker_set, "stickers", None) or []
+        if not stickers:
             await rep.report(
-                f"Ongoing Anime Time sticker file not found: {sticker_path}. "
-                "Add bot/assets/ongoing_anime_time.webp to the repository.",
-                "error"
+                f"Sticker pack {sticker_set_name} returned no stickers; skipped sticker send.",
+                "warning"
             )
             return
-        # Upload the bundled WebP as a binary file. Passing a filesystem path
-        # as a string can be parsed as a Telegram file_id by some Pyrogram builds.
-        with open(sticker_path, "rb") as sticker_file:
-            await bot.send_sticker(channel, sticker_file)
+        # The user confirmed this pack contains one main sticker. Resolve its file_id
+        # through this bot's own Telegram session so the file_id is valid for this bot.
+        await bot.send_sticker(channel, stickers[0].file_id)
     except Exception as e:
-        await rep.report(f"Failed to send Ongoing Anime Time sticker to {channel}: {e}", "warning")
+        await rep.report(
+            f"Failed to send sticker from {sticker_set_name} to {channel}: {e}",
+            "warning"
+        )
 
 async def validate_channel_id(channel_id):
     if not channel_id:
