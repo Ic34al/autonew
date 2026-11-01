@@ -9,7 +9,7 @@ from asyncio import sleep as asleep, gather, create_subprocess_shell, create_tas
 import asyncio
 from asyncio.subprocess import PIPE
 import datetime
-from bot import Var, bot_loop, ffpids_cache, LOGS
+from bot import Var, bot_loop, ffpids_cache, LOGS, ani_cache
 from .func_utils import mediainfo, convertBytes, convertTime, sendMessage, editMessage
 from .reporter import rep
 from .text_utils import TextEditor
@@ -66,6 +66,14 @@ class FFEncoder:
             self.__total_time = 20 * 60
 
         while not (self.__proc is None or self.is_cancelled):
+            if ani_cache.get('global_pause'):
+                self.is_cancelled = True
+                if self.__proc is not None and self.__proc.returncode is None:
+                    try:
+                        self.__proc.kill()
+                    except ProcessLookupError:
+                        pass
+                break
             if self.__proc is not None and getattr(self.__proc, 'returncode', None) is not None:
                 break
             async with aiopen(self.__prog_file, 'r+') as p:
@@ -316,6 +324,9 @@ class FFEncoder:
             return ffargs['1080'].format(dl_npath, self.__prog_file, out_npath)
 
     async def start_encode(self):
+        if ani_cache.get('global_pause'):
+            LOGS.info('Encoding skipped because /pause is active.')
+            return None
         encoding_enabled = await db.get_encoding()
         if not encoding_enabled:
             if self.__qual != 'HDRi':
