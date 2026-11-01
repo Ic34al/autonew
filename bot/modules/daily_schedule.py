@@ -241,14 +241,69 @@ def format_anime_entry(item):
 
 
 def build_schedule_message(items, now):
-    """Build the photo caption in the compact, locked clean schedule style."""
+    """Build the first poster caption chunk in the approved schedule style."""
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\n{divider}\nNo anime releases found today.\n{divider}"
+        return f"{header}\\n{divider}"
 
     blocks = [format_anime_entry(item) for item in items]
-    return header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
+    return header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
+
+
+def split_schedule_messages(items):
+    """Split complete linked entries across Telegram caption/message limits."""
+    divider = "────────────────────"
+    caption_prefix = (
+        "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\\n"
+        + divider
+        + "\\n"
+    )
+    chunks = []
+    current_entries = []
+    current_prefix = caption_prefix
+    current_limit = CAPTION_LIMIT
+
+    for item in items:
+        entry = format_anime_entry(item)
+        candidate_entries = current_entries + [entry]
+        candidate = current_prefix + ("\\n" + divider + "\\n").join(candidate_entries) + "\\n" + divider
+
+        if telegram_utf16_length(candidate) <= current_limit:
+            current_entries.append(entry)
+            continue
+
+        if not current_entries:
+            raise ValueError(
+                "A single anime schedule entry exceeds Telegram's message limit."
+            )
+
+        chunks.append(
+            current_prefix
+            + ("\\n" + divider + "\\n").join(current_entries)
+            + "\\n" + divider
+        )
+
+        # Follow-up messages contain only anime names and times (plus the
+        # existing visual divider); no repeated heading or explanatory text.
+        current_prefix = ""
+        current_limit = 4096
+        current_entries = [entry]
+
+        single = entry + "\\n" + divider
+        if telegram_utf16_length(single) > current_limit:
+            raise ValueError(
+                "A single anime schedule entry exceeds Telegram's message limit."
+            )
+
+    if current_entries:
+        chunks.append(
+            current_prefix
+            + ("\\n" + divider + "\\n").join(current_entries)
+            + "\\n" + divider
+        )
+
+    return chunks
 
 
 async def fetch_today_schedule():
@@ -273,7 +328,7 @@ async def send_daily_schedule(
     chat_id,
     reply_to_message_id=None,
 ):
-    """Send the existing poster with the compact linked schedule as its caption."""
+    """Send the poster and every schedule entry without caption truncation."""
     try:
         now = datetime.now(IST)
         raw_schedule = await fetch_today_schedule()
@@ -289,8 +344,7 @@ async def send_daily_schedule(
             unique[key] = item
         items = sorted(unique.values(), key=lambda item: item["datetime"])
 
-        caption = build_schedule_message(items, now)
-        caption_length = telegram_utf16_length(caption)
+        chunks = split_schedule_messages(items)
 
         photo = getattr(Var, "SCHEDULE_PHOTO", None)
         if not photo:
@@ -306,34 +360,34 @@ async def send_daily_schedule(
             LOGGER.error("Schedule banner is not configured; refusing to send a text-only schedule.")
             return False
 
-        # Telegram photo captions are limited to 1,024 UTF-16 code units.
-        if caption_length > CAPTION_LIMIT:
-            LOGGER.error(
-                "Schedule caption is %s UTF-16 units (Telegram limit: %s); "
-                "not sending a truncated schedule.",
-                caption_length,
-                CAPTION_LIMIT,
-            )
-            return False
-
-        await bot.send_photo(
+        sent_photo = await bot.send_photo(
             chat_id=chat_id,
             photo=photo,
-            caption=caption,
+            caption=chunks[0],
             parse_mode=ParseMode.HTML,
             reply_to_message_id=reply_to_message_id,
         )
+
+        # Overflow is sent as plain schedule rows only: no extra heading,
+        # explanation, status, episode label, or TXT attachment.
+        for chunk in chunks[1:]:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=chunk,
+                parse_mode=ParseMode.HTML,
+                reply_to_message_id=sent_photo.id,
+            )
+
         LOGGER.info(
-            "Daily anime schedule sent with poster (%s anime, %s caption units).",
+            "Daily anime schedule sent (%s anime, %s follow-up message(s)).",
             len(items),
-            caption_length,
+            max(0, len(chunks) - 1),
         )
         return True
 
     except Exception:
         LOGGER.exception("Failed to send today's anime schedule.")
         return False
-
 
 
 
