@@ -411,12 +411,15 @@ async def send_sticker_to_channel(channel, sticker_id=None):
         return
     sticker_path = os.path.join(os.path.dirname(__file__), "..", "assets", "ongoing_anime_time.webp")
     try:
-        if os.path.isfile(sticker_path):
-            await bot.send_sticker(channel, sticker_path)
-        elif sticker_id:
-            await bot.send_sticker(channel, sticker_id)
-        else:
-            await rep.report("Ongoing Anime Time sticker asset is missing", "warning")
+        if not os.path.isfile(sticker_path):
+            await rep.report(
+                f"Ongoing Anime Time sticker file not found: {sticker_path}. "
+                "Add bot/assets/ongoing_anime_time.webp to the repository.",
+                "error"
+            )
+            return
+        # Always send the bundled custom WebP; never use the old sticker ID.
+        await bot.send_sticker(channel, sticker_path)
     except Exception as e:
         await rep.report(f"Failed to send Ongoing Anime Time sticker to {channel}: {e}", "warning")
 
