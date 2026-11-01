@@ -1343,6 +1343,7 @@ async def fetch_animes():
             # Recover unfinished episodes from MongoDB before scanning fresh RSS.
             # This works even if the source entry has fallen out of the RSS window.
             recovered_links = set()
+            resume_failed = False
             try:
                 resume_tasks = await db.getAnimeResumeTasks()
                 for resume_task in resume_tasks:
@@ -1355,9 +1356,21 @@ async def fetch_animes():
                         f"Resuming unfinished episode from saved checkpoint: {resume_name}",
                         "info"
                     )
+                    # Do not advance to another episode until this saved episode
+                    # completes. get_animes re-raises failures after preserving
+                    # successful per-quality checkpoints.
                     await get_animes(resume_name, resume_link)
             except Exception as resume_error:
-                await rep.report(f"Episode resume scan failed: {resume_error}", "error")
+                resume_failed = True
+                await rep.report(
+                    f"Episode resume failed; holding the queue on this unfinished episode. "
+                    f"It will retry on the next scan: {resume_error}",
+                    "error"
+                )
+
+            if resume_failed:
+                # Never start fresh RSS jobs while an earlier episode is unfinished.
+                continue
 
             feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
             pending = []
@@ -2133,6 +2146,9 @@ async def get_animes(name, torrent, force=False):
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
         await rep.report(format_exc(), "error")
+        # Propagate the failure to fetch_animes so it does not mark this
+        # episode as handled and advance to the next RSS item.
+        raise
 
 async def extra_utils(msg_id, out_path):
     try:
