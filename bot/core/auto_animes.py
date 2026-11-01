@@ -1791,10 +1791,19 @@ async def get_animes(name, torrent, force=False):
         if not force and episode_key in ani_cache['ongoing']:
             return
         ani_cache['ongoing'].add(episode_key)
+
+        # If the Main Channel post already exists, never publish it twice.
+        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no)
+        if existing_main_post:
+            await db.markAnimeResumeComplete(ani_id, ep_no)
+            ani_cache['completed'].add(episode_key)
+            return
+
+        # Keep the torrent source in MongoDB so a restart can rediscover this
+        # episode even after it falls out of the RSS feed window.
+        await db.saveAnimeResume(ani_id, ep_no, name, torrent)
         
-        if force or (not (ani_data := await db.getAnime(ani_id)) \
-            or (ani_data and not (qual_data := ani_data.get(ep_no))) \
-            or (ani_data and qual_data and not all(qual for qual in qual_data.values()))):
+        if force or not existing_main_post:
             
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n{name}", "warning")
@@ -1869,68 +1878,79 @@ async def get_animes(name, torrent, force=False):
             try:
                 btns = []
                 uploaded_qualities = []
-                if not encoding_enabled:
-                    filename = await aniInfo.get_upname("HDRi")
-                    await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Uploading...</i></pre>")
-                    await asleep(1.5)
-                    
+                required_qualities = list(Var.QUALS) if encoding_enabled else ["HDRi"]
+                saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
+
+                def add_quality_button(qual, msg_id):
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                        await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
+                    )
+                    label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
+                    button = InlineKeyboardButton(label, url=link)
+                    if btns and len(btns[-1]) == 1:
+                        btns[-1].append(button)
+                    else:
+                        btns.append([button])
+
+                for qual in required_qualities:
+                    # Reuse a quality that was already uploaded before the last
+                    # crash. Verify the message still exists in FILE_STORE.
+                    saved_msg_id = saved_file_ids.get(qual)
+                    if saved_msg_id:
+                        try:
+                            stored_msg = await bot.get_messages(
+                                Var.FILE_STORE, message_ids=int(saved_msg_id)
+                            )
+                            if stored_msg and not getattr(stored_msg, "empty", False):
+                                await add_quality_button(qual, saved_msg_id)
+                                uploaded_qualities.append(qual)
+                                await rep.report(
+                                    f"Resume: reusing existing {qual} upload for {name}; skipping encode.",
+                                    "info"
+                                )
+                                continue
+                        except Exception as verify_error:
+                            await rep.report(
+                                f"Saved {qual} message {saved_msg_id} is unavailable; re-uploading this quality: {verify_error}",
+                                "warning"
+                            )
+
+                    filename = await aniInfo.get_upname(qual)
                     anime_format = aniInfo.adata.get("format", "").lower()
                     is_movie = anime_format == "movie"
-                    
-                    out_path = await FFEncoder(stat_msg, dl_path, filename, "HDRi", is_movie=is_movie).start_encode()
-                    if out_path and out_path != dl_path:
-                        await rep.report("Successfully encoded HDRip version.", "info")
-                        msg = await TgUploader(stat_msg).upload(out_path, "HDRi")
-                        if os.path.exists(out_path):
-                            await aioremove(out_path)
-                    else:
-                        await rep.report("Uploading original file as HDRip...", "info")
-                        msg = await TgUploader(stat_msg).upload(dl_path, "HDRi")
-                    
-                    msg_id = msg.id
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
-                    btns.append([InlineKeyboardButton(f"{RAW_BTN}", url=link)])
-                    if post_msg:
-                        await editMessage(post_msg, post_msg.caption.html if post_msg.caption else "", InlineKeyboardMarkup(btns))
-                    uploaded_qualities.append("HDRi")
-                    await db.saveAnime(ani_id, ep_no, "HDRi", None)
-                    bot_loop.create_task(extra_utils(msg_id, dl_path))
-                else:
-                    for qual in Var.QUALS:
-                        filename = await aniInfo.get_upname(qual)
-                        anime_format = aniInfo.adata.get("format", "").lower()
-                        is_movie = anime_format == "movie"
-                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
-                        
-                        await asleep(1.5)
-                        await rep.report("Starting Encode...", "info")
-                        try:
-                            out_path = await FFEncoder(stat_msg, dl_path, filename, qual, is_movie=is_movie).start_encode()
-                        except Exception as e:
-                            await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await stat_msg.delete()
-                            return
-                        await rep.report("Successfully Compressed Now Going To Upload...", "info")
-                        
-                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
-                        await asleep(1.5)
-                        try:
-                            msg = await TgUploader(stat_msg).upload(out_path, qual)
-                        except Exception as e:
-                            await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await stat_msg.delete()
-                            return
-                        await rep.report("Successfully Uploaded File into Channel...", "info")
-                        
-                        msg_id = msg.id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
-                        if len(btns) != 0 and len(btns[-1]) == 1:
-                            btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
-                        else:
-                            btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
-                        uploaded_qualities.append(qual)
-                        await db.saveAnime(ani_id, ep_no, qual, None)
-                        bot_loop.create_task(extra_utils(msg_id, out_path))
+                    await editMessage(
+                        stat_msg,
+                        f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n"
+                        f"<pre><i>Encoding {qual}...</i></pre>"
+                    )
+                    await rep.report(f"Starting Encode for {qual}...", "info")
+
+                    out_path = await FFEncoder(
+                        stat_msg, dl_path, filename, qual, is_movie=is_movie
+                    ).start_encode()
+                    if not out_path or not ospath.exists(out_path):
+                        raise RuntimeError(
+                            f"{qual} encoding failed for {name}; earlier uploaded qualities are saved and will be reused on retry."
+                        )
+
+                    await editMessage(
+                        stat_msg,
+                        f"<blockquote>‣ <b>Anime Name :</b> <b><i>{filename}</i></b></blockquote>\n\n"
+                        f"<pre><i>Uploading {qual}...</i></pre>"
+                    )
+                    msg = await TgUploader(stat_msg).upload(out_path, qual)
+                    if not msg or not getattr(msg, "id", None):
+                        raise RuntimeError(f"Telegram did not confirm {qual} upload for {name}.")
+
+                    # Persist immediately after Telegram confirms the upload.
+                    await db.saveAnimeFileId(ani_id, ep_no, qual, msg.id)
+                    await db.saveAnime(ani_id, ep_no, qual, None)
+                    saved_file_ids[qual] = msg.id
+                    await add_quality_button(qual, msg.id)
+                    uploaded_qualities.append(qual)
+                    await rep.report(f"Successfully uploaded and checkpointed {qual} for {name}.", "info")
+                    bot_loop.create_task(extra_utils(msg.id, out_path))
+
             finally:
                 ffLock.release()
             
@@ -1972,9 +1992,12 @@ async def get_animes(name, torrent, force=False):
                         f"Failed to publish completed episode to Main Channel: {last_publish_error}"
                     )
 
+                # Persist the Main Channel post ID immediately after send succeeds.
+                await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
+                await db.markAnimeResumeComplete(ani_id, ep_no)
                 try:
                     await asleep(Var.STICKER_INTERVAL)
                     await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
@@ -1993,7 +2016,8 @@ async def get_animes(name, torrent, force=False):
             if encoding_enabled:
                 await aioremove(dl_path)
         else:
-            # Existing DB record already has all quality links; don't enqueue a duplicate.
+            # Existing Main Channel post is already recorded.
+            await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
     except Exception as error:
         if 'episode_key' in locals():
