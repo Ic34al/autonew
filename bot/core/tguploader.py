@@ -6,7 +6,7 @@ from os import path as ospath
 from aiofiles.os import remove as aioremove
 from pyrogram.errors import FloodWait
 import datetime
-from bot import bot, Var
+from bot import bot, Var, ani_cache
 from .gdrive import gdrive
 from .database import db
 from .func_utils import editMessage, sendMessage, convertBytes, convertTime
@@ -26,6 +26,8 @@ class TgUploader:
         self.__updater = time()
 
     async def upload(self, path, qual):
+        if ani_cache.get('global_pause'):
+            raise RuntimeError('Upload paused by /pause; this quality will be retried after /resume.')
         self.__name = ospath.basename(path)
         self.__qual = qual
         try:
@@ -102,9 +104,13 @@ class TgUploader:
                 except Exception as e:
                     await rep.report(f"Failed to remove file after upload: {str(e)}", "warning")
 
+                if ani_cache.get('global_pause') or self.cancelled:
+                    raise RuntimeError('Upload cancelled by /pause; this quality will be retried after /resume.')
                 return msg
 
             except FloodWait as e:
+                if ani_cache.get('global_pause') or self.cancelled:
+                    raise RuntimeError('Upload paused during Telegram FloodWait; retry this quality after /resume.')
                 wait_seconds = max(1, int(e.value) + 1)
                 await rep.report(
                     f"Telegram rate limit reached. Retrying in {wait_seconds}s.",
@@ -118,6 +124,8 @@ class TgUploader:
             raise e
 
     async def progress_status(self, current, total):
+        if ani_cache.get('global_pause'):
+            self.cancelled = True
         if self.cancelled:
             self.__client.stop_transmission()
         now = time()
