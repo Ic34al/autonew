@@ -1268,7 +1268,7 @@ async def fetch_animes():
                     continue
                 seen = seen_rss_links.setdefault(rss_url, set())
                 # Process oldest unseen entry first so a burst of releases is not skipped.
-                for entry in reversed(entries):
+                for entry in entries:
                     link = getattr(entry, "link", None)
                     title = getattr(entry, "title", None)
                     if not link or not title or link in seen:
