@@ -1317,6 +1317,7 @@ async def process_low_end(name, torrent_url, force=False):
             if stat_msg:
                 await stat_msg.delete()
             ani_cache['completed'].add(episode_key)
+            ani_cache['ongoing'].discard(episode_key)
 
     except Exception as e:
         if 'episode_key' in locals():
@@ -2080,6 +2081,7 @@ async def get_animes(name, torrent, force=False):
 
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
+                ani_cache['ongoing'].discard(episode_key)
             else:
                 await rep.report(f"No qualities uploaded for {name}; no Main Channel post sent", "warning")
                 raise RuntimeError(f"No qualities uploaded for {name}; episode remains retryable")
