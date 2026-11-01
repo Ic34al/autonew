@@ -2721,6 +2721,20 @@ async def retry_todays_anime_cmd(client, message: Message):
                     f"<i>Uploading before moving to the next anime...</i>"
                 )
                 await get_animes(title, link, force=True)
+                # get_animes currently handles some exceptions internally; verify the DB
+                # rather than treating a returned None as a successful upload.
+                verify_info = TextEditor(title)
+                await verify_info.load_info()
+                verify_id = verify_info.adata.get("id")
+                verify_ep = verify_info.pdata.get("episode_number")
+                if isinstance(verify_ep, list):
+                    verify_ep = verify_ep[0] if verify_ep else None
+                verified_data = await db.getAnime(verify_id) if verify_id is not None else {}
+                verified_episode = verified_data.get(str(verify_ep), {}) if isinstance(verified_data, dict) else {}
+                if not isinstance(verified_episode, dict) or not all(verified_episode.get(q) for q in required_qualities) or not verified_episode.get("msg_id"):
+                    failed.append(title)
+                    await rep.report(f"/retry did not complete all required qualities or publish the main post: {title}", "error")
+                    break
                 completed += 1
             except Exception as e:
                 failed.append(title)
