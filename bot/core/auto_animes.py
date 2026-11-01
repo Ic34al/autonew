@@ -1688,7 +1688,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     draw.rounded_rectangle((rx, 258, rx+right_w, 266), radius=4, fill=(25,92,190))
     draw.rounded_rectangle((rx, 300, rx+195, 356), radius=26, fill=(20,91,190))
     draw.text((rx+25, 313), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
-    draw.rounded_rectangle((rx+215, 300, rx+440, 356), radius=26, outline=(65,70,85), width=2, fill=(255,255,255,170))
+    draw.rounded_rectangle((rx+215, 300, rx+440, 356), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
     draw.text((rx+238, 313), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
     draw.rounded_rectangle((rx+right_w-112, 300, rx+right_w, 356), radius=12, outline=(20,24,35), width=2)
     draw.text((rx+right_w-92, 313), "HD", font=font(25, True), fill=(18,20,28))
@@ -1730,6 +1730,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
         draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
         draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
 
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
     return output_path
 
