@@ -245,19 +245,19 @@ def build_schedule_message(items, now):
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\\n{divider}"
+        return f"{header}\n{divider}"
 
     blocks = [format_anime_entry(item) for item in items]
-    return header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
+    return header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
 
 
 def split_schedule_messages(items):
     """Split complete linked entries across Telegram caption/message limits."""
     divider = "────────────────────"
     caption_prefix = (
-        "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\\n"
+        "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\n"
         + divider
-        + "\\n"
+        + "\n"
     )
     chunks = []
     current_entries = []
@@ -267,7 +267,7 @@ def split_schedule_messages(items):
     for item in items:
         entry = format_anime_entry(item)
         candidate_entries = current_entries + [entry]
-        candidate = current_prefix + ("\\n" + divider + "\\n").join(candidate_entries) + "\\n" + divider
+        candidate = current_prefix + ("\n" + divider + "\n").join(candidate_entries) + "\n" + divider
 
         if telegram_utf16_length(candidate) <= current_limit:
             current_entries.append(entry)
@@ -280,8 +280,8 @@ def split_schedule_messages(items):
 
         chunks.append(
             current_prefix
-            + ("\\n" + divider + "\\n").join(current_entries)
-            + "\\n" + divider
+            + ("\n" + divider + "\n").join(current_entries)
+            + "\n" + divider
         )
 
         # Follow-up messages contain only anime names and times (plus the
@@ -290,7 +290,7 @@ def split_schedule_messages(items):
         current_limit = 4096
         current_entries = [entry]
 
-        single = entry + "\\n" + divider
+        single = entry + "\n" + divider
         if telegram_utf16_length(single) > current_limit:
             raise ValueError(
                 "A single anime schedule entry exceeds Telegram's message limit."
@@ -299,8 +299,8 @@ def split_schedule_messages(items):
     if current_entries:
         chunks.append(
             current_prefix
-            + ("\\n" + divider + "\\n").join(current_entries)
-            + "\\n" + divider
+            + ("\n" + divider + "\n").join(current_entries)
+            + "\n" + divider
         )
 
     return chunks
