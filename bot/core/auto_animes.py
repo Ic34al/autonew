@@ -1781,14 +1781,16 @@ async def get_animes(name, torrent, force=False):
         if isinstance(ep_no, list):
             ep_no = ep_no[0] if ep_no else None
         ep_no = str(ep_no) if ep_no else None
-        
+
+        # Cache state per anime episode, not per series. A series can have
+        # many episodes; using ani_id alone incorrectly blocks later episodes.
+        episode_key = f"{ani_id}:{ep_no or 'unknown'}"
         encoding_enabled = await db.get_encoding()
-        if ani_id not in ani_cache['ongoing']:
-            ani_cache['ongoing'].add(ani_id)
-        elif not force:
+        if not force and episode_key in ani_cache['completed']:
             return
-        if not force and ani_id in ani_cache['completed']:
+        if not force and episode_key in ani_cache['ongoing']:
             return
+        ani_cache['ongoing'].add(episode_key)
         
         if force or (not (ani_data := await db.getAnime(ani_id)) \
             or (ani_data and not (qual_data := ani_data.get(ep_no))) \
