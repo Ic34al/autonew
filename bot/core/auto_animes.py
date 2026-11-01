@@ -418,8 +418,10 @@ async def send_sticker_to_channel(channel, sticker_id=None):
                 "error"
             )
             return
-        # Always send the bundled custom WebP; never use the old sticker ID.
-        await bot.send_sticker(channel, sticker_path)
+        # Upload the bundled WebP as a binary file. Passing a filesystem path
+        # as a string can be parsed as a Telegram file_id by some Pyrogram builds.
+        with open(sticker_path, "rb") as sticker_file:
+            await bot.send_sticker(channel, sticker_file)
     except Exception as e:
         await rep.report(f"Failed to send Ongoing Anime Time sticker to {channel}: {e}", "warning")
 
