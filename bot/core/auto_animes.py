@@ -1750,7 +1750,9 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
                   fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
         left_title_y += left_title_font.size + 8
     draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
-              font=font(23    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+              font=font(23, True), fill=(255,220,70))
+
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
     title_font = font(50, True)
     title_lines = wrapped(str(title), title_font, right_w, 3)
     if len(title_lines) == 3:
@@ -1780,18 +1782,6 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
         draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
         sy += 29
-
-us=12, outline=(20,24,35), width=2)
-    draw.text((rx+right_w-92, 313), "HD", font=font(25, True), fill=(18,20,28))
-
-    # AniList synopsis, truncated cleanly to fit.
-    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
-    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
-    syn_font = font(21)
-    sy = 405
-    for line in wrapped(synopsis, syn_font, right_w, 6):
-        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
-        sy += 34
 
     # Watch button.
     button_y = min(650, max(sy + 18, pill_y + 145))
