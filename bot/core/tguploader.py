@@ -127,7 +127,9 @@ class TgUploader:
         if ani_cache.get('global_pause'):
             self.cancelled = True
         if self.cancelled:
-            self.__client.stop_transmission()
+            # Pyrogram's stop_transmission is async; it must be awaited or
+            # the active upload continues despite /pause.
+            await self.__client.stop_transmission()
         now = time()
         diff = now - self.__start
         if (now - self.__updater) >= 15 or current == total:
