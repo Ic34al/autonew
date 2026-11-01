@@ -1288,6 +1288,25 @@ async def fetch_animes():
             else:
                 rss_urls = list(Var.RSS_ITEMS_ANIME)
 
+            # Recover unfinished episodes from MongoDB before scanning fresh RSS.
+            # This works even if the source entry has fallen out of the RSS window.
+            recovered_links = set()
+            try:
+                resume_tasks = await db.getAnimeResumeTasks()
+                for resume_task in resume_tasks:
+                    resume_name = resume_task.get("name")
+                    resume_link = resume_task.get("torrent_url")
+                    if not resume_name or not resume_link:
+                        continue
+                    recovered_links.add(resume_link)
+                    await rep.report(
+                        f"Resuming unfinished episode from saved checkpoint: {resume_name}",
+                        "info"
+                    )
+                    await get_animes(resume_name, resume_link)
+            except Exception as resume_error:
+                await rep.report(f"Episode resume scan failed: {resume_error}", "error")
+
             feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
             pending = []
             for rss_url, entries in zip(rss_urls, feeds_by_url):
@@ -1298,7 +1317,7 @@ async def fetch_animes():
                 for entry in entries:
                     link = getattr(entry, "link", None)
                     title = getattr(entry, "title", None)
-                    if not link or not title or link in seen:
+                    if not link or not title or link in seen or link in recovered_links:
                         continue
                     seen.add(link)
                     pending.append((title, link))
