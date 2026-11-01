@@ -1936,26 +1936,68 @@ async def get_animes(name, torrent, force=False):
             
             await stat_msg.delete()
             if btns:
+                markup = InlineKeyboardMarkup(btns)
+                # Telegram may temporarily rate-limit the Main Channel post.
+                # Retry the publish step without re-uploading the already stored files.
+                last_publish_error = None
+                for publish_attempt in range(5):
+                    try:
+                        if photo_path and ospath.exists(photo_path):
+                            with open(photo_path, 'rb') as photo_file:
+                                post_msg = await bot.send_photo(
+                                    Var.MAIN_CHANNEL, photo=photo_file,
+                                    caption=caption, reply_markup=markup
+                                )
+                        else:
+                            post_msg = await bot.send_photo(
+                                Var.MAIN_CHANNEL, photo=photo_url,
+                                caption=caption, reply_markup=markup
+                            )
+                        last_publish_error = None
+                        break
+                    except FloodWait as flood:
+                        wait_seconds = max(1, int(flood.value) + 1)
+                        await rep.report(
+                            f"Main Channel FLOOD_WAIT: retrying publish in {wait_seconds}s "
+                            f"(attempt {publish_attempt + 1}/5).", "warning"
+                        )
+                        await asyncio.sleep(wait_seconds)
+                        last_publish_error = flood
+                    except Exception as publish_error:
+                        last_publish_error = publish_error
+                        break
+
+                if last_publish_error is not None or post_msg is None:
+                    raise RuntimeError(
+                        f"Failed to publish completed episode to Main Channel: {last_publish_error}"
+                    )
+
+                for uploaded_qual in uploaded_qualities:
+                    await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
+
                 try:
-                    markup = InlineKeyboardMarkup(btns)
-                    if photo_path and ospath.exists(photo_path):
-                        with open(photo_path, 'rb') as photo_file:
-                            post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=markup)
-                    else:
-                        post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=markup)
                     await asleep(Var.STICKER_INTERVAL)
                     await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                    for uploaded_qual in uploaded_qualities:
-                        await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
-                except Exception as e:
-                    await rep.report(f"Failed to publish completed episode to Main Channel: {e}", "error")
+                except FloodWait as flood:
+                    await asyncio.sleep(max(1, int(flood.value) + 1))
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                except Exception as sticker_error:
+                    await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+
+                # Mark complete only after the Main Channel post exists.
+                ani_cache['completed'].add(episode_key)
             else:
                 await rep.report(f"No qualities uploaded for {name}; no Main Channel post sent", "warning")
+                raise RuntimeError(f"No qualities uploaded for {name}; episode remains retryable")
 
             if encoding_enabled:
                 await aioremove(dl_path)
-        ani_cache['completed'].add(episode_key)
+        else:
+            # Existing DB record already has all quality links; don't enqueue a duplicate.
+            ani_cache['completed'].add(episode_key)
     except Exception as error:
+        if 'episode_key' in locals():
+            ani_cache['ongoing'].discard(episode_key)
         await rep.report(format_exc(), "error")
 
 async def extra_utils(msg_id, out_path):
