@@ -1738,30 +1738,50 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
     draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
     draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
-    draw.text((42, 780), fit_line(str(title), font(54, True), split_x-84), font=font(54, True), fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
-    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}", font=font(25, True), fill=(255,220,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrapped(str(title), left_title_font, split_x - 84, 3)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrapped(str(title), left_title_font, split_x - 84, 4)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrapped(str(title), title_font, right_w, 3)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrapped(str(title), title_font, right_w, 4)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
 
-    # Right-side website header.
-    rx = split_x + 58
-    right_w = W - rx - 58
-    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
-    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
-    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
-    nav_font = font(17, True)
-    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
-    if nav_width < right_w:
-        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
 
-    # Large title and episode pills.
-    title_font = font(64, True)
-    title_text = fit_line(str(title), title_font, right_w)
-    draw.text((rx, 175), title_text, font=title_font, fill=(8,10,18))
-    draw.rounded_rectangle((rx, 258, rx+right_w, 266), radius=4, fill=(25,92,190))
-    draw.rounded_rectangle((rx, 300, rx+195, 356), radius=26, fill=(20,91,190))
-    draw.text((rx+25, 313), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
-    draw.rounded_rectangle((rx+215, 300, rx+440, 356), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
-    draw.text((rx+238, 313), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
-    draw.rounded_rectangle((rx+right_w-112, 300, rx+right_w, 356), radius=12, outline=(20,24,35), width=2)
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
+
+us=12, outline=(20,24,35), width=2)
     draw.text((rx+right_w-92, 313), "HD", font=font(25, True), fill=(18,20,28))
 
     # AniList synopsis, truncated cleanly to fit.
@@ -1774,7 +1794,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
         sy += 34
 
     # Watch button.
-    button_y = max(625, sy + 26)
+    button_y = min(650, max(sy + 18, pill_y + 145))
     draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
     draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
     draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
