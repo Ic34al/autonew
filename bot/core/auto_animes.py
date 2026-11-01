@@ -12,7 +12,7 @@ import re
 from bot import bot, bot_loop, Var, ani_cache, ffQueue, ffLock, ff_queued, LOGS
 from .tordownload import TorDownloader
 from .database import db
-from .func_utils import getfeed, encode, editMessage, sendMessage, convertBytes
+from .func_utils import getfeed, getfeeds, encode, editMessage, sendMessage, convertBytes
 from .text_utils import TextEditor, MangaLister
 from .ffencoder import FFEncoder
 from .tguploader import TgUploader
@@ -1050,12 +1050,11 @@ async def process_low_end(name, torrent_url, force=False):
         ep_no = str(ep_no) if ep_no else None
 
         encoding_enabled = await db.get_encoding()
-        if ani_id not in ani_cache['ongoing']:
-            ani_cache['ongoing'].add(ani_id)
-        elif not force:
+        episode_key = f"{ani_id}:{ep_no or 'unknown'}"
+        if not force and episode_key in ani_cache['completed']:
             return
-        if not force and ani_id in ani_cache['completed']:
-            return
+        # Track work per episode, never per series: later episodes must remain eligible.
+        ani_cache['ongoing'].add(episode_key)
 
         if force or (not (ani_data := await db.getAnime(ani_id)) \
             or (ani_data and not (qual_data := ani_data.get(ep_no))) \
@@ -1248,51 +1247,50 @@ async def process_low_end(name, torrent_url, force=False):
 
 async def fetch_animes():
     await rep.report("Fetching Anime Started !!!", "info")
-    last_rss_entries = {}
+    seen_rss_links = {}
     while True:
         await asleep(15)
         mode, upload_mode = await asyncio.gather(db.get_mode(), db.get_upload_mode())
         if ani_cache.get('global_pause') and not ani_cache.get('manual_task'):
             continue
-        if mode == "anime" and ani_cache['fetch_animes']:
-            try:
-                feeds = []
-                rss_urls = []
-                if upload_mode == "low_end":
-                    rss_urls = [Var.RSS_LOW_END.get(qual) for qual in ["480", "720", "1080"] if Var.RSS_LOW_END.get(qual)]
-                    feeds = await asyncio.gather(*(getfeed(url) for url in rss_urls))
-                else:
-                    rss_urls = Var.RSS_ITEMS_ANIME
-                    feeds = await asyncio.gather(*(getfeed(url) for url in rss_urls))
+        if mode != "anime" or not ani_cache['fetch_animes']:
+            continue
+        try:
+            if upload_mode == "low_end":
+                rss_urls = [Var.RSS_LOW_END.get(q) for q in ("480", "720", "1080") if Var.RSS_LOW_END.get(q)]
+            else:
+                rss_urls = list(Var.RSS_ITEMS_ANIME)
 
-                valid_feeds = []
-                for rss_url, feed in zip(rss_urls, feeds):
-                    if not feed or not hasattr(feed, 'link'):
+            feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
+            pending = []
+            for rss_url, entries in zip(rss_urls, feeds_by_url):
+                if not entries:
+                    continue
+                seen = seen_rss_links.setdefault(rss_url, set())
+                # Process oldest unseen entry first so a burst of releases is not skipped.
+                for entry in reversed(entries):
+                    link = getattr(entry, "link", None)
+                    title = getattr(entry, "title", None)
+                    if not link or not title or link in seen:
                         continue
-                    
-                    current_link = feed.link
-                    last_link = last_rss_entries.get(rss_url)
-                    
-                    if current_link != last_link:
-                        last_rss_entries[rss_url] = current_link
-                        valid_feeds.append(feed)
+                    seen.add(link)
+                    pending.append((title, link))
+                # Bound memory while retaining a recent de-duplication window.
+                if len(seen) > 500:
+                    seen_rss_links[rss_url] = set(list(seen)[-250:])
 
-                anime_links = [feed.link for feed in valid_feeds]
-                anime_datas = await asyncio.gather(*(db.getAnime(link) for link in anime_links))
-
-                for feed, ani_data in zip(valid_feeds, anime_datas):
-                    ep_no = None
-                    match = re.search(r'[-\s](\d+)\s*\(', feed.title)
-                    if match:
-                        ep_no = match.group(1)
-                    if not ep_no:
-                        ep_no = "1"
-                    ep_data = ani_data.get(str(ep_no), {}) if ani_data else {}
-                    if ep_data.get("completed"):
-                        continue
-                    bot_loop.create_task(get_animes(feed.title, feed.link))
-            except Exception as e:
-                await rep.report(f"Anime fetch error: {str(e)}", "error")
+            # One episode at a time: finish/retry the current item before advancing.
+            for title, link in pending:
+                try:
+                    await get_animes(title, link)
+                except Exception:
+                    await rep.report(f"Episode processing failed; will retry on next RSS scan: {title}\\n{format_exc()}", "error")
+                    # Make it eligible for the next scan instead of permanently consuming it.
+                    for rss_url in rss_urls:
+                        seen_rss_links.get(rss_url, set()).discard(link)
+                    break
+        except Exception as e:
+            await rep.report(f"Anime fetch error: {str(e)}", "error")
 
 async def get_or_create_anime_channel(name: str, aniInfo):
     try:
@@ -1847,7 +1845,7 @@ async def get_animes(name, torrent, force=False):
 
             if encoding_enabled:
                 await aioremove(dl_path)
-        ani_cache['completed'].add(ani_id)
+        ani_cache['completed'].add(episode_key)
     except Exception as error:
         await rep.report(format_exc(), "error")
 

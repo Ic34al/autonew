@@ -42,6 +42,15 @@ def new_task(func):
         return bot_loop.create_task(func(*args, **kwargs))
     return wrapper
 
+async def getfeeds(link):
+    """Return every current RSS entry, oldest first; callers can safely drain feed backlogs."""
+    try:
+        feed = await sync_to_async(feedparse, link)
+        return list(reversed(feed.entries))
+    except Exception:
+        LOGS.error(format_exc())
+        return []
+
 async def getfeed(link, index=0):
     try:
         feed = await sync_to_async(feedparse, link)
