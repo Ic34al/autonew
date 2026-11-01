@@ -1797,6 +1797,7 @@ async def get_animes(name, torrent, force=False):
         if existing_main_post:
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
+            ani_cache['ongoing'].discard(episode_key)
             return
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
@@ -1881,7 +1882,7 @@ async def get_animes(name, torrent, force=False):
                 required_qualities = list(Var.QUALS) if encoding_enabled else ["HDRi"]
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
-                def add_quality_button(qual, msg_id):
+                async def add_quality_button(qual, msg_id):
                     link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
