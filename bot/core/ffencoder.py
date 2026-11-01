@@ -403,6 +403,15 @@ class FFEncoder:
                 await rep.report(f"Failed to build fallback ffmpeg command: {e}", "error")
                 return None
 
+        # /pause may be pressed while the FFmpeg command is being prepared.
+        # Restore the source file and do not start a new encode in that case.
+        if ani_cache.get('global_pause'):
+            self.is_cancelled = True
+            if ospath.exists(dl_npath):
+                await aiorename(dl_npath, self.dl_path)
+            LOGS.info("Encoding cancelled before FFmpeg process start because /pause is active.")
+            return None
+
         self.__proc = await create_subprocess_shell(
             ffcode,
             stdout=asyncio.subprocess.DEVNULL,
