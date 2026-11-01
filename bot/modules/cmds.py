@@ -2506,12 +2506,12 @@ async def start_msg(client, message):
 @bot.on_message(command('pause') & private & user(Var.ADMINS))
 async def pause_fetch(client, message):
     ani_cache['global_pause'] = True
-    await sendMessage(message, "<blockquote><b>Fetching paused for all modes (anime & manga).</b></blockquote>")
+    await sendMessage(message, "<blockquote><b>EMERGENCY PAUSE enabled.</b> New fetching is stopped. Active encoding is terminated and active Telegram uploads are cancelled. The interrupted quality will be retried after /resume; already checkpointed qualities are kept.</blockquote>")
 
 @bot.on_message(command('resume') & private & user(Var.ADMINS))
 async def resume_fetch(client, message):
     ani_cache['global_pause'] = False
-    await sendMessage(message, "<blockquote><b>Fetching resumed for all modes (anime & manga).</b></blockquote>")
+    await sendMessage(message, "<blockquote><b>Resume enabled.</b> Automatic fetching and processing may continue. Previously checkpointed qualities will be reused.</blockquote>")
 
 @bot.on_message(command('log') & private & user(Var.ADMINS))
 @new_task
