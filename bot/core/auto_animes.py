@@ -1080,8 +1080,18 @@ async def process_low_end(name, torrent_url, force=False):
         episode_key = f"{ani_id}:{ep_no or 'unknown'}"
         if not force and episode_key in ani_cache['completed']:
             return
-        # Track work per episode, never per series: later episodes must remain eligible.
+        if not force and episode_key in ani_cache['ongoing']:
+            return
         ani_cache['ongoing'].add(episode_key)
+
+        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no)
+        if existing_main_post:
+            await db.markAnimeResumeComplete(ani_id, ep_no)
+            ani_cache['completed'].add(episode_key)
+            ani_cache['ongoing'].discard(episode_key)
+            return
+
+        await db.saveAnimeResume(ani_id, ep_no, name, torrent_url)
 
         if force or (not (ani_data := await db.getAnime(ani_id)) \
             or (ani_data and not (qual_data := ani_data.get(ep_no))) \
@@ -1142,10 +1152,30 @@ async def process_low_end(name, torrent_url, force=False):
             stat_msg = await bot.send_message(chat_id=Var.LOG_CHANNEL, text=f"<b>Processing:</b> {name}\nDownloading...")
 
             file_store_links = {}
+            saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
             buttons = []
             btns = []
             post_id = None
             for qual in ["480", "720", "1080"]:
+                saved_msg_id = saved_file_ids.get(qual)
+                if saved_msg_id:
+                    try:
+                        stored_msg = await bot.get_messages(
+                            Var.FILE_STORE, message_ids=int(saved_msg_id)
+                        )
+                        if stored_msg and not getattr(stored_msg, "empty", False):
+                            file_store_links[qual] = int(saved_msg_id)
+                            await rep.report(
+                                f"Resume: reusing existing {qual} upload for {name}; skipping encode.",
+                                "info"
+                            )
+                            continue
+                    except Exception as verify_error:
+                        await rep.report(
+                            f"Saved {qual} upload is unavailable; retrying this quality: {verify_error}",
+                            "warning"
+                        )
+
                 rss_link = Var.RSS_LOW_END.get(qual)
                 if not rss_link:
                     continue
@@ -1185,6 +1215,9 @@ async def process_low_end(name, torrent_url, force=False):
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         msg_id = msg.id
                         file_store_links[qual] = msg_id
+                        await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
+                        await db.saveAnime(ani_id, ep_no, qual, None)
+                        saved_file_ids[qual] = msg_id
                         link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
@@ -1251,25 +1284,43 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            if file_store_links:
-                try:
-                    final_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=final_caption, reply_markup=final_markup)
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                    for uploaded_qual in file_store_links:
-                        await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
-                except Exception as e:
-                    await rep.report(f"Failed to publish completed episode to Main Channel: {e}", "error")
-            else:
-                await rep.report(f"No low-end qualities uploaded for {name}; no Main Channel post sent", "warning")
+            required_low_end = ["480", "720", "1080"]
+            missing_low_end = [q for q in required_low_end if q not in file_store_links]
+            if missing_low_end:
+                raise RuntimeError(
+                    f"Low-end episode {name} is not ready to publish; missing qualities: {', '.join(missing_low_end)}"
+                )
 
-            if stat_msg:
-                await stat_msg.delete()
+            final_post = await bot.send_photo(
+                Var.MAIN_CHANNEL, photo=photo_url,
+                caption=final_caption, reply_markup=final_markup
+            )
+            if not final_post or not getattr(final_post, "id", None):
+                raise RuntimeError(f"Main Channel did not confirm post for {name}.")
 
+            await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
+            for uploaded_qual in file_store_links:
+                await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
+            await db.markAnimeResumeComplete(ani_id, ep_no)
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
+            try:
+                await asleep(Var.STICKER_INTERVAL)
+                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+            except FloodWait as flood:
+                await asyncio.sleep(max(1, int(flood.value) + 1))
+                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+            except Exception as sticker_error:
+                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+
+            if stat_msg:
+                await stat_msg.delete()
+            ani_cache['completed'].add(episode_key)
+
     except Exception as e:
+        if 'episode_key' in locals():
+            ani_cache['ongoing'].discard(episode_key)
         await rep.report(f"Low-end processing error: {str(e)}", "error")
 
 async def fetch_animes():
