@@ -4,6 +4,7 @@ from datetime import datetime
 from html import escape, unescape
 import re
 from pathlib import Path
+from io import BytesIO
 
 import pytz
 from aiohttp import ClientSession, ClientTimeout
@@ -238,22 +239,21 @@ def format_anime_entry(item):
 
 
 def build_schedule_message(items, now):
+    """Build the complete schedule in the locked Style E layout."""
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\n{divider}\n›› No anime releases found today.\n{divider}"
+        return f"{header}\\n{divider}\\n›› No anime releases found today.\\n{divider}"
 
-    # Always show Upcoming, regardless of the current clock time.
     blocks = [format_anime_entry(item) for item in items]
-    message = header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
+    return header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
 
-    rendered_message = unescape(re.sub(r"<[^>]+>", "", message))
-    if telegram_utf16_length(rendered_message) > 1024:
-        raise ValueError(
-            "The complete anime schedule exceeds Telegram's 1,024-character "
-            "photo-caption limit. No anime were omitted."
-        )
-    return message
+
+def build_schedule_document(message):
+    """Convert the HTML-formatted schedule to a plain-text TXT document."""
+    plain = re.sub(r'<a href="[^"]*">|</a>', "", message)
+    plain = unescape(plain)
+    return plain.strip() + "\\n"
 
 
 async def fetch_today_schedule():
@@ -278,7 +278,7 @@ async def send_daily_schedule(
     chat_id,
     reply_to_message_id=None,
 ):
-    """Send the banner and the complete compact schedule as one photo post."""
+    """Send the schedule poster followed by the complete TXT schedule."""
     try:
         now = datetime.now(IST)
         raw_schedule = await fetch_today_schedule()
@@ -293,7 +293,9 @@ async def send_daily_schedule(
             key = (item["title"].casefold().strip(), item["datetime"])
             unique[key] = item
         items = sorted(unique.values(), key=lambda item: item["datetime"])
-        message = build_schedule_message(items, now)
+
+        full_message = build_schedule_message(items, now)
+        document_text = build_schedule_document(full_message)
 
         photo = getattr(Var, "SCHEDULE_PHOTO", None)
         if not photo:
@@ -305,15 +307,24 @@ async def send_daily_schedule(
             photo = str(BANNER_PATH)
 
         if not photo:
-            LOGGER.error("Schedule banner is not configured; refusing to send a text-only or extra message.")
+            LOGGER.error("Schedule banner is not configured; refusing to send a text-only schedule.")
             return False
 
+        # Keep the poster caption short and safely below Telegram's photo-caption limit.
         await bot.send_photo(
             chat_id=chat_id,
             photo=photo,
-            caption=message,
-            parse_mode=ParseMode.HTML,
+            caption="✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘",
             reply_to_message_id=reply_to_message_id,
+        )
+
+        # Send every anime entry in the TXT document using the same Style E layout.
+        document = BytesIO(document_text.encode("utf-8"))
+        document.name = f"Anime_Schedule_{now.strftime('%Y-%m-%d')}.txt"
+        await bot.send_document(
+            chat_id=chat_id,
+            document=document,
+            caption="Complete anime schedule",
         )
         return True
 
