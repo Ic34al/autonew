@@ -4,7 +4,6 @@ from datetime import datetime
 from html import escape, unescape
 import re
 from pathlib import Path
-from io import BytesIO
 
 import pytz
 from aiohttp import ClientSession, ClientTimeout
@@ -232,28 +231,104 @@ def telegram_utf16_length(value):
 
 
 def format_anime_entry(item):
+    """One clean linked anime title followed by its local release time."""
     title = escape(style_e(item["title"]))
     time_text = escape(style_e(item["time"]))
-    status = escape(style_e("Upcoming"))
-    return f'<a href="{CHANNEL_URL}">{title}</a>\n{time_text}  ⏳ {status}'
+    return f'<a href="{CHANNEL_URL}">{title}</a> - {time_text}'
 
 
 def build_schedule_message(items, now):
-    """Build the complete schedule in the locked Style E layout."""
+    """Build the photo caption in the compact, locked clean schedule style."""
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\n{divider}\n›› No anime releases found today.\n{divider}"
+        return f"{header}\\n{divider}\\nNo anime releases found today.\\n{divider}"
 
     blocks = [format_anime_entry(item) for item in items]
-    return header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
+    return header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
 
 
-def build_schedule_document(message):
-    """Convert the HTML-formatted schedule to a plain-text TXT document."""
-    plain = re.sub(r'<a href="[^"]*">|</a>', "", message)
-    plain = unescape(plain)
-    return plain.strip() + "\n"
+async def fetch_today_schedule():
+    timeout = ClientTimeout(total=25)
+
+    async with ClientSession(timeout=timeout) as session:
+        async with session.get(SCHEDULE_URL) as response:
+            response.raise_for_status()
+            data = await response.json(content_type=None)
+
+    schedule = data.get("schedule", [])
+
+    if not isinstance(schedule, list):
+        raise ValueError(
+            "Unexpected schedule format from SubsPlease."
+        )
+
+    return schedule
+
+
+async def send_daily_schedule(
+    chat_id,
+    reply_to_message_id=None,
+):
+    """Send the existing poster with the compact linked schedule as its caption."""
+    try:
+        now = datetime.now(IST)
+        raw_schedule = await fetch_today_schedule()
+
+        timeout = ClientTimeout(total=20)
+        async with ClientSession(timeout=timeout) as session:
+            items = await prepare_schedule(raw_schedule, now, session)
+
+        # Remove exact duplicate feed rows, preserving different airing times.
+        unique = {}
+        for item in items:
+            key = (item["title"].casefold().strip(), item["datetime"])
+            unique[key] = item
+        items = sorted(unique.values(), key=lambda item: item["datetime"])
+
+        caption = build_schedule_message(items, now)
+        caption_length = telegram_utf16_length(caption)
+
+        photo = getattr(Var, "SCHEDULE_PHOTO", None)
+        if not photo:
+            try:
+                from bot.core.database import db
+                photo = await db.get_schedule_photo()
+            except Exception:
+                photo = None
+        if not photo and BANNER_PATH.is_file():
+            photo = str(BANNER_PATH)
+
+        if not photo:
+            LOGGER.error("Schedule banner is not configured; refusing to send a text-only schedule.")
+            return False
+
+        # Telegram photo captions are limited to 1,024 UTF-16 code units.
+        if caption_length > 1024:
+            LOGGER.error(
+                "Compact schedule caption is %s UTF-16 units (Telegram limit: 1024); "
+                "not sending a truncated schedule.",
+                caption_length,
+            )
+            return False
+
+        await bot.send_photo(
+            chat_id=chat_id,
+            photo=photo,
+            caption=caption,
+            parse_mode=ParseMode.HTML,
+            reply_to_message_id=reply_to_message_id,
+        )
+        LOGGER.info(
+            "Daily anime schedule sent with poster (%s anime, %s caption units).",
+            len(items),
+            caption_length,
+        )
+        return True
+
+    except Exception:
+        LOGGER.exception("Failed to send today's anime schedule.")
+        return False
 
 
 async def fetch_today_schedule():
