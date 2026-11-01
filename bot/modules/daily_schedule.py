@@ -255,7 +255,7 @@ def split_schedule_messages(items):
     """Split complete linked entries across Telegram caption/message limits."""
     divider = "────────────────────"
     if not items:
-        return ["✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\\n" + divider]
+        return ["✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\n" + divider]
     caption_prefix = (
         "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘\n"
         + divider
