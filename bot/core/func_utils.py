@@ -178,8 +178,13 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                 )
 
             except FloodWait as f:
-                await rep.report(f, "warning")
-                await asleep(f.value * 1.2)
+                # Respect Telegram edit limits without sending another rate-limited warning.
+                await rep.report(
+                    f"Progress edit rate-limited; retrying after {int(f.value) + 1}s.",
+                    "warning",
+                    log=False,
+                )
+                await asleep(max(1, int(f.value) + 1))
             except ReplyMarkupInvalid:
                 if reply_markup is None:
                     raise

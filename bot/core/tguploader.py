@@ -122,7 +122,7 @@ class TgUploader:
             self.__client.stop_transmission()
         now = time()
         diff = now - self.__start
-        if (now - self.__updater) >= 7 or current == total:
+        if (now - self.__updater) >= 15 or current == total:
             self.__updater = now
             percent = round(current / total * 100, 2)
             speed = current / diff 
