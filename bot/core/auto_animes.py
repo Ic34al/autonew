@@ -213,7 +213,10 @@ async def process_batch_anime(anime_name, torrent_url, audio):
 
     await stat_msg.delete()
     if batch_buttons:
-        await bot.send_photo(Var.MAIN_CHANNEL, photo=poster_url, caption=caption, reply_markup=InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]))
+        batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=poster_url, caption=caption, reply_markup=InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]))
+        if batch_post:
+            await asleep(Var.STICKER_INTERVAL)
+            await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
     else:
         await rep.report(f"No batch qualities uploaded for {anime_name}; no Main Channel post sent", "warning")
     import logging
@@ -402,12 +405,20 @@ async def find_existing_anime_channel(anime_name: str):
             return channel_id
     return None
 
-async def send_sticker_to_channel(channel, sticker_id):
-    if Var.SEND_STICKER and sticker_id:
-        try:
+async def send_sticker_to_channel(channel, sticker_id=None):
+    """Send the bundled Ongoing Anime Time sticker after a successful channel post."""
+    if not Var.SEND_STICKER:
+        return
+    sticker_path = os.path.join(os.path.dirname(__file__), "..", "assets", "ongoing_anime_time.webp")
+    try:
+        if os.path.isfile(sticker_path):
+            await bot.send_sticker(channel, sticker_path)
+        elif sticker_id:
             await bot.send_sticker(channel, sticker_id)
-        except Exception as e:
-            print(f"Failed to send sticker: {e}")
+        else:
+            await rep.report("Ongoing Anime Time sticker asset is missing", "warning")
+    except Exception as e:
+        await rep.report(f"Failed to send Ongoing Anime Time sticker to {channel}: {e}", "warning")
 
 async def validate_channel_id(channel_id):
     if not channel_id:
@@ -462,6 +473,9 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
                     await rep.report(f"Failed to mirror to main channel {Var.MAIN_CHANNEL}: {e}", "error")
             else:
                 main_post = post_msg
+                if main_post:
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
 
             try:
                 db_backup = await db.get_backup_channel()
@@ -1209,6 +1223,8 @@ async def process_low_end(name, torrent_url, force=False):
             if file_store_links:
                 try:
                     final_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=final_caption, reply_markup=final_markup)
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
                     for uploaded_qual in file_store_links:
                         await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
                 except Exception as e:
@@ -1815,6 +1831,8 @@ async def get_animes(name, torrent, force=False):
                             post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=markup)
                     else:
                         post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=markup)
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
                     for uploaded_qual in uploaded_qualities:
                         await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
                 except Exception as e:
