@@ -131,6 +131,37 @@ class MongoDB:
 
         file_ids = episode_data.get("file_ids", {})
         return file_ids if isinstance(file_ids, dict) else {}
+
+    async def saveAnimeResume(self, ani_id, ep, name, torrent_url):
+        """Persist the source needed to resume an unfinished episode after dyno restart."""
+        if ani_id is None or ep is None or not torrent_url:
+            return
+        key = f"{ani_id}:{str(ep)}"
+        await self.__db.anime_resume.update_one(
+            {"_id": key},
+            {"$set": {
+                "ani_id": ani_id,
+                "episode": str(ep),
+                "name": str(name),
+                "torrent_url": str(torrent_url),
+                "status": "pending",
+                "updated_at": datetime.datetime.utcnow(),
+            }},
+            upsert=True,
+        )
+
+    async def getAnimeResumeTasks(self):
+        """Return unfinished episodes in creation order for serial recovery."""
+        cursor = self.__db.anime_resume.find({"status": {"$ne": "complete"}}).sort("updated_at", 1)
+        return await cursor.to_list(length=100)
+
+    async def markAnimeResumeComplete(self, ani_id, ep):
+        if ani_id is None or ep is None:
+            return
+        await self.__db.anime_resume.update_one(
+            {"_id": f"{ani_id}:{str(ep)}"},
+            {"$set": {"status": "complete", "completed_at": datetime.datetime.utcnow()}},
+        )
     async def saveAnimeStatus(self, ani_id, ep, status_msg_id):
         if ani_id is None or ep is None or status_msg_id is None:
             return
