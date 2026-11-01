@@ -41,7 +41,7 @@ query ($search: String!) {
 BANNER_PATH = Path("today_anime_schedule.JPG")
 
 CHANNEL_URL = "https://t.me/Ongoing_Anime_Time"
-CAPTION_LIMIT = 950
+CAPTION_LIMIT = 1024
 
 
 def parse_release_time(value):
@@ -227,7 +227,10 @@ def style_e(value):
 
 
 def telegram_utf16_length(value):
-    return len(value.encode("utf-16-le")) // 2
+    """Count visible caption characters, excluding HTML tags and link URLs."""
+    visible = re.sub(r"<[^>]+>", "", str(value))
+    visible = unescape(visible)
+    return len(visible.encode("utf-16-le")) // 2
 
 
 def format_anime_entry(item):
@@ -304,11 +307,12 @@ async def send_daily_schedule(
             return False
 
         # Telegram photo captions are limited to 1,024 UTF-16 code units.
-        if caption_length > 1024:
+        if caption_length > CAPTION_LIMIT:
             LOGGER.error(
-                "Compact schedule caption is %s UTF-16 units (Telegram limit: 1024); "
+                "Schedule caption is %s UTF-16 units (Telegram limit: %s); "
                 "not sending a truncated schedule.",
                 caption_length,
+                CAPTION_LIMIT,
             )
             return False
 
@@ -329,24 +333,6 @@ async def send_daily_schedule(
     except Exception:
         LOGGER.exception("Failed to send today's anime schedule.")
         return False
-
-
-async def fetch_today_schedule():
-    timeout = ClientTimeout(total=25)
-
-    async with ClientSession(timeout=timeout) as session:
-        async with session.get(SCHEDULE_URL) as response:
-            response.raise_for_status()
-            data = await response.json(content_type=None)
-
-    schedule = data.get("schedule", [])
-
-    if not isinstance(schedule, list):
-        raise ValueError(
-            "Unexpected schedule format from SubsPlease."
-        )
-
-    return schedule
 
 
 
