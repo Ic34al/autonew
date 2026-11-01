@@ -406,27 +406,51 @@ async def find_existing_anime_channel(anime_name: str):
     return None
 
 async def send_sticker_to_channel(channel, sticker_id=None):
-    """Send the single compact sticker from the configured Ongoing Anime Time pack."""
+    """Fetch the one sticker from the configured public pack through Telegram Bot API and send it."""
     if not Var.SEND_STICKER:
-        return
+        await rep.report("Sticker sending is disabled: set SEND_STICKER=True in Heroku config.", "warning")
+        return False
+
     sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
     try:
-        sticker_set = await bot.get_sticker_set(sticker_set_name)
-        stickers = getattr(sticker_set, "stickers", None) or []
+        # Bot API getStickerSet returns sticker objects with usable file_id values.
+        # Do not use Pyrogram's raw StickerSet.documents as if they were Sticker objects.
+        endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getStickerSet"
+        async with httpx.AsyncClient(timeout=25.0) as session:
+            response = await session.get(endpoint, params={"name": sticker_set_name})
+            response.raise_for_status()
+            payload = response.json()
+
+        if not payload.get("ok"):
+            description = payload.get("description", "Telegram returned an unknown error")
+            raise RuntimeError(f"getStickerSet failed: {description}")
+
+        stickers = payload.get("result", {}).get("stickers") or []
         if not stickers:
-            await rep.report(
-                f"Sticker pack {sticker_set_name} returned no stickers; skipped sticker send.",
-                "warning"
-            )
-            return
-        # The user confirmed this pack contains one main sticker. Resolve its file_id
-        # through this bot's own Telegram session so the file_id is valid for this bot.
-        await bot.send_sticker(channel, stickers[0].file_id)
+            raise RuntimeError(f"Sticker pack {sticker_set_name} contains no stickers")
+
+        sticker_file_id = stickers[0].get("file_id")
+        if not sticker_file_id:
+            raise RuntimeError("Telegram returned a sticker without file_id")
+
+        sent_message = await bot.send_sticker(
+            chat_id=channel,
+            sticker=sticker_file_id
+        )
+        if not sent_message:
+            raise RuntimeError("Telegram did not return a sent sticker message")
+
+        await rep.report(
+            f"Successfully sent Ongoing Anime Time sticker to {channel} (message_id={sent_message.id})",
+            "info"
+        )
+        return True
     except Exception as e:
         await rep.report(
-            f"Failed to send sticker from {sticker_set_name} to {channel}: {e}",
-            "warning"
+            f"Sticker send failed for {channel} using pack {sticker_set_name}: {type(e).__name__}: {e}",
+            "error"
         )
+        return False
 
 async def validate_channel_id(channel_id):
     if not channel_id:
