@@ -242,10 +242,10 @@ def build_schedule_message(items, now):
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\\n{divider}\\nNo anime releases found today.\\n{divider}"
+        return f"{header}\n{divider}\nNo anime releases found today.\n{divider}"
 
     blocks = [format_anime_entry(item) for item in items]
-    return header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
+    return header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
 
 
 async def fetch_today_schedule():
@@ -349,63 +349,6 @@ async def fetch_today_schedule():
     return schedule
 
 
-async def send_daily_schedule(
-    chat_id,
-    reply_to_message_id=None,
-):
-    """Send the schedule poster followed by the complete TXT schedule."""
-    try:
-        now = datetime.now(IST)
-        raw_schedule = await fetch_today_schedule()
-
-        timeout = ClientTimeout(total=20)
-        async with ClientSession(timeout=timeout) as session:
-            items = await prepare_schedule(raw_schedule, now, session)
-
-        # Remove accidental duplicate feed rows without dropping different episode times.
-        unique = {}
-        for item in items:
-            key = (item["title"].casefold().strip(), item["datetime"])
-            unique[key] = item
-        items = sorted(unique.values(), key=lambda item: item["datetime"])
-
-        full_message = build_schedule_message(items, now)
-        document_text = build_schedule_document(full_message)
-
-        photo = getattr(Var, "SCHEDULE_PHOTO", None)
-        if not photo:
-            try:
-                photo = await __import__("bot.core.database", fromlist=["db"]).db.get_schedule_photo()
-            except Exception:
-                photo = None
-        if not photo and BANNER_PATH.is_file():
-            photo = str(BANNER_PATH)
-
-        if not photo:
-            LOGGER.error("Schedule banner is not configured; refusing to send a text-only schedule.")
-            return False
-
-        # Keep the poster caption short and safely below Telegram's photo-caption limit.
-        await bot.send_photo(
-            chat_id=chat_id,
-            photo=photo,
-            caption="✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘",
-            reply_to_message_id=reply_to_message_id,
-        )
-
-        # Send every anime entry in the TXT document using the same Style E layout.
-        document = BytesIO(document_text.encode("utf-8"))
-        document.name = f"Anime_Schedule_{now.strftime('%Y-%m-%d')}.txt"
-        await bot.send_document(
-            chat_id=chat_id,
-            document=document,
-            caption="Complete anime schedule",
-        )
-        return True
-
-    except Exception:
-        LOGGER.exception("Failed to send today's anime schedule.")
-        return False
 
 
 async def upcoming_animes():
