@@ -243,17 +243,17 @@ def build_schedule_message(items, now):
     header = "✦ 𝗧𝗢𝗗𝗔𝗬 | 𝗔𝗡𝗜𝗠𝗘 𝗦𝗖𝗛𝗘𝗗𝗨𝗟𝗘"
     divider = "────────────────────"
     if not items:
-        return f"{header}\\n{divider}\\n›› No anime releases found today.\\n{divider}"
+        return f"{header}\n{divider}\n›› No anime releases found today.\n{divider}"
 
     blocks = [format_anime_entry(item) for item in items]
-    return header + "\\n" + divider + "\\n" + ("\\n" + divider + "\\n").join(blocks) + "\\n" + divider
+    return header + "\n" + divider + "\n" + ("\n" + divider + "\n").join(blocks) + "\n" + divider
 
 
 def build_schedule_document(message):
     """Convert the HTML-formatted schedule to a plain-text TXT document."""
     plain = re.sub(r'<a href="[^"]*">|</a>', "", message)
     plain = unescape(plain)
-    return plain.strip() + "\\n"
+    return plain.strip() + "\n"
 
 
 async def fetch_today_schedule():
