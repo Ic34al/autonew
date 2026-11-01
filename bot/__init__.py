@@ -96,7 +96,8 @@ class Var:
     FFCODE_360 = getenv("FFCODE_360") or """ffmpeg -i '{}' -progress '{}' -preset veryfast -c:v libx264 -s 640x360 -pix_fmt yuv420p -crf 30 -c:a libopus -b:a 32k -c:s copy -map 0 -ac 2 -ab 32k -vbr 2 -level 3.1 '{}' -y"""
     FFCODE_240 = getenv("FFCODE_240") or """ffmpeg -i '{}' -progress '{}' -preset veryfast -c:v libx264 -s 340x240 -pix_fmt yuv420p -crf 30 -c:a libopus -b:a 32k -c:s copy -map 0 -ac 2 -ab 32k -vbr 2 -level 3.1 '{}' -y"""
     FFCODE_144 = getenv("FFCODE_144") or """ffmpeg -i '{}' -progress '{}' -preset veryfast -c:v libx264 -s 256x144 -pix_fmt yuv420p -crf 30 -c:a libopus -b:a 32k -c:s copy -map 0 -ac 2 -ab 32k -vbr 2 -level 3.1 '{}' -y"""
-    QUALS = getenv("QUALS", "360 480 720 1080 HDRi").split()
+    # Required anime upload qualities, in the exact button order.
+    QUALS = ["480", "720", "1080", "HDRi"]
     
     AS_DOC = getenv("AS_DOC", "True").lower() == "true"
     THUMB = getenv("THUMB")
