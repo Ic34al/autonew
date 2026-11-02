@@ -2199,9 +2199,6 @@ async def upload_file(file_path, quality):
     except Exception as e:
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
-,
-        r'\d{3,4}p',
-        r'CR WEBRip.*
 async def process_low_end(name, torrent_url, force=False):
     try:
         aniInfo = TextEditor(name)
