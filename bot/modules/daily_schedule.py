@@ -380,6 +380,20 @@ async def send_daily_schedule(
                 reply_to_message_id=sent_photo.id,
             )
 
+        # Keep the same channel branding used after episode posts:
+        # send the configured Ongoing Anime Time sticker immediately after
+        # the schedule photo and all schedule continuation messages.
+        try:
+            from bot.core.auto_animes import send_sticker_to_channel
+            from pyrogram.errors import FloodWait
+            try:
+                await send_sticker_to_channel(chat_id, getattr(Var, "STICKER_ID", None))
+            except FloodWait as flood:
+                await asyncio.sleep(max(1, int(flood.value) + 1))
+                await send_sticker_to_channel(chat_id, getattr(Var, "STICKER_ID", None))
+        except Exception:
+            LOGGER.exception("Schedule was sent, but its sticker could not be sent.")
+
         LOGGER.info(
             "Daily anime schedule sent (%s anime, %s follow-up message(s)).",
             len(items),
