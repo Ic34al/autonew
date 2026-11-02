@@ -1335,10 +1335,18 @@ async def fetch_animes():
         if mode != "anime" or not ani_cache['fetch_animes']:
             continue
         try:
-            if upload_mode == "low_end":
-                rss_urls = [Var.RSS_LOW_END.get(q) for q in ("480", "720", "1080") if Var.RSS_LOW_END.get(q)]
-            else:
-                rss_urls = list(Var.RSS_ITEMS_ANIME)
+            # Scan every configured quality feed in both upload modes.
+            # The main RSS list may contain only 1080p; omitting the 480p/720p
+            # feeds caused scheduled releases and Sub/Dual variants to be missed.
+            configured_feeds = list(Var.RSS_ITEMS_ANIME or [])
+            quality_feeds = [
+                Var.RSS_LOW_END.get(q)
+                for q in ("480", "720", "1080")
+                if Var.RSS_LOW_END.get(q)
+            ]
+            rss_urls = list(dict.fromkeys(
+                url for url in configured_feeds + quality_feeds if url
+            ))
 
             # Recover unfinished episodes from MongoDB before scanning fresh RSS.
             # This works even if the source entry has fallen out of the RSS window.
