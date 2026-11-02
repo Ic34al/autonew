@@ -2658,6 +2658,7 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
             previous_retry.cancel()
             await asyncio.gather(previous_retry, return_exceptions=True)
 
+        ani_cache["_retry_sessions"] = {}
         ani_cache["_retry_task"] = current_retry
         ani_cache["_retry_status"] = status
         ani_cache["retry_queue_running"] = True
@@ -2765,6 +2766,7 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
         if ani_cache.get("_retry_task") is current_retry:
             ani_cache.pop("_retry_task", None)
             ani_cache.pop("_retry_status", None)
+            ani_cache.pop("_retry_cancel_event", None)
             ani_cache["retry_queue_running"] = False
 
 
