@@ -2633,33 +2633,37 @@ async def del_link_cmd(client, message: Message):
     except Exception as e:
         await message.reply(f"<blockquote><b>Error: {str(e)}</b></blockquote>")
 
-@bot.on_message(filters.command("retry") & filters.user(Var.ADMINS))
-@new_task
-async def retry_todays_anime_cmd(client, message: Message):
-    """Retry unfinished anime episodes published today, strictly one at a time."""
+async def run_retry_for_date(client, status, target_date, anime_filter=None):
+    """Retry releases from one selected IST calendar date, optionally one anime."""
     if ani_cache.get("retry_queue_running"):
-        return await message.reply("<b>Retry queue is already running.</b>")
+        return await status.edit_text("<b>Retry queue is already running.</b>")
+
     ani_cache["retry_queue_running"] = True
-    status = await message.reply("<b>Scanning today's anime RSS entries...</b>")
     try:
         mode = await db.get_mode()
         if mode != "anime":
             return await status.edit_text("<b>Switch bot mode to anime before using /retry.</b>")
 
         upload_mode = await db.get_upload_mode()
-        if upload_mode == "low_end":
-            rss_urls = [Var.RSS_LOW_END.get(q) for q in ("480", "720", "1080") if Var.RSS_LOW_END.get(q)]
-            required_qualities = ("480", "720", "1080")
-        else:
-            rss_urls = list(Var.RSS_ITEMS_ANIME)
-            required_qualities = tuple(Var.QUALS)
+        required_qualities = ("480", "720", "1080") if upload_mode == "low_end" else tuple(Var.QUALS)
+
+        # Search the configured RSS source plus each quality feed so Sub and
+        # Dual releases are both discoverable, regardless of upload mode.
+        rss_urls = list(Var.RSS_ITEMS_ANIME or [])
+        rss_urls.extend(
+            Var.RSS_LOW_END.get(q)
+            for q in ("480", "720", "1080")
+            if Var.RSS_LOW_END.get(q)
+        )
+        rss_urls = list(dict.fromkeys(url for url in rss_urls if url))
 
         from zoneinfo import ZoneInfo
         from datetime import datetime, timezone
-        today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+        ist = ZoneInfo("Asia/Kolkata")
         feeds = await gather(*(getfeeds(url) for url in rss_urls))
         candidates = []
         seen_links = set()
+        wanted = (anime_filter or "").casefold().strip()
 
         for entries in feeds:
             for entry in entries:
@@ -2669,10 +2673,12 @@ async def retry_todays_anime_cmd(client, message: Message):
                 if not link or not title or link in seen_links or not published:
                     continue
                 try:
-                    published_date = datetime(*published[:6], tzinfo=timezone.utc).astimezone(ZoneInfo("Asia/Kolkata")).date()
+                    published_date = datetime(*published[:6], tzinfo=timezone.utc).astimezone(ist).date()
                 except Exception:
                     continue
-                if published_date != today:
+                if published_date != target_date:
+                    continue
+                if wanted and wanted not in str(title).casefold():
                     continue
                 seen_links.add(link)
                 candidates.append((title, link))
@@ -2688,12 +2694,12 @@ async def retry_todays_anime_cmd(client, message: Message):
                     ep_no = ep_no[0] if ep_no else None
                 if ani_id is None or ep_no is None:
                     continue
-                ep_no = str(ep_no)
                 saved = await db.getAnime(ani_id)
-                episode_data = saved.get(ep_no, {}) if isinstance(saved, dict) else {}
+                episode_data = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
                 if not isinstance(episode_data, dict):
                     episode_data = {}
-                if all(episode_data.get(q) for q in required_qualities) and episode_data.get("msg_id"):
+                has_post = bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
+                if all(episode_data.get(q) for q in required_qualities) and has_post:
                     continue
                 queue.append((title, link))
             except Exception as e:
@@ -2701,15 +2707,17 @@ async def retry_todays_anime_cmd(client, message: Message):
 
         if not queue:
             return await status.edit_text(
-                f"<b>No unfinished anime episodes found in today's RSS feeds.</b>\n"
-                f"<i>Checked {len(candidates)} today's entries.</i>"
+                f"<b>No matching unfinished releases found for {target_date.isoformat()} (IST).</b>\n"
+                f"<i>Checked {len(candidates)} matching RSS entries.</i>"
             )
 
         await status.edit_text(
             f"<b>Retry queue started.</b>\n"
-            f"Today's entries: <code>{len(candidates)}</code>\n"
+            f"Date: <code>{target_date.isoformat()}</code> (IST)\n"
+            f"Anime filter: <code>{anime_filter or 'All anime'}</code>\n"
+            f"RSS matches: <code>{len(candidates)}</code>\n"
             f"Unfinished episodes: <code>{len(queue)}</code>\n"
-            f"<i>Processing one by one. Each episode must finish before the next starts.</i>"
+            f"<i>Processing sequentially; the queue stops at the first failed episode.</i>"
         )
 
         completed = 0
@@ -2717,12 +2725,12 @@ async def retry_todays_anime_cmd(client, message: Message):
         for index, (title, link) in enumerate(queue, start=1):
             try:
                 await status.edit_text(
-                    f"<b>Retrying {index}/{len(queue)}</b>\n<code>{title}</code>\n"
-                    f"<i>Uploading before moving to the next anime...</i>"
+                    f"<b>Retrying {index}/{len(queue)}</b>\n"
+                    f"<code>{title}</code>\n"
+                    f"<i>Rechecking source and reusing saved quality checkpoints...</i>"
                 )
                 await get_animes(title, link, force=True)
-                # get_animes currently handles some exceptions internally; verify the DB
-                # rather than treating a returned None as a successful upload.
+
                 verify_info = TextEditor(title)
                 await verify_info.load_info()
                 verify_id = verify_info.adata.get("id")
@@ -2731,33 +2739,95 @@ async def retry_todays_anime_cmd(client, message: Message):
                     verify_ep = verify_ep[0] if verify_ep else None
                 verified_data = await db.getAnime(verify_id) if verify_id is not None else {}
                 verified_episode = verified_data.get(str(verify_ep), {}) if isinstance(verified_data, dict) else {}
-                if not isinstance(verified_episode, dict) or not all(verified_episode.get(q) for q in required_qualities) or not verified_episode.get("msg_id"):
+                has_post = bool(await db.getAnimeMainPost(verify_id, str(verify_ep))) if verify_id is not None and verify_ep is not None else False
+                if not isinstance(verified_episode, dict) or not all(verified_episode.get(q) for q in required_qualities) or not has_post:
                     failed.append(title)
-                    await rep.report(f"/retry did not complete all required qualities or publish the main post: {title}", "error")
+                    await rep.report(f"/retry did not complete required qualities or publish the main post: {title}", "error")
                     break
                 completed += 1
             except Exception as e:
                 failed.append(title)
                 await rep.report(f"/retry failed for {title}: {e}", "error")
-                # Stop at the first failure; don't skip ahead of an unfinished anime.
                 break
 
         summary = (
             f"<b>/retry finished.</b>\n"
+            f"Date: <code>{target_date.isoformat()}</code> (IST)\n"
             f"Queued: <code>{len(queue)}</code>\n"
-            f"Attempted: <code>{completed + len(failed)}</code>\n"
+            f"Completed: <code>{completed}</code>\n"
             f"Failed: <code>{len(failed)}</code>"
         )
         if failed:
             summary += f"\n<b>Stopped at:</b> <code>{failed[0]}</code>"
         else:
-            summary += f"\n<i>Queue drained in order.</i>"
+            summary += "\n<i>Selected date queue drained.</i>"
         await status.edit_text(summary)
     except Exception as e:
         await status.edit_text(f"<b>/retry error:</b> <code>{e}</code>")
         await rep.report(f"/retry command error: {e}", "error")
     finally:
         ani_cache["retry_queue_running"] = False
+
+
+@bot.on_message(filters.command("retry") & filters.user(Var.ADMINS))
+@new_task
+async def retry_todays_anime_cmd(client, message: Message):
+    """Choose Today/Yesterday, or specify any IST date and optional anime title."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    args = (message.text or "").split(maxsplit=1)
+    if len(args) == 1:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("Today", callback_data="retrydate:today"),
+                InlineKeyboardButton("Yesterday", callback_data="retrydate:yesterday"),
+            ]
+        ])
+        return await message.reply(
+            "<b>Choose which release date to recheck:</b>\n"
+            "• Today or Yesterday using the buttons\n"
+            "• Any date: <code>/retry YYYY-MM-DD</code>\n"
+            "• One anime: <code>/retry today Anime Name</code>\n"
+            "• One anime on a date: <code>/retry YYYY-MM-DD Anime Name</code>",
+            reply_markup=keyboard
+        )
+
+    raw = args[1].strip()
+    parts = raw.split(maxsplit=1)
+    selector = parts[0].casefold()
+    anime_filter = parts[1].strip() if len(parts) > 1 else None
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+
+    if selector == "today":
+        target_date = today
+    elif selector == "yesterday":
+        target_date = today - timedelta(days=1)
+    else:
+        try:
+            target_date = datetime.strptime(selector, "%Y-%m-%d").date()
+            anime_filter = parts[1].strip() if len(parts) > 1 else None
+        except ValueError:
+            # A plain anime name means today's releases for that title.
+            target_date = today
+            anime_filter = raw
+
+    status = await message.reply("<b>Preparing selected-date retry scan...</b>")
+    await run_retry_for_date(client, status, target_date, anime_filter)
+
+
+@bot.on_callback_query(filters.regex(r"^retrydate:(today|yesterday)$"))
+async def retry_date_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+    target_date = today if callback_query.data.endswith(":today") else today - timedelta(days=1)
+    await callback_query.answer(f"Checking {target_date.isoformat()} (IST)")
+    await run_retry_for_date(client, callback_query.message, target_date)
+
 
 @bot.on_message(filters.command("addtask") & filters.user(Var.ADMINS))
 @new_task
