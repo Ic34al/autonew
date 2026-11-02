@@ -3482,8 +3482,8 @@ async def anime_search_release_callback(client, callback_query):
         state["processing"] = True
         await callback_query.answer("Queued 720p batch processing...")
         await callback_query.message.edit_text(
-            f"<b>Selected release:</b> {selected['title']}\\n"
-            "<b>Quality:</b> 720p\\n"
+            f"<b>Selected release:</b> {selected['title']}\n"
+            "<b>Quality:</b> 720p\n"
             "<b>Status:</b> Queued. Check the bot log channel for progress."
         )
 
