@@ -3336,8 +3336,7 @@ async def upload_file(file_path, quality):
     except Exception as e:
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
-,
-        r'MultiSub.*
+
 async def process_low_end(name, torrent_url, force=False):
     try:
         aniInfo = TextEditor(name)
@@ -4475,8 +4474,7 @@ async def upload_file(file_path, quality):
     except Exception as e:
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
-,
-        r'HEVC.*
+
 async def process_low_end(name, torrent_url, force=False):
     try:
         aniInfo = TextEditor(name)
@@ -5614,8 +5612,7 @@ async def upload_file(file_path, quality):
     except Exception as e:
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
-,
-        r'AAC.*
+
 async def process_low_end(name, torrent_url, force=False):
     try:
         aniInfo = TextEditor(name)
