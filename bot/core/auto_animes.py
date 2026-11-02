@@ -7615,7 +7615,7 @@ async def get_animes(name, torrent, force=False):
         print(f"get_animes: upload_mode={upload_mode}")
         if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
-            await process_low_end(name, torrent)
+            await process_low_end(name, torrent, force=force)
             return
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
