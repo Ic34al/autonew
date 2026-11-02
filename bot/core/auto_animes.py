@@ -1049,10 +1049,15 @@ async def download_image_async(client, url, filename):
         print(f"Failed to download {url}: {e}")
 
 def normalize_title_for_comparison(title):
-    patterns = [
-        r'\[.*?\]',
-        r'\(.*?\)',
-        r'- \d+.*
+    """Normalize release titles so quality feeds can be matched to the same episode."""
+    value = str(title or "").casefold()
+    value = re.sub(r"^\s*\[[^\]]+\]\s*", " ", value)
+    value = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", value)
+    value = re.sub(r"\bs\d{1,2}\s*[-.]?\s*e?\s*\d{1,3}\b", " ", value)
+    value = re.sub(r"\b(?:episode|ep)\s*[-._ ]?\d{1,3}\b", " ", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
 async def process_low_end(name, torrent_url, force=False):
     try:
         aniInfo = TextEditor(name)
@@ -6751,17 +6756,6 @@ async def upload_file(file_path, quality):
     except Exception as e:
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
-,
-        r'^\[.*?\]\s*',
-        r'\s+',
-    ]
-    
-    clean_title = title
-    for pattern in patterns:
-        clean_title = re.sub(pattern, ' ', clean_title)
-    return clean_title.strip().lower()
-
-
 def extract_release_episode(title):
     """Extract the episode number from common SubsPlease naming formats."""
     value = str(title or "")
