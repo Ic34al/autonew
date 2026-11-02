@@ -1033,6 +1033,83 @@ async def list_manga_channels(client, message: Message):
     except Exception as e:
         await message.reply(f"Error: {e}")
 
+
+@bot.on_message(filters.command("sendanime") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def send_anime_to_main(client, message: Message):
+    """Copy an already stored Telegram post to the currently configured main channel."""
+    if not message.command or len(message.command) < 2:
+        await message.reply_text(
+            "<b>Usage:</b>\n<code>/sendanime https://t.me/c/CHANNEL_ID/MESSAGE_ID</code>\n\n"
+            "Send a message link from the configured File Storage Channel."
+        )
+        return
+
+    link = message.command[1].strip()
+    match = re.fullmatch(
+        r"(?:https?://)?t\.me/(?:c/(\d+)|([A-Za-z0-9_]{5,}))/(\d+)(?:\?.*)?",
+        link
+    )
+    if not match:
+        await message.reply_text(
+            "Invalid Telegram message link.\n"
+            "Example: <code>https://t.me/c/4389340053/599</code>"
+        )
+        return
+
+    private_channel_id, public_username, raw_message_id = match.groups()
+    message_id = int(raw_message_id)
+    source_chat = int(f"-100{private_channel_id}") if private_channel_id else f"@{public_username}"
+
+    try:
+        status = await message.reply_text("Checking the storage post and destination channel...")
+        source = await client.get_chat(source_chat)
+        if int(source.id) != int(Var.FILE_STORE):
+            await status.edit_text(
+                "This link is not from the configured File Storage Channel.\n"
+                f"Expected storage ID: <code>{Var.FILE_STORE}</code>\n"
+                f"Received channel ID: <code>{source.id}</code>"
+            )
+            return
+
+        stored_message = await client.get_messages(source.id, message_id)
+        if not stored_message or getattr(stored_message, "empty", False):
+            await status.edit_text("The storage message was not found. Check the message ID and bot access.")
+            return
+
+        if not any((
+            stored_message.media,
+            stored_message.text,
+            stored_message.caption,
+        )):
+            await status.edit_text("The selected storage message has no copyable media or text.")
+            return
+
+        destination = int(Var.MAIN_CHANNEL)
+        await client.get_chat(destination)
+        copied = await client.copy_message(
+            chat_id=destination,
+            from_chat_id=source.id,
+            message_id=message_id
+        )
+        if not copied:
+            await status.edit_text("Telegram did not confirm the copy. Check channel permissions.")
+            return
+
+        await status.edit_text(
+            "<b>Anime copied successfully!</b>\n\n"
+            f"Source: <code>{source.id}/{message_id}</code>\n"
+            f"Destination: <code>{destination}</code>\n"
+            "The existing stored post was copied without downloading or encoding."
+        )
+    except Exception as e:
+        error_text = str(e)
+        await message.reply_text(
+            "<b>Could not copy the storage post.</b>\n"
+            f"<code>{error_text[:900]}</code>\n\n"
+            "Check that the bot can read the File Storage Channel and post in the Main Channel."
+        )
+
 @bot.on_message(filters.command("settings") & filters.user(Var.ADMINS))
 @new_task
 async def settings_cmd(client, message: Message):
