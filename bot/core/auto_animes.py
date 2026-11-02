@@ -1320,19 +1320,64 @@ async def process_low_end(name, torrent_url, force=False):
         await rep.report(f"Low-end processing error: {str(e)}", "error")
 
 async def fetch_animes():
-    await rep.report("Fetching Anime Started !!!", "info")
+    """Upload only today's scheduled anime releases; never auto-resume old backlog."""
+    from zoneinfo import ZoneInfo
+    from datetime import datetime, timezone
+    from bot.modules.daily_schedule import fetch_today_schedule
+
+    await rep.report(
+        "Scheduled-only Anime Fetcher Started. Old backlog and unscheduled RSS uploads are disabled.",
+        "info"
+    )
     seen_rss_links = {}
-    while True:
-        await asleep(15)
-        mode, upload_mode = await asyncio.gather(db.get_mode(), db.get_upload_mode())
-        if ani_cache.get('global_pause') and not ani_cache.get('manual_task'):
-            continue
-        if mode != "anime" or not ani_cache['fetch_animes']:
-            continue
+    ist = ZoneInfo("Asia/Kolkata")
+
+    def normalize_schedule_title(value):
+        value = re.sub(r"^\s*\[[^\]]+\]\s*", "", str(value or ""))
+        value = re.sub(r"\([^)]*(?:480p|720p|1080p|WEB[- ]?DL|BluRay|Batch)[^)]*\)", " ", value, flags=re.I)
+        value = re.sub(r"\[[^\]]*(?:480p|720p|1080p|WEB[- ]?DL|BluRay|Batch)[^\]]*\]", " ", value, flags=re.I)
+        value = re.sub(r"\s*-\s*(?:\d{1,3})(?:v\d+)?\s*$", "", value)
+        return re.sub(r"[^a-z0-9]+", "", value.casefold())
+
+    def published_today(entry, today):
+        published = (
+            getattr(entry, "published_parsed", None)
+            or getattr(entry, "updated_parsed", None)
+        )
+        if not published:
+            return False
         try:
-            # Scan every configured quality feed in both upload modes.
-            # The main RSS list may contain only 1080p; omitting the 480p/720p
-            # feeds caused scheduled releases and Sub/Dual variants to be missed.
+            published_at = datetime(*published[:6], tzinfo=timezone.utc)
+            return published_at.astimezone(ist).date() == today
+        except Exception:
+            return False
+
+    while True:
+        await asleep(30)
+        mode = await db.get_mode()
+        if ani_cache.get("global_pause") or mode != "anime" or not ani_cache.get("fetch_animes"):
+            continue
+
+        try:
+            now_ist = datetime.now(ist)
+            today = now_ist.date()
+
+            # The daily SubsPlease schedule is the allow-list. If it cannot
+            # be fetched, fail closed: do not upload arbitrary RSS entries.
+            schedule_items = await fetch_today_schedule()
+            scheduled_titles = {
+                normalize_schedule_title(item.get("title"))
+                for item in schedule_items
+                if isinstance(item, dict) and item.get("title")
+            }
+            scheduled_titles.discard("")
+            if not scheduled_titles:
+                await rep.report(
+                    "No valid anime titles found in today's schedule. Automatic uploads held.",
+                    "warning"
+                )
+                continue
+
             configured_feeds = list(Var.RSS_ITEMS_ANIME or [])
             quality_feeds = [
                 Var.RSS_LOW_END.get(q)
@@ -1342,69 +1387,71 @@ async def fetch_animes():
             rss_urls = list(dict.fromkeys(
                 url for url in configured_feeds + quality_feeds if url
             ))
-
-            # Recover unfinished episodes from MongoDB before scanning fresh RSS.
-            # This works even if the source entry has fallen out of the RSS window.
-            recovered_links = set()
-            resume_failed = False
-            try:
-                resume_tasks = await db.getAnimeResumeTasks()
-                for resume_task in resume_tasks:
-                    resume_name = resume_task.get("name")
-                    resume_link = resume_task.get("torrent_url")
-                    if not resume_name or not resume_link:
-                        continue
-                    recovered_links.add(resume_link)
-                    await rep.report(
-                        f"Resuming unfinished episode from saved checkpoint: {resume_name}",
-                        "info"
-                    )
-                    # Do not advance to another episode until this saved episode
-                    # completes. get_animes re-raises failures after preserving
-                    # successful per-quality checkpoints.
-                    await get_animes(resume_name, resume_link)
-            except Exception as resume_error:
-                resume_failed = True
-                await rep.report(
-                    f"Episode resume failed; holding the queue on this unfinished episode. "
-                    f"It will retry on the next scan: {resume_error}",
-                    "error"
-                )
-
-            if resume_failed:
-                # Never start fresh RSS jobs while an earlier episode is unfinished.
+            if not rss_urls:
+                await rep.report("No RSS feeds configured; scheduled uploads held.", "warning")
                 continue
 
             feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
-            pending = []
+            candidates = []
             for rss_url, entries in zip(rss_urls, feeds_by_url):
                 if not entries:
                     continue
                 seen = seen_rss_links.setdefault(rss_url, set())
-                # Process oldest unseen entry first so a burst of releases is not skipped.
                 for entry in entries:
                     link = getattr(entry, "link", None)
                     title = getattr(entry, "title", None)
-                    if not link or not title or link in seen or link in recovered_links:
+                    if not link or not title or link in seen:
                         continue
-                    seen.add(link)
-                    pending.append((title, link))
-                # Bound memory while retaining a recent de-duplication window.
-                if len(seen) > 500:
-                    seen_rss_links[rss_url] = set(list(seen)[-250:])
 
-            # One episode at a time: finish/retry the current item before advancing.
-            for title, link in pending:
-                try:
-                    await get_animes(title, link)
-                except Exception:
-                    await rep.report(f"Episode processing failed; will retry on next RSS scan: {title}\\n{format_exc()}", "error")
-                    # Make it eligible for the next scan instead of permanently consuming it.
-                    for rss_url in rss_urls:
-                        seen_rss_links.get(rss_url, set()).discard(link)
-                    break
+                    # Only RSS releases published today in India are eligible.
+                    if not published_today(entry, today):
+                        continue
+
+                    normalized_feed_title = normalize_schedule_title(title)
+                    if not normalized_feed_title:
+                        continue
+
+                    # Require the scheduled series title to appear in the
+                    # normalized RSS title. No audio-type preference is used.
+                    if not any(
+                        scheduled in normalized_feed_title
+                        or normalized_feed_title in scheduled
+                        for scheduled in scheduled_titles
+                        if len(scheduled) >= 5
+                    ):
+                        continue
+
+                    candidates.append((title, link, rss_url))
+
+            if not candidates:
+                continue
+
+            # Process only one eligible scheduled release per scan. Re-scan
+            # schedule/RSS before the next upload so no stale backlog is drained.
+            candidates.sort(key=lambda item: item[0].casefold())
+            title, link, source_feed = candidates[0]
+            await rep.report(
+                f"Today's scheduled release selected: {title}. "
+                f"Unscheduled and older releases remain blocked.",
+                "info"
+            )
+            try:
+                await get_animes(title, link)
+                seen_rss_links.setdefault(source_feed, set()).add(link)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                await rep.report(
+                    f"Scheduled release failed; it will be checked again: {title}\n{format_exc()}",
+                    "error"
+                )
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
-            await rep.report(f"Anime fetch error: {str(e)}", "error")
+            await rep.report(
+                f"Scheduled-only fetch check failed closed; no RSS upload started: {e}",
+                "error"
+            )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
     try:
