@@ -3460,7 +3460,7 @@ async def anime_search_cmd(client, message: Message):
         await rep.report(f"/search failed: {e}", "error")
 
 
-@bot.on_callback_query(filters.regex(r"^anime_search:([a-f0-9]+):(\\d+)$"))
+@bot.on_callback_query(filters.regex(r"^anime_search:([a-f0-9]+):(\d+)$"))
 async def anime_search_release_callback(client, callback_query):
     """Start processing only the release selected by the admin who searched."""
     try:
@@ -3477,17 +3477,31 @@ async def anime_search_release_callback(client, callback_query):
             return await callback_query.answer("Invalid search result.", show_alert=True)
 
         selected = items[index]
-        await callback_query.answer("Starting 720p batch processing...")
+        if state.get("processing"):
+            return await callback_query.answer("This search is already processing.", show_alert=True)
+        state["processing"] = True
+        await callback_query.answer("Queued 720p batch processing...")
         await callback_query.message.edit_text(
-            f"<b>Selected release:</b> {selected['title']}\n"
-            "<b>Quality:</b> 720p\n"
-            "<b>Status:</b> Starting existing batch processor..."
+            f"<b>Selected release:</b> {selected['title']}\\n"
+            "<b>Quality:</b> 720p\\n"
+            "<b>Status:</b> Queued. Check the bot log channel for progress."
         )
-        await process_batch_anime(state["anime_name"], selected["url"], "Japanese")
-        try:
-            ANIME_SEARCH_RESULTS.pop(token, None)
-        except Exception:
-            pass
+
+        async def _run_selected_batch():
+            try:
+                await process_batch_anime(state["anime_name"], selected["url"], "Japanese")
+            except Exception as batch_error:
+                await rep.report(f"/search batch failed for {state['anime_name']}: {batch_error}", "error")
+                try:
+                    await callback_query.message.reply_text(
+                        f"<b>Batch processing failed:</b> <code>{str(batch_error)[:600]}</code>"
+                    )
+                except Exception:
+                    pass
+            finally:
+                ANIME_SEARCH_RESULTS.pop(token, None)
+
+        asyncio.create_task(_run_selected_batch())
     except Exception as e:
         try:
             await callback_query.message.reply_text(f"<b>Could not start release:</b> <code>{str(e)[:700]}</code>")
