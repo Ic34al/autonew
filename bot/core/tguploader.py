@@ -14,6 +14,9 @@ from .reporter import rep
 from .database import db
 from .base_clean import extract_base_anime_name
 import re
+from contextvars import ContextVar
+
+retry_cancel_event = ContextVar('retry_cancel_event', default=None)
 
 class TgUploader:
     def __init__(self, message):
@@ -124,6 +127,9 @@ class TgUploader:
             raise e
 
     async def progress_status(self, current, total):
+        cancel_event = retry_cancel_event.get()
+        if cancel_event is not None and cancel_event.is_set():
+            self.cancelled = True
         if ani_cache.get('global_pause'):
             self.cancelled = True
         if self.cancelled:
