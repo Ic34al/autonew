@@ -3358,3 +3358,139 @@ async def stats_cmd(client, message: Message):
     except Exception as e:
         await status_msg.edit_text(f"<b>✘ Error fetching stats:</b> {str(e)}")
         await rep.report(f"Stats error: {str(e)}", "error")
+
+
+# ------------------------------------------------------------
+# RSS-backed anime search (authorized feeds configured in the bot)
+# ------------------------------------------------------------
+ANIME_SEARCH_RESULTS = {}
+
+@bot.on_message(filters.command("search") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def anime_search_cmd(client, message: Message):
+    """Search configured anime RSS feeds and offer matching authorized releases."""
+    query = message.text.split(maxsplit=1)
+    if len(query) < 2 or not query[1].strip():
+        return await message.reply(
+            "<b>Usage:</b> <code>/search Anime Name</code>\n"
+            "Searches the anime RSS feeds configured in this bot."
+        )
+
+    anime_name = query[1].strip()
+    status = await message.reply("<b>Searching configured anime RSS feeds...</b>")
+    try:
+        from bot.core.auto_animes import get_all_possible_anime_names, is_valid_torrent_url
+        import re
+
+        aliases = await get_all_possible_anime_names(anime_name)
+        aliases = {re.sub(r"[^a-z0-9]+", " ", x.lower()).strip() for x in aliases if x}
+        aliases.add(re.sub(r"[^a-z0-9]+", " ", anime_name.lower()).strip())
+
+        feeds = await db.get_all_rss_links()
+        anime_feeds = [x.get("link") for x in feeds if x.get("type") == "anime" and x.get("link")]
+        if not anime_feeds:
+            return await status.edit_text(
+                "<b>No anime RSS feeds are configured.</b>\n"
+                "Add an authorized anime RSS feed first, then run /search again."
+            )
+
+        found = []
+        seen = set()
+        for feed_url in anime_feeds:
+            try:
+                entries = await getfeeds(feed_url)
+            except Exception:
+                continue
+            for entry in entries:
+                title = str(getattr(entry, "title", "") or "").strip()
+                normalized = re.sub(r"[^a-z0-9]+", " ", title.lower()).strip()
+                if not title or not any(a and (a in normalized or normalized in a) for a in aliases):
+                    continue
+
+                candidates = []
+                for enclosure in (getattr(entry, "enclosures", None) or []):
+                    href = enclosure.get("href") or enclosure.get("url")
+                    if href:
+                        candidates.append(href)
+                link = getattr(entry, "link", None)
+                if link:
+                    candidates.append(link)
+                torrent_url = None
+                for candidate in candidates:
+                    if await is_valid_torrent_url(candidate):
+                        torrent_url = candidate
+                        break
+                if not torrent_url or torrent_url in seen:
+                    continue
+                seen.add(torrent_url)
+                found.append({"title": title, "url": torrent_url, "feed": feed_url})
+                if len(found) >= 12:
+                    break
+            if len(found) >= 12:
+                break
+
+        if not found:
+            return await status.edit_text(
+                f"<b>No matching downloadable release found for:</b> <code>{anime_name}</code>\n\n"
+                "I checked the configured anime RSS feeds. This command does not invent torrent results."
+            )
+
+        import secrets
+        token = secrets.token_hex(3)
+        ANIME_SEARCH_RESULTS[token] = {
+            "user_id": message.from_user.id,
+            "anime_name": anime_name,
+            "items": found,
+        }
+        buttons = []
+        for idx, item in enumerate(found):
+            label = item["title"][:48]
+            buttons.append([InlineKeyboardButton(
+                f"{idx + 1}. {label}",
+                callback_data=f"anime_search:{token}:{idx}"
+            )])
+        await status.edit_text(
+            f"<b>Search results for:</b> <code>{anime_name}</code>\n"
+            f"<b>Found:</b> {len(found)} authorized RSS release(s)\n\n"
+            "Choose a release to start the existing 720p batch workflow:",
+            reply_markup=InlineKeyboardMarkup(buttons)
+        )
+    except Exception as e:
+        await status.edit_text(f"<b>Anime search failed:</b> <code>{str(e)[:700]}</code>")
+        await rep.report(f"/search failed: {e}", "error")
+
+
+@bot.on_callback_query(filters.regex(r"^anime_search:([a-f0-9]+):(\\d+)$"))
+async def anime_search_release_callback(client, callback_query):
+    """Start processing only the release selected by the admin who searched."""
+    try:
+        _, token, raw_index = callback_query.data.split(":")
+        state = ANIME_SEARCH_RESULTS.get(token)
+        if not state or state.get("user_id") != callback_query.from_user.id:
+            return await callback_query.answer("This search has expired. Run /search again.", show_alert=True)
+        if callback_query.from_user.id not in Var.ADMINS:
+            return await callback_query.answer("Admin access required.", show_alert=True)
+
+        index = int(raw_index)
+        items = state.get("items") or []
+        if index < 0 or index >= len(items):
+            return await callback_query.answer("Invalid search result.", show_alert=True)
+
+        selected = items[index]
+        await callback_query.answer("Starting 720p batch processing...")
+        await callback_query.message.edit_text(
+            f"<b>Selected release:</b> {selected['title']}\n"
+            "<b>Quality:</b> 720p\n"
+            "<b>Status:</b> Starting existing batch processor..."
+        )
+        await process_batch_anime(state["anime_name"], selected["url"], "Japanese")
+        try:
+            ANIME_SEARCH_RESULTS.pop(token, None)
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await callback_query.message.reply_text(f"<b>Could not start release:</b> <code>{str(e)[:700]}</code>")
+        except Exception:
+            pass
+        await rep.report(f"/search release callback failed: {e}", "error")
