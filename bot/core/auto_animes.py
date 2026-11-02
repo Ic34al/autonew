@@ -7047,8 +7047,29 @@ async def process_low_end(name, torrent_url, force=False):
         await rep.report(f"Low-end processing error: {str(e)}", "error")
 
 async def fetch_animes():
-    await rep.report("Fetching Anime Started !!!", "info")
+    """Continuously scan RSS and prioritize releases published today over backlog."""
+    from zoneinfo import ZoneInfo
+
+    await rep.report("Automatic Anime RSS Fetcher Started — ongoing releases have priority.", "info")
     seen_rss_links = {}
+    india_tz = ZoneInfo("Asia/Kolkata")
+
+    def release_priority(entry, title, is_resume=False):
+        # Prefer newly published releases, regardless of Sub/Dub/Dual audio.
+        published = getattr(entry, "published_parsed", None) if entry is not None else None
+        if published:
+            try:
+                published_utc = datetime.datetime(*published[:6], tzinfo=datetime.timezone.utc)
+                is_today = published_utc.astimezone(india_tz).date() == datetime.datetime.now(india_tz).date()
+            except Exception:
+                is_today = False
+        else:
+            is_today = False
+        is_batch = bool(re.search(r"\[(?:batch)\]|\((?:batch)\)", title, re.IGNORECASE))
+        # Today single-episode releases first; today's batch after them;
+        # older unfinished work and older RSS entries remain queued afterwards.
+        return (0 if is_today and not is_batch else 1 if is_today else 2 if not is_batch else 3)
+
     while True:
         await asleep(15)
         mode, upload_mode = await asyncio.gather(db.get_mode(), db.get_upload_mode())
@@ -7057,23 +7078,40 @@ async def fetch_animes():
         if mode != "anime" or not ani_cache['fetch_animes']:
             continue
         try:
-            # Scan every configured quality feed in both upload modes.
-            # The main RSS list may contain only 1080p; omitting the 480p/720p
-            # feeds caused scheduled releases and Sub/Dual variants to be missed.
             configured_feeds = list(Var.RSS_ITEMS_ANIME or [])
             quality_feeds = [
                 Var.RSS_LOW_END.get(q)
                 for q in ("480", "720", "1080")
                 if Var.RSS_LOW_END.get(q)
             ]
-            rss_urls = list(dict.fromkeys(
-                url for url in configured_feeds + quality_feeds if url
-            ))
+            rss_urls = list(dict.fromkeys(url for url in configured_feeds + quality_feeds if url))
 
-            # Recover unfinished episodes from MongoDB before scanning fresh RSS.
-            # This works even if the source entry has fallen out of the RSS window.
-            recovered_links = set()
-            resume_failed = False
+            feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
+            pending_by_link = {}
+
+            # Add new RSS releases first. Their published timestamps determine
+            # today's priority; audio labels never affect ordering.
+            for rss_url, entries in zip(rss_urls, feeds_by_url):
+                if not entries:
+                    continue
+                seen = seen_rss_links.setdefault(rss_url, set())
+                for entry in entries:
+                    link = getattr(entry, "link", None)
+                    title = getattr(entry, "title", None)
+                    if not link or not title or link in seen:
+                        continue
+                    seen.add(link)
+                    pending_by_link[link] = {
+                        "title": title,
+                        "link": link,
+                        "entry": entry,
+                        "resume": False,
+                    }
+                if len(seen) > 500:
+                    seen_rss_links[rss_url] = set(list(seen)[-250:])
+
+            # Merge unfinished MongoDB checkpoints into the same queue.
+            # Do not let an old failed torrent block today's fresh episodes.
             try:
                 resume_tasks = await db.getAnimeResumeTasks()
                 for resume_task in resume_tasks:
@@ -7081,55 +7119,49 @@ async def fetch_animes():
                     resume_link = resume_task.get("torrent_url")
                     if not resume_name or not resume_link:
                         continue
-                    recovered_links.add(resume_link)
-                    await rep.report(
-                        f"Resuming unfinished episode from saved checkpoint: {resume_name}",
-                        "info"
-                    )
-                    # Do not advance to another episode until this saved episode
-                    # completes. get_animes re-raises failures after preserving
-                    # successful per-quality checkpoints.
-                    await get_animes(resume_name, resume_link)
+                    existing = pending_by_link.get(resume_link)
+                    if existing:
+                        existing["resume"] = True
+                    else:
+                        pending_by_link[resume_link] = {
+                            "title": resume_name,
+                            "link": resume_link,
+                            "entry": None,
+                            "resume": True,
+                        }
             except Exception as resume_error:
-                resume_failed = True
+                await rep.report(f"Could not load saved anime checkpoints: {resume_error}", "warning")
+
+            pending = list(pending_by_link.values())
+            pending.sort(key=lambda item: (
+                release_priority(item["entry"], item["title"], item["resume"]),
+                0 if item["resume"] else 1,
+                item["title"].lower(),
+            ))
+
+            if pending:
                 await rep.report(
-                    f"Episode resume failed; holding the queue on this unfinished episode. "
-                    f"It will retry on the next scan: {resume_error}",
-                    "error"
+                    f"Priority queue: {len(pending)} anime releases/checkpoints; today's single episodes first, then today's batches, then backlog.",
+                    "info"
                 )
 
-            if resume_failed:
-                # Never start fresh RSS jobs while an earlier episode is unfinished.
-                continue
-
-            feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
-            pending = []
-            for rss_url, entries in zip(rss_urls, feeds_by_url):
-                if not entries:
-                    continue
-                seen = seen_rss_links.setdefault(rss_url, set())
-                # Process oldest unseen entry first so a burst of releases is not skipped.
-                for entry in entries:
-                    link = getattr(entry, "link", None)
-                    title = getattr(entry, "title", None)
-                    if not link or not title or link in seen or link in recovered_links:
-                        continue
-                    seen.add(link)
-                    pending.append((title, link))
-                # Bound memory while retaining a recent de-duplication window.
-                if len(seen) > 500:
-                    seen_rss_links[rss_url] = set(list(seen)[-250:])
-
-            # One episode at a time: finish/retry the current item before advancing.
-            for title, link in pending:
+            # Serial processing preserves the existing encode/upload locks and
+            # prevents two torrents from racing over the same download/encode paths.
+            for item in pending:
+                title, link = item["title"], item["link"]
                 try:
                     await get_animes(title, link)
                 except Exception:
-                    await rep.report(f"Episode processing failed; will retry on next RSS scan: {title}\\n{format_exc()}", "error")
-                    # Make it eligible for the next scan instead of permanently consuming it.
+                    await rep.report(
+                        f"Episode processing failed; it remains retryable: {title}\n{format_exc()}",
+                        "error"
+                    )
+                    # Make failed RSS entries eligible again on the next scan.
                     for rss_url in rss_urls:
                         seen_rss_links.get(rss_url, set()).discard(link)
                     break
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             await rep.report(f"Anime fetch error: {str(e)}", "error")
 
