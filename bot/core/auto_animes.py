@@ -7047,50 +7047,44 @@ async def process_low_end(name, torrent_url, force=False):
         await rep.report(f"Low-end processing error: {str(e)}", "error")
 
 async def fetch_animes():
-    """Continuously scan RSS and prioritize releases published today over backlog."""
+    """Continuously scan RSS; re-rank after every completed item."""
     from zoneinfo import ZoneInfo
 
     await rep.report("Automatic Anime RSS Fetcher Started — ongoing releases have priority.", "info")
     seen_rss_links = {}
+    priority_queue = {}
     india_tz = ZoneInfo("Asia/Kolkata")
 
-    def release_priority(entry, title, is_resume=False):
-        # Prefer newly published releases, regardless of Sub/Dub/Dual audio.
+    def priority(item):
+        entry = item.get("entry")
         published = getattr(entry, "published_parsed", None) if entry is not None else None
+        is_today = False
         if published:
             try:
                 published_utc = datetime.datetime(*published[:6], tzinfo=datetime.timezone.utc)
                 is_today = published_utc.astimezone(india_tz).date() == datetime.datetime.now(india_tz).date()
             except Exception:
-                is_today = False
-        else:
-            is_today = False
-        is_batch = bool(re.search(r"\[(?:batch)\]|\((?:batch)\)", title, re.IGNORECASE))
-        # Today single-episode releases first; today's batch after them;
-        # older unfinished work and older RSS entries remain queued afterwards.
-        return (0 if is_today and not is_batch else 1 if is_today else 2 if not is_batch else 3)
+                pass
+        is_batch = bool(re.search(r"\[(?:batch)\]|\((?:batch)\)", item["title"], re.IGNORECASE))
+        return (0 if is_today and not is_batch else 1 if is_today else 2 if not is_batch else 3,
+                0 if item.get("resume") else 1,
+                item["title"].lower())
 
     while True:
         await asleep(15)
-        mode, upload_mode = await asyncio.gather(db.get_mode(), db.get_upload_mode())
-        if ani_cache.get('global_pause') and not ani_cache.get('manual_task'):
+        mode = await db.get_mode()
+        if ani_cache.get("global_pause") and not ani_cache.get("manual_task"):
             continue
-        if mode != "anime" or not ani_cache['fetch_animes']:
+        if mode != "anime" or not ani_cache["fetch_animes"]:
             continue
         try:
             configured_feeds = list(Var.RSS_ITEMS_ANIME or [])
-            quality_feeds = [
-                Var.RSS_LOW_END.get(q)
-                for q in ("480", "720", "1080")
-                if Var.RSS_LOW_END.get(q)
-            ]
+            quality_feeds = [Var.RSS_LOW_END.get(q) for q in ("480", "720", "1080") if Var.RSS_LOW_END.get(q)]
             rss_urls = list(dict.fromkeys(url for url in configured_feeds + quality_feeds if url))
-
             feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
-            pending_by_link = {}
 
-            # Add new RSS releases first. Their published timestamps determine
-            # today's priority; audio labels never affect ordering.
+            # New entries are merged into a persistent in-memory queue. A new
+            # release can therefore jump ahead of old backlog after each item.
             for rss_url, entries in zip(rss_urls, feeds_by_url):
                 if not entries:
                     continue
@@ -7101,65 +7095,48 @@ async def fetch_animes():
                     if not link or not title or link in seen:
                         continue
                     seen.add(link)
-                    pending_by_link[link] = {
-                        "title": title,
-                        "link": link,
-                        "entry": entry,
-                        "resume": False,
-                    }
+                    priority_queue.setdefault(link, {
+                        "title": title, "link": link, "entry": entry, "resume": False
+                    })
                 if len(seen) > 500:
                     seen_rss_links[rss_url] = set(list(seen)[-250:])
 
-            # Merge unfinished MongoDB checkpoints into the same queue.
-            # Do not let an old failed torrent block today's fresh episodes.
+            # Add checkpointed work without letting old checkpoints block new releases.
             try:
-                resume_tasks = await db.getAnimeResumeTasks()
-                for resume_task in resume_tasks:
-                    resume_name = resume_task.get("name")
-                    resume_link = resume_task.get("torrent_url")
-                    if not resume_name or not resume_link:
-                        continue
-                    existing = pending_by_link.get(resume_link)
-                    if existing:
-                        existing["resume"] = True
-                    else:
-                        pending_by_link[resume_link] = {
-                            "title": resume_name,
-                            "link": resume_link,
-                            "entry": None,
-                            "resume": True,
-                        }
+                for resume_task in await db.getAnimeResumeTasks():
+                    title = resume_task.get("name")
+                    link = resume_task.get("torrent_url")
+                    if title and link:
+                        if link in priority_queue:
+                            priority_queue[link]["resume"] = True
+                        else:
+                            priority_queue[link] = {
+                                "title": title, "link": link, "entry": None, "resume": True
+                            }
             except Exception as resume_error:
                 await rep.report(f"Could not load saved anime checkpoints: {resume_error}", "warning")
 
-            pending = list(pending_by_link.values())
-            pending.sort(key=lambda item: (
-                release_priority(item["entry"], item["title"], item["resume"]),
-                0 if item["resume"] else 1,
-                item["title"].lower(),
-            ))
+            if not priority_queue:
+                continue
 
-            if pending:
+            next_item = min(priority_queue.values(), key=priority)
+            title, link = next_item["title"], next_item["link"]
+            await rep.report(
+                f"Next priority upload: {title} | queue: {len(priority_queue)}",
+                "info"
+            )
+            try:
+                await get_animes(title, link)
+                priority_queue.pop(link, None)
+            except asyncio.CancelledError:
+                raise
+            except Exception:
                 await rep.report(
-                    f"Priority queue: {len(pending)} anime releases/checkpoints; today's single episodes first, then today's batches, then backlog.",
-                    "info"
+                    f"Episode processing failed; keeping it queued for retry: {title}\n{format_exc()}",
+                    "error"
                 )
-
-            # Serial processing preserves the existing encode/upload locks and
-            # prevents two torrents from racing over the same download/encode paths.
-            for item in pending:
-                title, link = item["title"], item["link"]
-                try:
-                    await get_animes(title, link)
-                except Exception:
-                    await rep.report(
-                        f"Episode processing failed; it remains retryable: {title}\n{format_exc()}",
-                        "error"
-                    )
-                    # Make failed RSS entries eligible again on the next scan.
-                    for rss_url in rss_urls:
-                        seen_rss_links.get(rss_url, set()).discard(link)
-                    break
+                # Keep it queued, but re-scan RSS before retrying so a newly
+                # released ongoing episode can take priority over this failure.
         except asyncio.CancelledError:
             raise
         except Exception as e:
@@ -7693,6 +7670,10 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Batch torrent detected; processing 720p batch: {name}", "info")
                 batch_audio = "Dual" if re.search(r"\bdual\b", name, re.IGNORECASE) else ("Dub" if re.search(r"\b(dub|english)\b", name, re.IGNORECASE) else "Sub")
                 await process_batch_anime(name, torrent, batch_audio)
+                if 'ani_id' in locals() and 'ep_no' in locals():
+                    await db.markAnimeResumeComplete(ani_id, ep_no)
+                    ani_cache['completed'].add(episode_key)
+                    ani_cache['ongoing'].discard(episode_key)
                 return
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
