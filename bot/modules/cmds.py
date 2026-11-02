@@ -2633,12 +2633,31 @@ async def del_link_cmd(client, message: Message):
     except Exception as e:
         await message.reply(f"<blockquote><b>Error: {str(e)}</b></blockquote>")
 
-async def run_retry_for_date(client, status, target_date, anime_filter=None):
-    """Retry releases from one selected IST calendar date, optionally one anime."""
-    if ani_cache.get("retry_queue_running"):
-        return await status.edit_text("<b>Retry queue is already running.</b>")
+# Only /retry tasks use this lock; normal RSS/manual uploads are unaffected.
+_retry_replace_lock = asyncio.Lock()
 
-    ani_cache["retry_queue_running"] = True
+
+async def run_retry_for_date(client, status, target_date, anime_filter=None):
+    """Run the newest requested date retry; a new /retry replaces the prior one."""
+    current_retry = asyncio.current_task()
+    async with _retry_replace_lock:
+        previous_retry = ani_cache.get("_retry_task")
+        if previous_retry is not None and previous_retry is not current_retry and not previous_retry.done():
+            previous_status = ani_cache.get("_retry_status")
+            if previous_status is not None:
+                try:
+                    await previous_status.edit_text(
+                        "<b>Previous /retry cancelled.</b>\n"
+                        "<i>A newer retry request replaced its remaining queue.</i>"
+                    )
+                except Exception:
+                    pass
+            previous_retry.cancel()
+            await asyncio.gather(previous_retry, return_exceptions=True)
+
+        ani_cache["_retry_task"] = current_retry
+        ani_cache["_retry_status"] = status
+        ani_cache["retry_queue_running"] = True
     try:
         mode = await db.get_mode()
         if mode != "anime":
@@ -2778,7 +2797,11 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
         await status.edit_text(f"<b>/retry error:</b> <code>{e}</code>")
         await rep.report(f"/retry command error: {e}", "error")
     finally:
-        ani_cache["retry_queue_running"] = False
+        # An older cancelled retry must never clear the newer retry state.
+        if ani_cache.get("_retry_task") is current_retry:
+            ani_cache.pop("_retry_task", None)
+            ani_cache.pop("_retry_status", None)
+            ani_cache["retry_queue_running"] = False
 
 
 @bot.on_message(filters.command("retry") & filters.user(Var.ADMINS))
