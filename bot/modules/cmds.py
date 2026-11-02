@@ -3386,12 +3386,24 @@ async def anime_search_cmd(client, message: Message):
         aliases = {re.sub(r"[^a-z0-9]+", " ", x.lower()).strip() for x in aliases if x}
         aliases.add(re.sub(r"[^a-z0-9]+", " ", anime_name.lower()).strip())
 
+        # Merge database feeds with RSS feeds configured in bot settings.
+        # A feed can be configured in Heroku even when MongoDB has no rss_links rows.
         feeds = await db.get_all_rss_links()
-        anime_feeds = [x.get("link") for x in feeds if x.get("type") == "anime" and x.get("link")]
+        anime_feeds = [
+            item.get("link") for item in feeds
+            if item.get("type") == "anime" and item.get("link")
+        ]
+        configured_feeds = getattr(Var, "RSS_ITEMS_ANIME", []) or []
+        if isinstance(configured_feeds, str):
+            configured_feeds = configured_feeds.split()
+        anime_feeds.extend(configured_feeds)
+        anime_feeds = list(dict.fromkeys(
+            str(url).strip() for url in anime_feeds if url and str(url).strip()
+        ))
         if not anime_feeds:
             return await status.edit_text(
-                "<b>No anime RSS feeds are configured.</b>\n"
-                "Add an authorized anime RSS feed first, then run /search again."
+                "<b>No anime RSS feeds are configured.</b>\\n"
+                "Set RSS_ITEMS_ANIME in Heroku Config Vars or add a feed with /addlink anime."
             )
 
         found = []
