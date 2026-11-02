@@ -154,9 +154,9 @@ async def main():
         await restart()
         
         LOGS.info("Starting tasks...")
+        # Automatic RSS/resume scanning is disabled: uploads require an admin-confirmed /retry selection.
         tasks = [
             create_task(queue_loop()),
-            create_task(fetch_animes()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')
