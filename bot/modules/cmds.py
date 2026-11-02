@@ -2678,8 +2678,6 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
                     continue
                 if published_date != target_date:
                     continue
-                if wanted and wanted not in str(title).casefold():
-                    continue
                 seen_links.add(link)
                 candidates.append((title, link))
 
@@ -2688,6 +2686,20 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
             try:
                 info = TextEditor(title)
                 await info.load_info()
+                if wanted:
+                    title_data = info.adata.get("title") or {}
+                    possible_titles = [str(title)]
+                    if isinstance(title_data, dict):
+                        possible_titles.extend(str(value) for value in title_data.values() if value)
+                    else:
+                        possible_titles.append(str(title_data))
+                    possible_titles.extend(
+                        str(info.adata.get(key))
+                        for key in ("english", "romaji", "name")
+                        if info.adata.get(key)
+                    )
+                    if not any(wanted in value.casefold() for value in possible_titles):
+                        continue
                 ani_id = info.adata.get("id")
                 ep_no = info.pdata.get("episode_number")
                 if isinstance(ep_no, list):
