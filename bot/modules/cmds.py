@@ -2652,6 +2652,9 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
                     )
                 except Exception:
                     pass
+            previous_event = ani_cache.get('_retry_cancel_event')
+            if previous_event is not None:
+                previous_event.set()
             previous_retry.cancel()
             await asyncio.gather(previous_retry, return_exceptions=True)
 
@@ -2742,57 +2745,18 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
                 f"<i>Checked {len(candidates)} matching RSS entries.</i>"
             )
 
+        from uuid import uuid4
+        token = uuid4().hex[:8]
+        sessions = ani_cache.setdefault("_retry_sessions", {})
+        session = {"date": target_date, "queue": queue, "selected": set(), "page": 0}
+        sessions[token] = session
         await status.edit_text(
-            f"<b>Retry queue started.</b>\n"
+            f"<b>Select anime to retry</b>\n"
             f"Date: <code>{target_date.isoformat()}</code> (IST)\n"
-            f"Anime filter: <code>{anime_filter or 'All anime'}</code>\n"
-            f"RSS matches: <code>{len(candidates)}</code>\n"
-            f"Unfinished episodes: <code>{len(queue)}</code>\n"
-            f"<i>Processing sequentially; the queue stops at the first failed episode.</i>"
+            f"Found: <code>{len(queue)}</code> unfinished releases\n"
+            f"Tick the anime you want, then press Confirm.",
+            reply_markup=retry_selection_markup(token, session)
         )
-
-        completed = 0
-        failed = []
-        for index, (title, link) in enumerate(queue, start=1):
-            try:
-                await status.edit_text(
-                    f"<b>Retrying {index}/{len(queue)}</b>\n"
-                    f"<code>{title}</code>\n"
-                    f"<i>Rechecking source and reusing saved quality checkpoints...</i>"
-                )
-                await get_animes(title, link, force=True)
-
-                verify_info = TextEditor(title)
-                await verify_info.load_info()
-                verify_id = verify_info.adata.get("id")
-                verify_ep = verify_info.pdata.get("episode_number")
-                if isinstance(verify_ep, list):
-                    verify_ep = verify_ep[0] if verify_ep else None
-                verified_data = await db.getAnime(verify_id) if verify_id is not None else {}
-                verified_episode = verified_data.get(str(verify_ep), {}) if isinstance(verified_data, dict) else {}
-                has_post = bool(await db.getAnimeMainPost(verify_id, str(verify_ep))) if verify_id is not None and verify_ep is not None else False
-                if not isinstance(verified_episode, dict) or not all(verified_episode.get(q) for q in required_qualities) or not has_post:
-                    failed.append(title)
-                    await rep.report(f"/retry did not complete required qualities or publish the main post: {title}", "error")
-                    break
-                completed += 1
-            except Exception as e:
-                failed.append(title)
-                await rep.report(f"/retry failed for {title}: {e}", "error")
-                break
-
-        summary = (
-            f"<b>/retry finished.</b>\n"
-            f"Date: <code>{target_date.isoformat()}</code> (IST)\n"
-            f"Queued: <code>{len(queue)}</code>\n"
-            f"Completed: <code>{completed}</code>\n"
-            f"Failed: <code>{len(failed)}</code>"
-        )
-        if failed:
-            summary += f"\n<b>Stopped at:</b> <code>{failed[0]}</code>"
-        else:
-            summary += "\n<i>Selected date queue drained.</i>"
-        await status.edit_text(summary)
     except Exception as e:
         await status.edit_text(f"<b>/retry error:</b> <code>{e}</code>")
         await rep.report(f"/retry command error: {e}", "error")
@@ -2802,6 +2766,145 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
             ani_cache.pop("_retry_task", None)
             ani_cache.pop("_retry_status", None)
             ani_cache["retry_queue_running"] = False
+
+
+
+def retry_selection_markup(token, session):
+    page_size = 8
+    page = session.get("page", 0)
+    queue = session["queue"]
+    rows = []
+    for index in range(page * page_size, min((page + 1) * page_size, len(queue))):
+        title = queue[index][0]
+        checked = index in session["selected"]
+        rows.append([InlineKeyboardButton(("☑ " if checked else "☐ ") + title[:52], callback_data=f"retrytoggle:{token}:{index}")])
+    navigation = []
+    if page > 0:
+        navigation.append(InlineKeyboardButton("‹ Previous", callback_data=f"retrypage:{token}:{page-1}"))
+    if (page + 1) * page_size < len(queue):
+        navigation.append(InlineKeyboardButton("Next ›", callback_data=f"retrypage:{token}:{page+1}"))
+    if navigation:
+        rows.append(navigation)
+    rows.append([
+        InlineKeyboardButton(f"Confirm ({len(session['selected'])})", callback_data=f"retryconfirm:{token}"),
+        InlineKeyboardButton("Cancel", callback_data=f"retrycancel:{token}")
+    ])
+    return InlineKeyboardMarkup(rows)
+
+
+async def run_selected_retry(client, status, target_date, queue):
+    current_retry = asyncio.current_task()
+    async with _retry_replace_lock:
+        previous = ani_cache.get("_retry_task")
+        if previous is not None and previous is not current_retry and not previous.done():
+            event = ani_cache.get("_retry_cancel_event")
+            if event is not None:
+                event.set()
+            previous.cancel()
+            await asyncio.gather(previous, return_exceptions=True)
+        cancel_event = asyncio.Event()
+        ani_cache["_retry_task"] = current_retry
+        ani_cache["_retry_status"] = status
+        ani_cache["_retry_cancel_event"] = cancel_event
+        ani_cache["retry_queue_running"] = True
+
+    from bot.core.tguploader import retry_cancel_event
+    context_token = retry_cancel_event.set(cancel_event)
+    try:
+        upload_mode = await db.get_upload_mode()
+        required_qualities = ("480", "720", "1080") if upload_mode == "low_end" else tuple(Var.QUALS)
+        completed, failed = 0, []
+        for index, (title, link) in enumerate(queue, start=1):
+            if cancel_event.is_set():
+                raise asyncio.CancelledError()
+            try:
+                await status.edit_text(
+                    f"<b>Retrying {index}/{len(queue)}</b>\n"
+                    f"<code>{title}</code>\n"
+                    f"<i>Reusing saved quality checkpoints...</i>"
+                )
+                await get_animes(title, link, force=True)
+                if cancel_event.is_set():
+                    raise asyncio.CancelledError()
+                verify = TextEditor(title)
+                await verify.load_info()
+                ani_id = verify.adata.get("id")
+                ep_no = verify.pdata.get("episode_number")
+                if isinstance(ep_no, list):
+                    ep_no = ep_no[0] if ep_no else None
+                saved = await db.getAnime(ani_id) if ani_id is not None else {}
+                episode = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
+                has_post = bool(await db.getAnimeMainPost(ani_id, str(ep_no))) if ani_id is not None and ep_no is not None else False
+                if not isinstance(episode, dict) or not all(episode.get(q) for q in required_qualities) or not has_post:
+                    failed.append(title)
+                    break
+                completed += 1
+            except asyncio.CancelledError:
+                raise
+            except Exception as error:
+                failed.append(title)
+                await rep.report(f"/retry failed for {title}: {error}", "error")
+                break
+        await status.edit_text(
+            f"<b>/retry finished.</b>\nDate: <code>{target_date.isoformat()}</code> (IST)\n"
+            f"Selected: <code>{len(queue)}</code>\nCompleted: <code>{completed}</code>\nFailed: <code>{len(failed)}</code>"
+            + (f"\nStopped at: <code>{failed[0]}</code>" if failed else "")
+        )
+    except asyncio.CancelledError:
+        try:
+            await status.edit_text("<b>Previous retry cancelled. Its remaining queue will not be started.</b>")
+        except Exception:
+            pass
+        raise
+    except Exception as error:
+        await status.edit_text(f"<b>/retry error:</b> <code>{error}</code>")
+        await rep.report(f"/retry error: {error}", "error")
+    finally:
+        retry_cancel_event.reset(context_token)
+        if ani_cache.get("_retry_task") is current_retry:
+            ani_cache.pop("_retry_task", None)
+            ani_cache.pop("_retry_status", None)
+            ani_cache.pop("_retry_cancel_event", None)
+            ani_cache["retry_queue_running"] = False
+
+
+@bot.on_callback_query(filters.regex(r"^retry(toggle|page|confirm|cancel):"))
+async def retry_selection_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    parts = callback_query.data.split(":")
+    action = parts[0][5:]
+    token = parts[1]
+    sessions = ani_cache.setdefault("_retry_sessions", {})
+    session = sessions.get(token)
+    if not session:
+        return await callback_query.answer("Selection expired. Send /retry again.", show_alert=True)
+    if action == "toggle":
+        index = int(parts[2])
+        if index < 0 or index >= len(session["queue"]):
+            return await callback_query.answer("Invalid selection.", show_alert=True)
+        if index in session["selected"]:
+            session["selected"].remove(index)
+        else:
+            session["selected"].add(index)
+        await callback_query.answer()
+        return await callback_query.message.edit_reply_markup(retry_selection_markup(token, session))
+    if action == "page":
+        session["page"] = max(0, min(int(parts[2]), (len(session["queue"]) - 1) // 8))
+        await callback_query.answer()
+        return await callback_query.message.edit_reply_markup(retry_selection_markup(token, session))
+    if action == "cancel":
+        sessions.pop(token, None)
+        await callback_query.answer("Cancelled.")
+        return await callback_query.message.edit_text("<b>Retry cancelled. No uploads started.</b>")
+    if action == "confirm":
+        if not session["selected"]:
+            return await callback_query.answer("Select at least one anime first.", show_alert=True)
+        queue = [session["queue"][i] for i in sorted(session["selected"])]
+        target_date = session["date"]
+        sessions.pop(token, None)
+        await callback_query.answer(f"Starting {len(queue)} selected anime.")
+        bot_loop.create_task(run_selected_retry(client, callback_query.message, target_date, queue))
 
 
 @bot.on_message(filters.command("retry") & filters.user(Var.ADMINS))
