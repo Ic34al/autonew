@@ -178,7 +178,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     stat_msg = await bot.send_message(chat_id=Var.LOG_CHANNEL, text=f"<b>Processing batch:</b> {anime_name}\nDownloading...")
 
     batch_buttons = []
-    for qual in Var.QUALS:
+    for qual in ("720",):
         qual_msg_ids = []
         os.makedirs("encode", exist_ok=True)
         for idx, vfile in enumerate(video_files, 1):
@@ -206,7 +206,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             last_id = max(qual_msg_ids)
             batch_string = f"get-{first_id * abs(Var.FILE_STORE)}-{last_id * abs(Var.FILE_STORE)}"
             batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
-            btn_text = f"{btn_formatter.get(qual, qual+'p')}"
+            btn_text = f"Download Now Ep 1 to {episode_count}"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
             if batch_buttons:
                 btns = [batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]
@@ -7657,8 +7657,10 @@ async def get_animes(name, torrent, force=False):
         
         if force or not existing_main_post:
             
-            if "[Batch]" in name:
-                await rep.report(f"Torrent Skipped!\n{name}", "warning")
+            if "[Batch]" in name or "(Batch)" in name:
+                await rep.report(f"Batch torrent detected; processing 720p batch: {name}", "info")
+                batch_audio = "Dual" if re.search(r"\bdual\b", name, re.IGNORECASE) else ("Dub" if re.search(r"\b(dub|english)\b", name, re.IGNORECASE) else "Sub")
+                await process_batch_anime(name, torrent, batch_audio)
                 return
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
