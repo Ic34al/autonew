@@ -1906,7 +1906,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     return output_path
 
 
-async def get_animes(name, torrent, force=False):
+async def get_animes(name, torrent, force=False, qualities_override=None):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -2050,7 +2050,7 @@ async def get_animes(name, torrent, force=False):
             try:
                 btns = []
                 uploaded_qualities = []
-                required_qualities = list(Var.QUALS) if encoding_enabled else ["HDRi"]
+                required_qualities = (list(qualities_override) if qualities_override else list(Var.QUALS)) if encoding_enabled else ["HDRi"]
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
