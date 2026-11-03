@@ -43,6 +43,7 @@ import asyncio
 from bot.core.auto_animes import get_all_possible_anime_names
 from json import dumps as jdumps, loads as jloads
 import random
+import secrets
 
 awaiting_manual_dub: dict[int, dict] = {}
 
