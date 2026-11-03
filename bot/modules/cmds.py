@@ -46,6 +46,10 @@ import random
 
 awaiting_manual_dub: dict[int, dict] = {}
 
+# Manual /addtask jobs, keyed by a short ID shown in /canceltask.
+ADD_TASK_JOBS: dict[str, dict] = {}
+
+
 RANDOM_PIC = None
 
 def get_random_pic():
@@ -255,10 +259,22 @@ async def force_custom_task(client, message: Message):
 
         if mode == "manga":
             from bot.core.auto_animes import process_manga_chapter
-            bot_loop.create_task(process_manga_chapter(taskInfo.title, taskInfo.link, manual=True))
+            job_id = secrets.token_hex(3)
+            task = bot_loop.create_task(process_manga_chapter(taskInfo.title, taskInfo.link, manual=True))
+            ADD_TASK_JOBS[job_id] = {
+                "task": task, "title": taskInfo.title, "mode": mode,
+                "user_id": message.from_user.id, "status_msg": status_msg
+            }
+            task.add_done_callback(lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None))
         else:
             from bot.core.auto_animes import get_animes
-            bot_loop.create_task(get_animes(taskInfo.title, taskInfo.link, force=True))
+            job_id = secrets.token_hex(3)
+            task = bot_loop.create_task(get_animes(taskInfo.title, taskInfo.link, force=True))
+            ADD_TASK_JOBS[job_id] = {
+                "task": task, "title": taskInfo.title, "mode": mode,
+                "user_id": message.from_user.id, "status_msg": status_msg
+            }
+            task.add_done_callback(lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None))
 
         await status_msg.edit_text(
             f"<blockquote><b><i>Forced Task Added Successfully!</i>\n\n"
@@ -3113,6 +3129,53 @@ async def add_custom_task(client, message: Message):
     except Exception as e:
         await message.reply(f"<b><blockquote>Error adding task:</b> {str(e)}</blockquote>")
         await rep.report(f"Task addition error: {str(e)}", "error")
+
+
+
+@bot.on_message(filters.command("canceltask") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def cancel_addtask_cmd(client, message: Message):
+    """List manually added jobs and cancel only the selected job."""
+    active = [
+        (job_id, job) for job_id, job in ADD_TASK_JOBS.items()
+        if not job["task"].done()
+    ]
+    if not active:
+        return await message.reply(
+            "<b>No manually added /addtask jobs are currently running.</b>"
+        )
+    buttons = [
+        [InlineKeyboardButton(
+            f"Cancel: {job['title'][:40]} ({job['mode']})",
+            callback_data=f"cancel_addtask:{job_id}"
+        )]
+        for job_id, job in active
+    ]
+    await message.reply(
+        "<b>Select the /addtask job you want to cancel:</b>",
+        reply_markup=InlineKeyboardMarkup(buttons)
+    )
+
+
+@bot.on_callback_query(filters.regex(r"^cancel_addtask:([a-f0-9]+)$"))
+async def cancel_addtask_callback(client, callback_query):
+    job_id = callback_query.data.split(":", 1)[1]
+    job = ADD_TASK_JOBS.get(job_id)
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Admin access required.", show_alert=True)
+    if not job or job["task"].done():
+        ADD_TASK_JOBS.pop(job_id, None)
+        return await callback_query.answer("This task has already finished.", show_alert=True)
+
+    job["task"].cancel()
+    await callback_query.answer("Cancellation requested.")
+    try:
+        await callback_query.message.edit_text(
+            f"<b>Cancellation requested for:</b> {job['title']}\\n"
+            "<i>The task will stop at its next cancellable async operation.</i>"
+        )
+    except Exception:
+        pass
 
 @bot.on_message(filters.command("status") & filters.user(Var.ADMINS))
 @new_task
