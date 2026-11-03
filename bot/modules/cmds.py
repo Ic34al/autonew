@@ -3112,12 +3112,27 @@ async def add_custom_task(client, message: Message):
             f"<b>    • Type :</b> {mode.capitalize()}</b></blockquote>"
         )
 
+        job_id = secrets.token_hex(3)
         if mode == "manga":
             from bot.core.auto_animes import process_manga_chapter
-            bot_loop.create_task(process_manga_chapter(taskInfo.title, taskInfo.link, manual=True))
+            task = bot_loop.create_task(
+                process_manga_chapter(taskInfo.title, taskInfo.link, manual=True)
+            )
         else:
             from bot.core.auto_animes import get_animes
-            bot_loop.create_task(get_animes(taskInfo.title, taskInfo.link, force=True))
+            task = bot_loop.create_task(
+                get_animes(taskInfo.title, taskInfo.link, force=True)
+            )
+
+        ADD_TASK_JOBS[job_id] = {
+            "task": task,
+            "title": taskInfo.title,
+            "mode": mode,
+            "user_id": message.from_user.id,
+        }
+        task.add_done_callback(
+            lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None)
+        )
 
         await status_msg.edit_text(
             f"<blockquote><b><i>Task Added Successfully!</i>\n\n"
@@ -3171,7 +3186,7 @@ async def cancel_addtask_callback(client, callback_query):
     await callback_query.answer("Cancellation requested.")
     try:
         await callback_query.message.edit_text(
-            f"<b>Cancellation requested for:</b> {job['title']}\\n"
+            f"<b>Cancellation requested for:</b> {job['title']}\n"
             "<i>The task will stop at its next cancellable async operation.</i>"
         )
     except Exception:
