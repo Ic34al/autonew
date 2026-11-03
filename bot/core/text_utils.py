@@ -919,6 +919,13 @@ class TextEditor:
         if lang == "Japanese":
             lang = "Japanese [English Sub]"
 
+        # The standard high-end pipeline is configured for four qualities
+        # (480p, 720p, 1080p and HDRip). Label Japanese-subbed releases as
+        # multi-quality when all four quality slots are enabled.
+        configured_qualities = getattr(Var, "QUALS", []) or []
+        if lang == "Japanese [English Sub]" and len(configured_qualities) >= 4:
+            lang = "Multi Quality [English Sub]"
+
         desc = self.adata.get("description") or "N/A"
 
         if len(desc) > 200:
