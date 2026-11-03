@@ -225,10 +225,18 @@ async def process_batch_anime(anime_name, torrent_url, audio):
 
     await stat_msg.delete()
     if batch_buttons:
-        batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]))
+        batch_markup = InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)])
+        if channel_to_use != Var.MAIN_CHANNEL:
+            batch_post = await bot.send_photo(channel_to_use, photo=batch_photo, caption=caption, reply_markup=batch_markup)
+            dedicated_chat = await bot.get_chat(channel_to_use)
+            batch_url = f"https://t.me/{dedicated_chat.username}/{batch_post.id}" if dedicated_chat.username else f"https://t.me/c/{str(channel_to_use).replace('-100', '')}/{batch_post.id}"
+            main_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Watch Episodes", url=batch_url)]])
+            await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=main_markup)
+        else:
+            batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=batch_markup)
         if batch_post:
             await asleep(Var.STICKER_INTERVAL)
-            await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+            await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
     else:
         await rep.report(f"No batch qualities uploaded for {anime_name}; no Main Channel post sent", "warning")
     import logging
@@ -7255,60 +7263,20 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
+    """Only explicitly selected anime use dedicated channels."""
     try:
-        base_anime_name = extract_base_anime_name(name)
-        normalized_name = normalize_anime_name_for_search(name)
-        
-        await rep.report(f"Searching for existing channel for: {base_anime_name}", "info")
-        await asleep(1.5)
-        custom_channel = await db.get_anime_channel(normalized_name)
-        if custom_channel:
-            await rep.report(f"Found custom channel mapping: {custom_channel}", "info")
-            return custom_channel
-
-        raw_entry = await db.get_raw_anime_channel(normalized_name)
-        if raw_entry is not None and 'channel_id' not in raw_entry:
-            await rep.report(f"Found banner-only mapping for {normalized_name} (no channel_id)", "info")
-            channel_creation = await db.get_channel_creation()
-            if channel_creation and Var.USER_SESSION:
-                await rep.report("Banner-only mapping found â creating channel because channel creation is enabled", "info")
-                new_channel = await create_anime_channel(name, aniInfo)
-                if new_channel:
-                    await db.add_anime_channel_mapping(normalized_name, new_channel)
-                    await rep.report(f"Created channel for banner-only mapping and updated DB: {new_channel}", "info")
-                    return new_channel
-                else:
-                    await rep.report("Failed to create channel for banner-only mapping, falling back to main channel", "error")
-                    return Var.MAIN_CHANNEL
-            else:
-                await rep.report("Banner-only mapping present but channel creation is disabled or no user session; using main channel", "info")
-                return Var.MAIN_CHANNEL
-
-        existing_channel = await find_existing_anime_channel(name)
-        if existing_channel:
-            await rep.report(f"Found existing channel for {base_anime_name}: {existing_channel}", "info")
-            await db.add_anime_channel_mapping(normalized_name, existing_channel)
-            return existing_channel
-        
-        channel_creation = await db.get_channel_creation()
-        if not channel_creation or not Var.USER_SESSION:
-            await rep.report("Channel creation disabled or no user session, using main channel", "info")
+        base_name = extract_base_anime_name(name)
+        selected = await db.get_selected_anime_channel(normalize_anime_name_for_search(base_name))
+        if not selected:
             return Var.MAIN_CHANNEL
-
-        await rep.report(f"Creating new channel for: {base_anime_name}", "info")
-        new_channel = await create_anime_channel(name, aniInfo)
-        
-        if new_channel:
-            await db.add_anime_channel_mapping(normalized_name, new_channel)
-            await rep.report(f"Successfully created and saved channel mapping for {base_anime_name}", "info")
-            return new_channel
-        else:
-            await rep.report("Failed to create channel, using main channel", "error")
+        if not await validate_channel_id(selected):
+            await rep.report(f"Dedicated channel {selected} for {base_name} is inaccessible; using Main Channel.", "error")
             return Var.MAIN_CHANNEL
-            
-    except Exception as e:
-        await rep.report(f"Error in get_or_create_anime_channel: {e}", "error")
+        return selected
+    except Exception as error:
+        await rep.report(f"Dedicated-channel lookup failed for {name}: {error}", "error")
         return Var.MAIN_CHANNEL
+
 
 async def create_anime_channel(name, aniInfo):
     try:
@@ -7941,17 +7909,26 @@ async def get_animes(name, torrent, force=False):
                 last_publish_error = None
                 for publish_attempt in range(5):
                     try:
-                        if photo_path and ospath.exists(photo_path):
+                        if channel_to_use != Var.MAIN_CHANNEL:
+                            if photo_path and ospath.exists(photo_path):
+                                with open(photo_path, 'rb') as photo_file:
+                                    episode_post = await bot.send_photo(channel_to_use, photo=photo_file, caption=caption, reply_markup=markup)
+                            else:
+                                episode_post = await bot.send_photo(channel_to_use, photo=photo_url, caption=caption, reply_markup=markup)
+                            dedicated_chat = await bot.get_chat(channel_to_use)
+                            episode_url = f"https://t.me/{dedicated_chat.username}/{episode_post.id}" if dedicated_chat.username else f"https://t.me/c/{str(channel_to_use).replace('-100', '')}/{episode_post.id}"
+                            announcement_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Watch Episodes", url=episode_url)]])
+                            if photo_path and ospath.exists(photo_path):
+                                with open(photo_path, 'rb') as photo_file:
+                                    post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
+                            else:
+                                post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
+                            await db.saveAnimePost(ani_id, ep_no, episode_post.id)
+                        elif photo_path and ospath.exists(photo_path):
                             with open(photo_path, 'rb') as photo_file:
-                                post_msg = await bot.send_photo(
-                                    Var.MAIN_CHANNEL, photo=photo_file,
-                                    caption=caption, reply_markup=markup
-                                )
+                                post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=markup)
                         else:
-                            post_msg = await bot.send_photo(
-                                Var.MAIN_CHANNEL, photo=photo_url,
-                                caption=caption, reply_markup=markup
-                            )
+                            post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=markup)
                         last_publish_error = None
                         break
                     except FloodWait as flood:
