@@ -3457,8 +3457,9 @@ async def anime_search_cmd(client, message: Message):
         import re
 
         def normalize(value):
-            value = re.sub(r"^\\s*\\[[^]]+\\]\\s*", "", str(value or ""))
-            return re.sub(r"\\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
+            # Strip release-group prefixes like [SubsPlease] before matching.
+            value = re.sub(r"^\s*\[[^]]+\]\s*", "", str(value or ""))
+            return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
         aliases = {normalize(x) for x in await get_all_possible_anime_names(anime_name) if x}
         aliases.add(normalize(anime_name))
@@ -3468,6 +3469,15 @@ async def anime_search_cmd(client, message: Message):
         if isinstance(configured, str):
             configured = configured.split()
         urls.extend(configured)
+
+        # Always search SubsPlease's three release feeds as well. RSS_ITEMS_ANIME
+        # is often set to only 1080p, while manual search must find 720p releases.
+        low_end_feeds = getattr(Var, "RSS_LOW_END", {}) or {}
+        urls.extend(low_end_feeds.values())
+        urls.extend([
+            "https://subsplease.org/rss/?r=720",
+            "https://subsplease.org/rss/?r=1080",
+        ])
         urls = list(dict.fromkeys(str(x).strip() for x in urls if x and str(x).strip()))
         if not urls:
             return await status.edit_text("<b>No anime RSS feeds configured.</b> Set RSS_ITEMS_ANIME in Heroku Config Vars.")
@@ -3489,8 +3499,15 @@ async def anime_search_cmd(client, message: Message):
                     href = enclosure.get("href") or enclosure.get("url")
                     if href:
                         candidates.append(href)
+                # feedparser can expose torrent URLs through links rather than
+                # enclosures, especially for magnet-enabled RSS items.
+                for rss_link in (getattr(entry, "links", None) or []):
+                    href = rss_link.get("href")
+                    if href:
+                        candidates.append(href)
                 if getattr(entry, "link", None):
                     candidates.append(entry.link)
+                candidates = list(dict.fromkeys(str(x).strip() for x in candidates if x))
                 torrent = None
                 for candidate in candidates:
                     if await is_valid_torrent_url(candidate):
