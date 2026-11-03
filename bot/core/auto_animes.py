@@ -159,6 +159,18 @@ async def process_batch_anime(anime_name, torrent_url, audio):
         return
 
     aniInfo.pdata["audio_type"] = audio
+    aniInfo.pdata["quality_label"] = "720p"
+    aniInfo.pdata["episode_number"] = "01"
+
+    # Use the same ANIME SOUL 16:9 dashboard thumbnail as regular episode posts.
+    batch_poster_path = (
+        f"thumbs/anime_soul_batch_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+    )
+    batch_poster = await build_anime_soul_poster(
+        aniInfo, anime_name, batch_poster_path
+    )
+    batch_photo = batch_poster if batch_poster and ospath.exists(batch_poster) else poster_url
+
     caption = await aniInfo.get_caption()
 
     caption = re.sub(
@@ -213,7 +225,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
 
     await stat_msg.delete()
     if batch_buttons:
-        batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=poster_url, caption=caption, reply_markup=InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]))
+        batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]))
         if batch_post:
             await asleep(Var.STICKER_INTERVAL)
             await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
