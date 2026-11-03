@@ -290,6 +290,25 @@ class MongoDB:
             print(f"Error fetching anime channels: {e}")
             return {}
 
+    async def set_anime_channel_selected(self, anime_name: str, channel_id: int):
+        key = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
+        await self.__db.selected_anime_channels.update_one(
+            {"_id": key}, {"$set": {"anime_name": key, "channel_id": int(channel_id), "enabled": True}}, upsert=True
+        )
+
+    async def get_selected_anime_channel(self, anime_name: str):
+        key = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
+        doc = await self.__db.selected_anime_channels.find_one({"_id": key, "enabled": True})
+        return doc.get("channel_id") if doc else None
+
+    async def list_selected_anime_channels(self):
+        return await self.__db.selected_anime_channels.find({"enabled": True}).sort("anime_name", 1).to_list(length=None)
+
+    async def remove_selected_anime_channel(self, anime_name: str):
+        key = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
+        result = await self.__db.selected_anime_channels.update_one({"_id": key}, {"$set": {"enabled": False}})
+        return result.modified_count > 0
+
     async def set_api_source(self, api_name: str):
         await self.__db.settings.update_one({"_id": "api_source"}, {"$set": {"api": api_name}}, upsert=True)
 
