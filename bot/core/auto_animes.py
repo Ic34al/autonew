@@ -7923,7 +7923,7 @@ async def get_animes(name, torrent, force=False):
                                     post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
                             else:
                                 post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
-                            await db.saveAnimePost(ani_id, ep_no, episode_post.id)
+                            await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
                         elif photo_path and ospath.exists(photo_path):
                             with open(photo_path, 'rb') as photo_file:
                                 post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=markup)
