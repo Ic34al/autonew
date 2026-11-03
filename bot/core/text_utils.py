@@ -27,7 +27,7 @@ CAPTION_FORMAT = """
 <b>✦─━━━━━━━━━━─✦</b>
 <b>›› Sᴇᴀꜱᴏɴ: {anime_season}</b>
 <b>›› Eᴘɪsᴏᴅᴇ: {ep_no}</b>
-<b>››Qᴜᴀʟɪᴛʏ : 480ᴘ | 720ᴘ | 1080ᴘ</b>
+<b>››Qᴜᴀʟɪᴛʏ : {quality_label}</b>
 <b>›› Lᴀɴɢᴜᴀɢᴇ: {lang}</b>
 <b>✦─━━━━━━━━━━─✦</b>
 <blockquote><b>≡ Sᴛᴀᴛᴜꜱ: {status}</b></blockquote>
@@ -923,7 +923,12 @@ class TextEditor:
         # (480p, 720p, 1080p and HDRip). Label Japanese-subbed releases as
         # multi-quality when all four quality slots are enabled.
         configured_qualities = getattr(Var, "QUALS", []) or []
-        if lang == "Japanese [English Sub]" and len(configured_qualities) >= 4:
+        quality_label = self.pdata.get("quality_label")
+        if not quality_label:
+            quality_label = "Multi Quality" if len(configured_qualities) >= 4 else "720p"
+        if lang in ("Sub", "Japanese"):
+            lang = "Japanese [English Sub]"
+        if lang == "Japanese [English Sub]" and quality_label == "Multi Quality":
             lang = "Multi Quality [English Sub]"
 
         desc = self.adata.get("description") or "N/A"
@@ -946,6 +951,7 @@ class TextEditor:
             anime_season=anime_season,
             start_date=startdate,
             lang=lang,
+            quality_label=quality_label,
             end_date=enddate,
             t_eps=self.adata.get("episodes") or "N/A",
             plot=desc,
