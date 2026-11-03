@@ -2192,6 +2192,14 @@ async def get_animes(name, torrent, force=False):
             # Existing Main Channel post is already recorded.
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
+    except asyncio.CancelledError:
+        if 'episode_key' in locals():
+            ani_cache['ongoing'].discard(episode_key)
+        try:
+            await rep.report(f"Manual task cancelled: {name}", "warning")
+        except Exception:
+            pass
+        raise
     except Exception as error:
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
