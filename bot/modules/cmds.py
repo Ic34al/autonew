@@ -3544,3 +3544,49 @@ async def anime_search_cmd(client, message: Message):
     except Exception as error:
         await status.edit_text(f"<b>Search failed:</b> <code>{str(error)[:600]}</code>")
         await rep.report(f"/search failed: {error}", "error")
+
+
+# Admin commands: dedicated anime channel routing
+@bot.on_message(filters.command("channeladd") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def channel_add_cmd(client, message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return await message.reply("<b>Usage:</b> <code>/channeladd Anime Name</code>")
+    anime_name = parts[1].strip()
+    status = await message.reply("<b>Creating dedicated channel...</b>")
+    try:
+        info = TextEditor(anime_name)
+        await info.load_info()
+        from bot.core.auto_animes import create_anime_channel, normalize_anime_name_for_search
+        channel_id = await create_anime_channel(anime_name, info)
+        if not channel_id:
+            return await status.edit_text("<b>Creation failed.</b> Check USER_SESSION and bot posting permissions.")
+        await db.set_anime_channel_selected(normalize_anime_name_for_search(anime_name), channel_id)
+        await status.edit_text(f"<b>Dedicated channel enabled:</b> {anime_name}\n<b>Channel ID:</b> <code>{channel_id}</code>\nFuture episodes will be posted there and announced in Main Channel.")
+    except Exception as e:
+        await status.edit_text(f"<b>Could not add channel:</b> <code>{str(e)[:500]}</code>")
+
+@bot.on_message(filters.command("channellist") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def channel_list_cmd(client, message: Message):
+    items = await db.list_selected_anime_channels()
+    if not items:
+        return await message.reply("<b>No anime selected for dedicated channels.</b>")
+    await message.reply("<b>Dedicated anime channels:</b>\n" + "\n".join(f"• <b>{x.get('anime_name')}</b> — <code>{x.get('channel_id')}</code>" for x in items))
+
+@bot.on_message(filters.command("channelremove") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def channel_remove_cmd(client, message: Message):
+    parts = message.text.split(maxsplit=1)
+    if len(parts) < 2 or not parts[1].strip():
+        return await message.reply("<b>Usage:</b> <code>/channelremove Anime Name</code>")
+    from bot.core.auto_animes import normalize_anime_name_for_search
+    removed = await db.remove_selected_anime_channel(normalize_anime_name_for_search(parts[1].strip()))
+    await message.reply("<b>Dedicated routing disabled.</b> Channel kept; future episodes go to Main Channel." if removed else "<b>Anime not found in dedicated-channel list.</b>")
+
+@bot.on_message(filters.command("channelstatus") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def channel_status_cmd(client, message: Message):
+    items = await db.list_selected_anime_channels()
+    await message.reply(f"<b>Selected anime:</b> {len(items)}")
