@@ -27,6 +27,15 @@ class MongoDB:
             upsert=True,
         )
 
+    async def saveAnimeDedicatedPost(self, ani_id, ep, post_id):
+        if ani_id is None or ep is None or post_id is None:
+            return
+        await self.__animes.update_one(
+            {"_id": ani_id},
+            {"$set": {f"{str(ep)}.dedicated_msg_id": int(post_id)}},
+            upsert=True,
+        )
+
     async def saveAnimeMainPost(self, ani_id, ep, main_post_id):
         if ani_id is None or ep is None or main_post_id is None:
             return
