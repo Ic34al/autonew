@@ -502,10 +502,19 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
                 post_link = f"https://t.me/{chat_info.username}/{post_msg.id}"
                 buttons = InlineKeyboardMarkup([[InlineKeyboardButton(f"{DOWNLOAD_BTN}", url=post_link)]])
             elif post_msg:
-                invite_link = chat_info.invite_link or await bot.export_chat_invite_link(channel_to_use)
+                # Private anime channels use join-request invite links so admins
+                # can approve each subscriber before they enter.
+                invite = await bot.create_chat_invite_link(
+                    channel_to_use,
+                    creates_join_request=True
+                )
+                invite_link = invite.invite_link
                 raw_channel_id = str(chat_info.id).replace("-100", "")
                 post_link = f"https://t.me/c/{raw_channel_id}/{post_msg.id}"
-                buttons = InlineKeyboardMarkup([[InlineKeyboardButton(f"{DOWNLOAD_ANIME_BTN}", url=post_link), InlineKeyboardButton(f"{DOWNLAOD_CHNL_BTN}", url=invite_link)]])
+                buttons = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(f"{DOWNLOAD_ANIME_BTN}", url=post_link),
+                    InlineKeyboardButton("Request to Join", url=invite_link)
+                ]])
         except Exception as e:
             await rep.report(f"Failed to construct buttons for mirror: {e}", "warning")
             buttons = None
