@@ -228,6 +228,19 @@ class MongoDB:
             print(f"Error updating anime {ani_id}, episode {ep}: {e}")
             raise
         
+    async def add_anime_channel_mapping(self, anime_name: str, channel: str | int):
+        """Create or update the dedicated channel mapping for an anime."""
+        normalized_name = re.sub(r"\\s+", " ", str(anime_name).lower()).strip()
+        if not normalized_name:
+            raise ValueError("Anime name cannot be empty")
+
+        channel_id = int(channel) if str(channel).lstrip("-").isdigit() else str(channel).strip()
+        await self.__anime_channels.update_one(
+            {"anime_name": normalized_name},
+            {"$set": {"anime_name": normalized_name, "channel_id": channel_id}},
+            upsert=True,
+        )
+
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
         query = {"anime_name": anime_name.lower()}
         if channel is not None:
