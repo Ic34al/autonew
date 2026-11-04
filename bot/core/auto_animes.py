@@ -50,7 +50,7 @@ MANGA_READ_BUTTON = "Read Now"
 MANGA_CHNL_BUTTON = "Join Channel"
 
 DOWNLOAD_BTN = "Download Now"
-DOWNLOAD_ANIME_BTN = "Download Anime"
+DOWNLOAD_ANIME_BTN = "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •"
 DOWNLAOD_CHNL_BTN = "Join Channel"
 
 import hashlib
