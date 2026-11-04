@@ -898,38 +898,39 @@ class TextEditor:
         duration = self.adata.get("duration", "N/A")
 
         if self.pdata.get("audio_type"):
-            lang = self.pdata["audio_type"]
+            lang = str(self.pdata["audio_type"]).strip()
         else:
             name_lower = self.__name.lower()
 
             if any(x in name_lower for x in ['multi-audio', 'multi audio']):
-                lang = "Multi"
+                lang = "Multi Audio"
             elif any(x in name_lower for x in ['dual-audio', 'dual audio']):
-                lang = "English & Japanese"
+                lang = "Eng/Jap Dub"
             elif any(x in name_lower for x in [
                 'english-audio', 'english audio',
                 'english dub', 'english-dub'
             ]):
-                lang = "English"
+                lang = "English Dub"
             else:
                 lang = "Japanese [English Sub]"
 
-        # Japanese releases are treated as English-subtitled unless the
-        # release metadata explicitly identifies another audio language.
-        if lang == "Japanese":
-            lang = "Japanese [English Sub]"
+        # Keep audio language separate from video quality.
+        lang_aliases = {
+            "dual": "Eng/Jap Dub",
+            "english & japanese": "Eng/Jap Dub",
+            "sub": "Japanese [English Sub]",
+            "japanese": "Japanese [English Sub]",
+            "dub": "English Dub",
+            "multi": "Multi Audio",
+        }
+        lang = lang_aliases.get(lang.lower(), lang)
+        if lang.lower() in ("eng/jap dub", "english/japanese dub"):
+            lang = "Eng/Jap Dub"
 
-        # The standard high-end pipeline is configured for four qualities
-        # (480p, 720p, 1080p and HDRip). Label Japanese-subbed releases as
-        # multi-quality when all four quality slots are enabled.
         configured_qualities = getattr(Var, "QUALS", []) or []
         quality_label = self.pdata.get("quality_label")
         if not quality_label:
             quality_label = "Multi Quality" if len(configured_qualities) >= 4 else "720p"
-        if lang in ("Sub", "Japanese"):
-            lang = "Japanese [English Sub]"
-        if lang == "Japanese [English Sub]" and quality_label == "Multi Quality":
-            lang = "Multi Quality [English Sub]"
 
         desc = self.adata.get("description") or "N/A"
 
