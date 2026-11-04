@@ -54,8 +54,9 @@ class Var:
     MONGO_NAME = getenv("MONGO_NAME", "AutoAnime")
     USER_SESSION = getenv("USER_SESSION")
     RSS_LOW_END = {
+    "360": "https://subsplease.org/rss/?r=sd",
     "480": "https://subsplease.org/rss/?r=sd",
-    "720": "https://subsplease.org/rss/?r=720", 
+    "720": "https://subsplease.org/rss/?r=720",
     "1080": "https://subsplease.org/rss/?r=1080"
     }
     RSS_ITEMS_ANIME= getenv("RSS_ITEMS_ANIME", "https://subsplease.org/rss/?r=1080").split()
