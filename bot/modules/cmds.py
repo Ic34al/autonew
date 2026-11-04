@@ -2324,7 +2324,7 @@ async def set_anime_channel(client, message: Message):
         text = message.text[len("/addanime"):].strip()
 
         if " - " not in text:
-            return await message.reply("<blockquote><b>Usage: /addanime <anime name> - <channel username or ID></b></blockquote>")
+            return await message.reply("<blockquote><b>Usage:</b> <code>/addanime Anime Name - @ChannelUsername</code></blockquote>")
 
         anime_name, channel = text.split(" - ", 1)
         anime_name = anime_name.strip()
