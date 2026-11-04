@@ -2321,45 +2321,87 @@ async def episode_history(client, message: Message):
 @new_task
 async def set_anime_channel(client, message: Message):
     try:
-        text = message.text[len("/addanime"):].strip()
+        command_text = message.text.split(None, 1)[1].strip() if len(message.text.split(None, 1)) > 1 else ""
+        anime_name = ""
+        final_channel = None
 
-        if " - " not in text:
-            return await message.reply("<blockquote><b>Usage:</b> <code>/addanime Anime Name - @ChannelUsername</code></blockquote>")
+        # Private invite links (https://t.me/+...) cannot be used as channel IDs.
+        # For private channels, reply to a forwarded post from that channel:
+        # /addanime Anime Name
+        if " - " in command_text:
+            anime_name, channel_value = command_text.split(" - ", 1)
+            anime_name = anime_name.strip()
+            channel_value = channel_value.strip()
 
-        anime_name, channel = text.split(" - ", 1)
-        anime_name = anime_name.strip()
-        channel = channel.strip()
+            if channel_value.startswith("https://t.me/+") or channel_value.startswith("https://t.me/joinchat/") or channel_value.startswith("t.me/+") or channel_value.startswith("t.me/joinchat/"):
+                return await message.reply(
+                    "<blockquote><b>This is a private invite link, not a channel ID.</b> "
+                    "Forward a post from that private channel to this bot, reply to the forwarded post, "
+                    "and send <code>/addanime Anime Name</code>.</blockquote>"
+                )
 
-        if not anime_name or not channel:
-            return await message.reply("<blockquote><b>Please provide both the anime name and channel ID.</b></blockquote>")
-
-        if channel.startswith("@"):
-            final_channel = channel
+            if channel_value.startswith("@"):
+                final_channel = channel_value
+            else:
+                try:
+                    final_channel = int(channel_value)
+                except ValueError:
+                    return await message.reply(
+                        "<blockquote><b>Invalid channel.</b> Use @ChannelUsername, a numeric -100 channel ID, "
+                        "or reply to a forwarded post from your private channel.</blockquote>"
+                    )
         else:
-            try:
-                final_channel = int(channel)
-            except ValueError:
-                return await message.reply("<blockquote><b>Invalid channel ID. Please provide a valid channel ID or username.</b></blockquote>")
+            anime_name = command_text
+            replied = message.reply_to_message
+            forwarded_chat = getattr(replied, "forward_from_chat", None) if replied else None
 
-        possible_names = await get_all_possible_anime_names(anime_name)
+            # Newer Pyrogram builds may expose the source via forward_origin.
+            if not forwarded_chat and replied:
+                origin = getattr(replied, "forward_origin", None)
+                forwarded_chat = getattr(origin, "chat", None) if origin else None
 
-        if not possible_names:
-            await db.add_anime_channel_mapping(anime_name, final_channel)
+            if forwarded_chat:
+                final_channel = forwarded_chat.id
+            elif replied and getattr(replied, "chat", None) and getattr(replied.chat, "type", None) == "channel":
+                final_channel = replied.chat.id
+
+        if not anime_name:
             return await message.reply(
-                f"<blockquote><b>No matching variants found for '{anime_name}'. Added the anime manually to the channel '{channel}'.</b></blockquote>"
+                "<blockquote><b>Usage:</b> <code>/addanime Anime Name - @ChannelUsername</code> "
+                "or reply to a forwarded private-channel post with <code>/addanime Anime Name</code>.</blockquote>"
             )
 
-        for name in possible_names:
+        if final_channel is None:
+            return await message.reply(
+                "<blockquote><b>Private channel setup:</b> Forward any post from your private anime channel to this bot, "
+                "then reply to that forwarded post with <code>/addanime Anime Name</code>. "
+                "Make sure the bot is already an administrator in the private channel.</blockquote>"
+            )
+
+        try:
+            chat = await client.get_chat(final_channel)
+        except Exception as e:
+            return await message.reply(
+                f"<blockquote><b>Cannot access that channel.</b> Add this bot as an administrator first, "
+                f"then try again. Details: <code>{str(e)[:250]}</code></blockquote>"
+            )
+
+        possible_names = await get_all_possible_anime_names(anime_name)
+        names_to_save = possible_names or [anime_name]
+        for name in names_to_save:
             await db.add_anime_channel_mapping(name, final_channel)
 
+        channel_label = f"@{chat.username}" if getattr(chat, "username", None) else str(chat.id)
         await message.reply(
-            f"<blockquote><b>Set channel for '{anime_name}' to '{channel}'</b></blockquote>\n"
-            f"<blockquote><b>Mapped variants:</b> <code>{', '.join(possible_names)}</code></blockquote>"
+            f"<blockquote><b>Anime channel saved successfully!</b></blockquote>\n"
+            f"<blockquote><b>Anime:</b> <code>{anime_name}</code>\n"
+            f"<b>Channel:</b> <code>{channel_label}</code>\n"
+            f"<b>Mapped variants:</b> <code>{', '.join(names_to_save)}</code></blockquote>"
         )
 
     except Exception as e:
         print(f"Error occurred while processing the /addanime command: {e}")
-        await message.reply(f"<blockquote><b>Error occurred: {e}</b></blockquote>")
+        await message.reply(f"<blockquote><b>Error occurred:</b> <code>{str(e)[:300]}</code></blockquote>")
 
 
 @bot.on_message(filters.command("delanime") & filters.user(Var.ADMINS))
