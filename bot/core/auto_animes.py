@@ -1176,7 +1176,7 @@ async def process_low_end(name, torrent_url, force=False):
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            for qual in ["360", "480", "720", "1080"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -1269,7 +1269,7 @@ async def process_low_end(name, torrent_url, force=False):
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
-            quality_order = ["480", "720", "1080"]
+            quality_order = ["360", "480", "720", "1080"]
             all_buttons = []
 
             for qual in quality_order:
@@ -1308,7 +1308,7 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080"]
+            required_low_end = ["360", "480", "720", "1080"]
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
@@ -2372,7 +2372,7 @@ async def process_low_end(name, torrent_url, force=False):
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            for qual in ["360", "480", "720", "1080"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -2461,7 +2461,7 @@ async def process_low_end(name, torrent_url, force=False):
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
-            quality_order = ["480", "720", "1080"]
+            quality_order = ["360", "480", "720", "1080"]
             all_buttons = []
 
             for qual in quality_order:
@@ -2500,7 +2500,7 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080"]
+            required_low_end = ["360", "480", "720", "1080"]
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
@@ -3510,7 +3510,7 @@ async def process_low_end(name, torrent_url, force=False):
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            for qual in ["360", "480", "720", "1080"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -3599,7 +3599,7 @@ async def process_low_end(name, torrent_url, force=False):
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
-            quality_order = ["480", "720", "1080"]
+            quality_order = ["360", "480", "720", "1080"]
             all_buttons = []
 
             for qual in quality_order:
@@ -3638,7 +3638,7 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080"]
+            required_low_end = ["360", "480", "720", "1080"]
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
@@ -4648,7 +4648,7 @@ async def process_low_end(name, torrent_url, force=False):
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            for qual in ["360", "480", "720", "1080"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -4737,7 +4737,7 @@ async def process_low_end(name, torrent_url, force=False):
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
-            quality_order = ["480", "720", "1080"]
+            quality_order = ["360", "480", "720", "1080"]
             all_buttons = []
 
             for qual in quality_order:
@@ -4776,7 +4776,7 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080"]
+            required_low_end = ["360", "480", "720", "1080"]
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
@@ -5786,7 +5786,7 @@ async def process_low_end(name, torrent_url, force=False):
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            for qual in ["360", "480", "720", "1080"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -5875,7 +5875,7 @@ async def process_low_end(name, torrent_url, force=False):
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
-            quality_order = ["480", "720", "1080"]
+            quality_order = ["360", "480", "720", "1080"]
             all_buttons = []
 
             for qual in quality_order:
@@ -5914,7 +5914,7 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080"]
+            required_low_end = ["360", "480", "720", "1080"]
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
@@ -6962,7 +6962,7 @@ async def process_low_end(name, torrent_url, force=False):
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            for qual in ["360", "480", "720", "1080"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -7051,7 +7051,7 @@ async def process_low_end(name, torrent_url, force=False):
                 else:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
 
-            quality_order = ["480", "720", "1080"]
+            quality_order = ["360", "480", "720", "1080"]
             all_buttons = []
 
             for qual in quality_order:
@@ -7090,7 +7090,7 @@ async def process_low_end(name, torrent_url, force=False):
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080"]
+            required_low_end = ["360", "480", "720", "1080"]
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
