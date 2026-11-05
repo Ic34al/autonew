@@ -3527,10 +3527,28 @@ async def anime_search_cmd(client, message: Message):
         def normalize(value):
             # Strip release-group prefixes like [SubsPlease] before matching.
             value = re.sub(r"^\s*\[[^]]+\]\s*", "", str(value or ""))
+            value = re.sub(r"\b(480|720|1080|2160)p\b", " ", value, flags=re.IGNORECASE)
             return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
         aliases = {normalize(x) for x in await get_all_possible_anime_names(anime_name) if x}
         aliases.add(normalize(anime_name))
+        # Remove generic words so alternate punctuation/season formatting can
+        # still match without accepting unrelated shows with one shared word.
+        alias_tokens = [
+            set(x.split()) for x in aliases
+            if len(x.split()) >= 2
+        ]
+
+        def title_matches(normalized_title):
+            if not normalized_title:
+                return False
+            if any(x and (x in normalized_title or normalized_title in x) for x in aliases):
+                return True
+            title_tokens = set(normalized_title.split())
+            return any(
+                len(tokens) >= 2 and tokens.issubset(title_tokens)
+                for tokens in alias_tokens
+            )
         feeds = await db.get_all_rss_links()
         urls = [x.get("link") for x in feeds if x.get("type") == "anime" and x.get("link")]
         configured = getattr(Var, "RSS_ITEMS_ANIME", []) or []
@@ -3542,7 +3560,10 @@ async def anime_search_cmd(client, message: Message):
         # is often set to only 1080p, while manual search must find 720p releases.
         low_end_feeds = getattr(Var, "RSS_LOW_END", {}) or {}
         urls.extend(low_end_feeds.values())
+        # Include every commonly published SubsPlease resolution feed.
+        # RSS is rolling, so combine feeds and the API catalogue below.
         urls.extend([
+            "https://subsplease.org/rss/?r=480",
             "https://subsplease.org/rss/?r=720",
             "https://subsplease.org/rss/?r=1080",
         ])
@@ -3560,7 +3581,7 @@ async def anime_search_cmd(client, message: Message):
             for entry in entries:
                 title = str(getattr(entry, "title", "") or "").strip()
                 normalized_title = normalize(title)
-                if not title or not any(x and (x in normalized_title or normalized_title in x) for x in aliases):
+                if not title or not title_matches(normalized_title):
                     continue
                 candidates = []
                 for enclosure in (getattr(entry, "enclosures", None) or []):
@@ -3642,10 +3663,7 @@ async def anime_search_cmd(client, message: Message):
                     if not base_title:
                         base_title = str(item.get("title") or release_key or "").strip()
                     normalized_title = normalize(base_title)
-                    if not base_title or not any(
-                        x and (x in normalized_title or normalized_title in x)
-                        for x in aliases
-                    ):
+                    if not base_title or not title_matches(normalized_title):
                         continue
 
                     downloads = item.get("downloads") or []
@@ -3728,7 +3746,7 @@ async def anime_search_cmd(client, message: Message):
         ANIME_SEARCH_RESULTS[status.id] = {
             "user_id": message.from_user.id,
             "anime": anime_name,
-            "episodes": selected_matches[:30],
+            "episodes": selected_matches,
             "selected": set(),
         }
 
