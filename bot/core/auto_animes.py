@@ -1108,7 +1108,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
-            return
+            return "already_published"
 
         await db.saveAnimeResume(ani_id, ep_no, name, torrent_url)
 
@@ -3374,6 +3374,7 @@ async def get_animes(name, torrent, force=False):
             # Existing Main Channel post is already recorded.
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
+        return "uploaded"
     except Exception as error:
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
