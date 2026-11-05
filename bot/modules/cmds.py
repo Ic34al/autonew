@@ -3862,7 +3862,7 @@ async def anime_search_upload_callback(client, callback_query):
             # Manual /search selections must bypass the in-memory completed/ongoing
             # cache; otherwise a previously scanned episode can be silently skipped.
             # get_animes still checks the persisted Main Channel post to prevent duplicates.
-                        result = await get_animes(title, torrent, force=True, manual_search=True)
+            result = await get_animes(title, torrent, force=True, manual_search=True)
             if result == "already_published":
                 await rep.report(f"/search skipped: already published in Main Channel: {title}", "warning")
             elif result == "uploaded":
