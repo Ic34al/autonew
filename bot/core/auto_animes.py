@@ -5710,14 +5710,8 @@ async def get_animes(name, torrent, force=False):
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
-                try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except FloodWait as flood:
-                    await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except Exception as sticker_error:
-                    await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+                # Episode upload completed. Do not send a standalone sticker;
+                # selected-channel uploads must not create extra Main Channel posts.
 
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
