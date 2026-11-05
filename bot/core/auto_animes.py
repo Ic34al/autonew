@@ -1941,7 +1941,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
