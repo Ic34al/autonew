@@ -3109,84 +3109,109 @@ async def retry_date_callback(client, callback_query):
 @new_task
 @rate_limit(3)
 async def add_custom_task(client, message: Message):
+    """Choose a verified destination channel, then submit an episode RSS URL."""
     try:
-        text = message.text[len("/addtask"):].strip()
-        if not text:
-            return await message.reply(
-                "<b>Usage:</b> <code>/addtask [anime|manga] &lt;rss_link&gt; [position]</code>\n"
-                "<b>Example:</b> <code>/addtask anime https://rss.link/feed 3</code>"
-            )
-        parts = text.split()
-        if len(parts) < 2:
-            return await message.reply(
-                "<b>Usage:</b> <code>/addtask [anime|manga] &lt;rss_link&gt; [position]</code>"
-            )
+        channels = [{"id": int(Var.MAIN_CHANNEL), "name": "Main Channel"}]
+        known = await db.get_all_anime_channels()
+        me = await client.get_me()
+        seen = {int(Var.MAIN_CHANNEL)}
+        for anime_name, raw_id in known.items():
+            try:
+                channel_id = int(raw_id)
+                if channel_id in seen:
+                    continue
+                chat = await client.get_chat(channel_id)
+                member = await client.get_chat_member(channel_id, me.id)
+                status = str(getattr(member, "status", "")).lower()
+                if status.endswith("administrator") or status.endswith("owner") or status.endswith("creator"):
+                    if getattr(member, "can_post_messages", True) is not False:
+                        channels.append({"id": channel_id, "name": (chat.title or anime_name)[:45]})
+                        seen.add(channel_id)
+            except Exception:
+                continue
 
-        if parts[0].lower() in ("anime", "manga"):
-            mode = parts[0].lower()
-            rsslink = parts[1]
-            position = int(parts[2]) - 1 if len(parts) > 2 and parts[2].isdigit() else 0
-        else:
-            rsslink = parts[0]
-            position = int(parts[1]) - 1 if len(parts) > 1 and parts[1].isdigit() else 0
-            mode = parts[2].lower() if len(parts) > 2 and parts[2].lower() in ("anime", "manga") else await db.get_mode()
+        rows = [[InlineKeyboardButton(ch["name"], callback_data=f"addtask_dest:{ch['id']}")]
+                for ch in channels]
+        if len(rows) == 1:
+            await message.reply(
+                "<b>No other verified destination channels were found.</b>\n"
+                "Add the bot as an administrator to a channel and make sure that channel is saved in the bot's channel mappings."
+            )
+            return
+        await message.reply(
+            "<b>Select where this RSS episode should be posted:</b>\n"
+            "<i>Only this manual task uses the selected destination.</i>",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+    except Exception as e:
+        await message.reply(f"<b>Could not load destination channels:</b> {e}")
 
-        status_msg = await message.reply("<blockquote><b>Fetching RSS feed...</b></blockquote>")
+
+@bot.on_callback_query(filters.regex(r"^addtask_dest:(-?\d+)$"))
+async def addtask_destination_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Admin access required.", show_alert=True)
+    try:
+        destination = int(callback_query.data.split(":", 1)[1])
+        chat = await client.get_chat(destination)
+        me = await client.get_me()
+        member = await client.get_chat_member(destination, me.id)
+        status = str(getattr(member, "status", "")).lower()
+        if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
+            return await callback_query.answer("Bot is not an administrator in this channel.", show_alert=True)
+        if getattr(member, "can_post_messages", True) is False:
+            return await callback_query.answer("Bot cannot post in this channel.", show_alert=True)
+
+        await callback_query.answer()
+        await callback_query.message.edit_text(
+            f"<b>Destination:</b> {chat.title or destination}\n"
+            "<b>Now send the RSS URL.</b>\n"
+            "<i>Optional format: RSS_URL POSITION (e.g. 3 selects the third feed item).</i>"
+        )
+        try:
+            reply = await client.ask(
+                chat_id=callback_query.from_user.id,
+                text="Send the RSS URL and optional feed position:",
+                filters=filters.text,
+                timeout=180
+            )
+        except asyncio.TimeoutError:
+            return await callback_query.message.reply("RSS input timed out. Run /addtask again.")
+
+        parts = (reply.text or "").strip().split()
+        if not parts:
+            return await reply.reply("No RSS URL received. Run /addtask again.")
+        rsslink = parts[0]
+        position = max(0, int(parts[1]) - 1) if len(parts) > 1 and parts[1].isdigit() else 0
+        status_msg = await reply.reply("<blockquote><b>Fetching RSS episode...</b></blockquote>")
         taskInfo = await getfeed(rsslink, position)
         if not taskInfo:
             return await status_msg.edit_text(
-                "<blockquote><b><i>Failed to fetch RSS feed\n\n"
-                "Possible reasons:\n"
-                "• Invalid RSS URL\n"
-                "• Feed number out of range\n"
-                "• Feed server not responding</b></blockquote>"
+                "<b>Failed to fetch RSS feed. Check the URL and feed position.</b>"
             )
-
-        await status_msg.edit_text("<blockquote><b>Checking for duplicates...</b></blockquote>")
         if await db.getAnime(taskInfo.link):
             return await status_msg.edit_text(
-                "<blockquote><b>Task already exists or was previously uploaded.</b></blockquote>"
+                "<b>This episode link is already recorded as uploaded.</b>"
             )
 
-        await status_msg.edit_text(
-            f"<blockquote><b><i>Adding Task...</i>\n\n"
-            f"<b>    • Task Name :</b> {taskInfo.title}\n"
-            f"<b>    • Task Link :</b> {position + 1}\n"
-            f"<b>    • Type :</b> {mode.capitalize()}</b></blockquote>"
+        task = bot_loop.create_task(
+            get_animes(taskInfo.title, taskInfo.link, force=True, destination_channel=destination)
         )
-
         job_id = secrets.token_hex(3)
-        if mode == "manga":
-            from bot.core.auto_animes import process_manga_chapter
-            task = bot_loop.create_task(
-                process_manga_chapter(taskInfo.title, taskInfo.link, manual=True)
-            )
-        else:
-            from bot.core.auto_animes import get_animes
-            task = bot_loop.create_task(
-                get_animes(taskInfo.title, taskInfo.link, force=True)
-            )
-
         ADD_TASK_JOBS[job_id] = {
-            "task": task,
-            "title": taskInfo.title,
-            "mode": mode,
-            "user_id": message.from_user.id,
+            "task": task, "title": taskInfo.title, "mode": "anime",
+            "user_id": callback_query.from_user.id, "destination": destination
         }
-        task.add_done_callback(
-            lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None)
-        )
-
+        task.add_done_callback(lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None))
         await status_msg.edit_text(
-            f"<blockquote><b><i>Task Added Successfully!</i>\n\n"
-            f"<b>    • Type :</b> {mode.capitalize()}\n"
-            f"<b>    • Task Name :</b> {taskInfo.title}\n"
-            f"<b>    • Task Link :</b> {position + 1}</b></blockquote>"
+            f"<b>Episode task started.</b>\n"
+            f"<b>Anime:</b> {taskInfo.title}\n"
+            f"<b>Destination:</b> {chat.title or destination}\n"
+            f"<b>Job ID:</b> <code>{job_id}</code>"
         )
-
     except Exception as e:
-        await message.reply(f"<b><blockquote>Error adding task:</b> {str(e)}</blockquote>")
-        await rep.report(f"Task addition error: {str(e)}", "error")
+        await callback_query.message.reply(f"<b>Error adding episode task:</b> {e}")
+        await rep.report(f"Task addition error: {e}", "error")
 
 
 
