@@ -253,8 +253,8 @@ async def force_custom_task(client, message: Message):
 
         await status_msg.edit_text(
             f"<blockquote><b><i>Adding Forced Task...</i>\n\n"
-            f"<b>    • Task Name :</b> {taskInfo.title}\n"
-            f"<b>    • Task Link :</b> {position + 1}\n"
+            f"<b>    • Task Name :</b> {taskInfo.title}\\n"
+            f"<b>    • Task Link :</b> {position + 1}\\n"
             f"<b>    • Type :</b> {mode.capitalize()}</b></blockquote>"
         )
 
@@ -279,8 +279,8 @@ async def force_custom_task(client, message: Message):
 
         await status_msg.edit_text(
             f"<blockquote><b><i>Forced Task Added Successfully!</i>\n\n"
-            f"<b>    • Type :</b> {mode.capitalize()}\n"
-            f"<b>    • Task Name :</b> {taskInfo.title}\n"
+            f"<b>    • Type :</b> {mode.capitalize()}\\n"
+            f"<b>    • Task Name :</b> {taskInfo.title}\\n"
             f"<b>    • Task Link :</b> {position + 1}</b></blockquote>"
         )
 
@@ -417,8 +417,8 @@ async def addgdrive_cmd(client, message: Message):
 
         await message.reply(
             f"<blockquote><i><b>GDrive mapping added</i>\n\n"
-            f"    • Anime : {anime_name}\n"
-            f"    • GDrive Link : {gdrive_link}\n"
+            f"    • Anime : {anime_name}\\n"
+            f"    • GDrive Link : {gdrive_link}\\n"
             f"    • Quality : {quality}p</b></blockquote>"
         )
 
@@ -575,7 +575,7 @@ async def del_gdrive_cmd(client, message: Message):
 
         await message.reply(
             f"<blockquote><b><i>GDrive mapping deleted for all title aliases</i>\n"
-            f"    • Anime : {anime_name}\n"
+            f"    • Anime : {anime_name}\\n"
             f"    • Quality : <code>{quality}p</b></blockquote>"
         )
 
@@ -642,7 +642,7 @@ async def add_batch_cmd(client, message: Message):
         await message.reply(
             f"<blockquote><b><i>Task Added Successfully!</i></b>\n\n"
             f"<b>    • Type :</b> Batch\n"
-            f"<b>    • Task Name :</b> {anime_name}\n"
+            f"<b>    • Task Name :</b> {anime_name}\\n"
             f"<b>    • Audio :</b> {audio}</blockquote>"
         )
 
@@ -1215,10 +1215,10 @@ async def change_channels_cb(client, callback_query):
 
     text = (
         "<b>Channel Settings</b>\n\n"
-        f"• Main Channel: {fmt(main)}\n"
-        f"• Backup Channel: {fmt(backup)}\n"
-        f"• Log Channel: {fmt(logc)}\n"
-        f"• File Store: {fmt(filestore)}\n"
+        f"• Main Channel: {fmt(main)}\\n"
+        f"• Backup Channel: {fmt(backup)}\\n"
+        f"• Log Channel: {fmt(logc)}\\n"
+        f"• File Store: {fmt(filestore)}\\n"
         f"• Backup File Store: {fmt(backup_filestore)}\n\n"
         "Tap a button below to change the corresponding channel. You can forward any message from the channel or send its @username or numeric id when prompted."
     )
@@ -1785,7 +1785,7 @@ async def ping_cmd(client, message):
     ping = await get_ping(bot)
     db_response_time = await get_db_response_time()
     stats_text = (
-        f"<b><blockquote>Bot Uptime: {uptime}\n"
+        f"<b><blockquote>Bot Uptime: {uptime}\\n"
         f"Ping: {ping} ms\n"
         f"Database Response Time: {db_response_time} ms</blockquote></b>\n"
     )
@@ -3150,8 +3150,8 @@ async def add_custom_task(client, message: Message):
 
         await status_msg.edit_text(
             f"<blockquote><b><i>Adding Task...</i>\n\n"
-            f"<b>    • Task Name :</b> {taskInfo.title}\n"
-            f"<b>    • Task Link :</b> {position + 1}\n"
+            f"<b>    • Task Name :</b> {taskInfo.title}\\n"
+            f"<b>    • Task Link :</b> {position + 1}\\n"
             f"<b>    • Type :</b> {mode.capitalize()}</b></blockquote>"
         )
 
@@ -3179,8 +3179,8 @@ async def add_custom_task(client, message: Message):
 
         await status_msg.edit_text(
             f"<blockquote><b><i>Task Added Successfully!</i>\n\n"
-            f"<b>    • Type :</b> {mode.capitalize()}\n"
-            f"<b>    • Task Name :</b> {taskInfo.title}\n"
+            f"<b>    • Type :</b> {mode.capitalize()}\\n"
+            f"<b>    • Task Name :</b> {taskInfo.title}\\n"
             f"<b>    • Task Link :</b> {position + 1}</b></blockquote>"
         )
 
@@ -3229,7 +3229,7 @@ async def cancel_addtask_callback(client, callback_query):
     await callback_query.answer("Cancellation requested.")
     try:
         await callback_query.message.edit_text(
-            f"<b>Cancellation requested for:</b> {job['title']}\n"
+            f"<b>Cancellation requested for:</b> {job['title']}\\n"
             "<i>The task will stop at its next cancellable async operation.</i>"
         )
     except Exception:
@@ -3250,12 +3250,12 @@ async def status_cmd(client, message: Message):
         
         status_text = (
             "<blockquote><b>Bot Status</b>\n\n"
-            f"<b>Mode:</b> {mode.capitalize()}\n"
-            f"<b>Status:</b> {'Paused ❚❚' if paused else 'Running ▷'}\n"
-            f"<b>Encoding:</b> {'Enabled ✓' if encoding else 'Disabled ✘'}\n"
-            f"<b>Channel Creation:</b> {'Enabled ✓' if channel_creation else 'Disabled ✘'}\n"
+            f"<b>Mode:</b> {mode.capitalize()}\\n"
+            f"<b>Status:</b> {'Paused ❚❚' if paused else 'Running ▷'}\\n"
+            f"<b>Encoding:</b> {'Enabled ✓' if encoding else 'Disabled ✘'}\\n"
+            f"<b>Channel Creation:</b> {'Enabled ✓' if channel_creation else 'Disabled ✘'}\\n"
             f"<b>Auto Delete:</b> {'Enabled ✓' if auto_del else 'Disabled ✘'} ({del_timer} min)\n"
-            f"<b>API Source:</b> {api_source.capitalize()}\n"
+            f"<b>API Source:</b> {api_source.capitalize()}\\n"
             f"<b>Active Tasks:</b> {anime_tasks}</blockquote>\n\n"
         )
 
@@ -3400,7 +3400,7 @@ async def cleanup_cmd(client, message: Message):
             
         await status_msg.edit_text(
             f"<blockquote><b>Cleanup completed!</b>\n\n"
-            f"<b>Files removed:</b> {total_files}\n"
+            f"<b>Files removed:</b> {total_files}\\n"
             f"<b>Space freed:</b> {size_str}</blockquote>"
         )
         
