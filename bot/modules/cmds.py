@@ -3572,9 +3572,9 @@ async def anime_search_cmd(client, message: Message):
         import re
         selected = {}
         for title, torrent in matches:
-            ep_match = re.search(r"(?:S\\s*\\d+\\s*[- ]*)?(?:EP?\\s*)?(\\d{1,3})(?:\\s*\\(|\\s*\\[|\\s|$)", title, re.IGNORECASE)
+            ep_match = re.search(r"(?:S\s*\d+\s*[- ]*)?(?:EP?\s*)?(\d{1,3})(?:\s*\(|\s*\[|\s|$)", title, re.IGNORECASE)
             episode_key = ep_match.group(1) if ep_match else title.lower()
-            resolution_match = re.search(r"(360|480|720|1080|2160)\\s*p?", title, re.IGNORECASE)
+            resolution_match = re.search(r"(360|480|720|1080|2160)\s*p?", title, re.IGNORECASE)
             resolution = int(resolution_match.group(1)) if resolution_match else 0
             previous = selected.get(episode_key)
             if previous is None or resolution > previous[0]:
