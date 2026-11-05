@@ -3715,69 +3715,75 @@ async def anime_search_cmd(client, message: Message):
                     )
                     show_pages[page_url] = show_name
 
-            for page_url, show_name in show_pages.items():
-                try:
-                    page_response = await api_client.get(page_url)
-                    page_response.raise_for_status()
-                    sid_match = re.search(
-                        r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
-                        page_response.text,
-                        re.IGNORECASE
-                    )
-                    if not sid_match:
+            # Search/latest client has exited its context by this point.
+            # Open a separate client for historical show-page and f=show requests.
+            async with httpx.AsyncClient(
+                timeout=25,
+                headers={"User-Agent": "Mozilla/5.0"}
+            ) as catalogue_client:
+                for page_url, show_name in show_pages.items():
+                    try:
+                        page_response = await catalogue_client.get(page_url)
+                        page_response.raise_for_status()
                         sid_match = re.search(
-                            r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
+                            r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
                             page_response.text,
                             re.IGNORECASE
                         )
-                    if not sid_match:
-                        await rep.report(f"/search: could not find SubsPlease show ID for {show_name}", "warning")
-                        continue
-
-                    show_response = await api_client.get(
-                        "https://subsplease.org/api/",
-                        params={"f": "show", "tz": "Etc/GMT", "sid": sid_match.group(1)}
-                    )
-                    show_response.raise_for_status()
-                    show_payload = show_response.json()
-                    episode_map = show_payload.get("episode", {}) if isinstance(show_payload, dict) else {}
-                    if isinstance(episode_map, dict):
-                        episode_items = episode_map.values()
-                    elif isinstance(episode_map, list):
-                        episode_items = episode_map
-                    else:
-                        episode_items = []
-
-                    for episode_item in episode_items:
-                        if not isinstance(episode_item, dict):
+                        if not sid_match:
+                            sid_match = re.search(
+                                r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
+                                page_response.text,
+                                re.IGNORECASE
+                            )
+                        if not sid_match:
+                            await rep.report(f"/search: could not find SubsPlease show ID for {show_name}", "warning")
                             continue
-                        episode_no = str(episode_item.get("episode") or "").strip()
-                        if not episode_no:
-                            continue
-                        downloads = episode_item.get("downloads") or []
-                        if isinstance(downloads, dict):
-                            downloads = list(downloads.values())
-                        for download in downloads:
-                            if not isinstance(download, dict):
+    
+                        show_response = await catalogue_client.get(
+                            "https://subsplease.org/api/",
+                            params={"f": "show", "tz": "Etc/GMT", "sid": sid_match.group(1)}
+                        )
+                        show_response.raise_for_status()
+                        show_payload = show_response.json()
+                        episode_map = show_payload.get("episode", {}) if isinstance(show_payload, dict) else {}
+                        if isinstance(episode_map, dict):
+                            episode_items = episode_map.values()
+                        elif isinstance(episode_map, list):
+                            episode_items = episode_map
+                        else:
+                            episode_items = []
+    
+                        for episode_item in episode_items:
+                            if not isinstance(episode_item, dict):
                                 continue
-                            candidate = download.get("magnet") or download.get("torrent") or download.get("url")
-                            if not candidate:
+                            episode_no = str(episode_item.get("episode") or "").strip()
+                            if not episode_no:
                                 continue
-                            candidate = str(candidate).strip()
-                            if not await is_valid_torrent_url(candidate):
-                                continue
-                            resolution = str(download.get("res") or download.get("resolution") or "").strip()
-                            release_title = f"{show_name} - {episode_no}"
-                            if resolution:
-                                release_title += f" [{resolution}p]"
-                            if candidate not in seen:
-                                seen.add(candidate)
-                                matches.append((release_title, candidate))
-                except Exception as show_error:
-                    await rep.report(
-                        f"/search full SubsPlease catalogue failed for {show_name}: {show_error}",
-                        "warning"
-                    )
+                            downloads = episode_item.get("downloads") or []
+                            if isinstance(downloads, dict):
+                                downloads = list(downloads.values())
+                            for download in downloads:
+                                if not isinstance(download, dict):
+                                    continue
+                                candidate = download.get("magnet") or download.get("torrent") or download.get("url")
+                                if not candidate:
+                                    continue
+                                candidate = str(candidate).strip()
+                                if not await is_valid_torrent_url(candidate):
+                                    continue
+                                resolution = str(download.get("res") or download.get("resolution") or "").strip()
+                                release_title = f"{show_name} - {episode_no}"
+                                if resolution:
+                                    release_title += f" [{resolution}p]"
+                                if candidate not in seen:
+                                    seen.add(candidate)
+                                    matches.append((release_title, candidate))
+                    except Exception as show_error:
+                        await rep.report(
+                            f"/search full SubsPlease catalogue failed for {show_name}: {show_error}",
+                            "warning"
+                        )
         except Exception as api_error:
             await rep.report(
                 f"/search SubsPlease API fallback failed for {anime_name}: {api_error}",
