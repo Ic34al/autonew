@@ -129,7 +129,7 @@ async def main():
     # Keep references only to tasks created by this application.
     # Pyrogram owns and manages its internal session tasks.
     tasks = []
-    bot_started = False
+    bot_start_attempted = False
     try:
         LOGS.info("Starting Web Server...")
         await start_server()
@@ -149,8 +149,10 @@ async def main():
         sch.start()
         
         LOGS.info("Starting bot...")
+        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
+        # fail part-way through startup. The finally block must still stop it.
+        bot_start_attempted = True
         await bot.start()
-        bot_started = True
         await restart()
         
         LOGS.info("Starting tasks...")
@@ -164,7 +166,7 @@ async def main():
         await idle()
         
     except Exception as e:
-        LOGS.error(f"Startup Error: {str(e)}")
+        LOGS.exception("Application startup/runtime error")
         raise
     
     finally:
@@ -181,8 +183,11 @@ async def main():
         if tasks:
             await gather(*tasks, return_exceptions=True)
 
-        if bot_started:
-            await bot.stop()
+        if bot_start_attempted:
+            try:
+                await bot.stop()
+            except Exception:
+                LOGS.exception("Error while stopping Pyrogram client during shutdown")
 
         await clean_up()
         LOGS.info('Cleanup complete!')
