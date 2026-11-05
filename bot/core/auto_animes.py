@@ -1086,7 +1086,7 @@ def normalize_title_for_comparison(title):
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return " ".join(value.split())
 
-async def process_low_end(name, torrent_url, force=False):
+async def process_low_end(name, torrent_url, force=False, destination_channel=None):
     try:
         aniInfo = TextEditor(name)
         await aniInfo.load_info()
@@ -1103,7 +1103,7 @@ async def process_low_end(name, torrent_url, force=False):
             return
         ani_cache['ongoing'].add(episode_key)
 
-        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no)
+        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no) if destination_channel in (None, Var.MAIN_CHANNEL, str(Var.MAIN_CHANNEL)) else None
         if existing_main_post:
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
@@ -1131,7 +1131,7 @@ async def process_low_end(name, torrent_url, force=False):
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = destination_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -1314,14 +1314,16 @@ async def process_low_end(name, torrent_url, force=False):
                     f"Low-end episode {name} is not ready to publish; missing qualities: {', '.join(missing_low_end)}"
                 )
 
+            target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
             final_post = await bot.send_photo(
-                Var.MAIN_CHANNEL, photo=photo_url,
+                target_channel, photo=photo_url,
                 caption=final_caption, reply_markup=final_markup
             )
             if not final_post or not getattr(final_post, "id", None):
                 raise RuntimeError(f"Main Channel did not confirm post for {name}.")
 
-            await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
+            if str(target_channel) == str(Var.MAIN_CHANNEL):
+                await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
             for uploaded_qual in file_store_links:
                 await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
             await db.markAnimeResumeComplete(ani_id, ep_no)
@@ -1330,10 +1332,12 @@ async def process_low_end(name, torrent_url, force=False):
 
             try:
                 await asleep(Var.STICKER_INTERVAL)
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                if str(target_channel) == str(Var.MAIN_CHANNEL):
+                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
             except FloodWait as flood:
                 await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                if str(target_channel) == str(Var.MAIN_CHANNEL):
+                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
             except Exception as sticker_error:
                 await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
@@ -1934,7 +1938,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -1963,7 +1967,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None):
         print(f"get_animes: upload_mode={upload_mode}")
         if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
-            await process_low_end(name, torrent)
+            await process_low_end(name, torrent, destination_channel=destination_channel)
             return
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
@@ -1991,8 +1995,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None):
             return
         ani_cache['ongoing'].add(episode_key)
 
-        # If the Main Channel post already exists, never publish it twice.
-        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no)
+        # Main-channel duplicates are checked only for normal/main-channel tasks.
+        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no) if destination_channel in (None, Var.MAIN_CHANNEL, str(Var.MAIN_CHANNEL)) else None
         if existing_main_post:
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
@@ -2162,15 +2166,16 @@ async def get_animes(name, torrent, force=False, qualities_override=None):
                 last_publish_error = None
                 for publish_attempt in range(5):
                     try:
+                        target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
                         if photo_path and ospath.exists(photo_path):
                             with open(photo_path, 'rb') as photo_file:
                                 post_msg = await bot.send_photo(
-                                    Var.MAIN_CHANNEL, photo=photo_file,
+                                    target_channel, photo=photo_file,
                                     caption=caption, reply_markup=markup
                                 )
                         else:
                             post_msg = await bot.send_photo(
-                                Var.MAIN_CHANNEL, photo=photo_url,
+                                target_channel, photo=photo_url,
                                 caption=caption, reply_markup=markup
                             )
                         last_publish_error = None
@@ -2189,21 +2194,24 @@ async def get_animes(name, torrent, force=False, qualities_override=None):
 
                 if last_publish_error is not None or post_msg is None:
                     raise RuntimeError(
-                        f"Failed to publish completed episode to Main Channel: {last_publish_error}"
+                        f"Failed to publish episode to destination channel: {last_publish_error}"
                     )
 
-                # Persist the Main Channel post ID immediately after send succeeds.
-                await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
+                # Only mark the canonical Main Channel post when that was the destination.
+                target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
+                if str(target_channel) == str(Var.MAIN_CHANNEL):
+                    await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
                 try:
                     await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                    if str(target_channel) == str(Var.MAIN_CHANNEL):
+                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
                 except FloodWait as flood:
                     await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
                 except Exception as sticker_error:
                     await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
