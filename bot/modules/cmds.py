@@ -3659,17 +3659,22 @@ async def anime_search_cmd(client, message: Message):
         import re
 
         def extract_episode_number(title):
-            # Prefer the episode number after the season marker (S2 - 04),
-            # rather than accidentally treating the season number as episode 2.
+            # SubsPlease titles vary: "S2 — 04", "S2 - 04",
+            # "S02E04", "Episode 04", or a separate trailing "04".
+            # Normalize every Unicode dash before matching.
+            value = str(title or "").replace("—", "-").replace("–", "-").replace("−", "-")
             patterns = (
-                r"\bS\s*\d+\s*[-._–— ]+\s*0*(\d{1,3})\b",
+                r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b",
+                r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b",
                 r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b",
-                r"[-–]\s*0*(\d{1,3})(?:\s*\(|\s*\[|\s|$)",
+                r"[-._ ]0*(\d{1,3})(?:\s*(?:\(|\[|$))",
             )
             for pattern in patterns:
-                found = re.search(pattern, title, re.IGNORECASE)
+                found = re.search(pattern, value, re.IGNORECASE)
                 if found:
-                    return int(found.group(1))
+                    number = int(found.group(1))
+                    if 1 <= number <= 999:
+                        return number
             return None
 
         selected = {}
@@ -3757,7 +3762,15 @@ def build_anime_search_keyboard(message_id, state):
     import re
     rows = []
     for index, (title, _) in enumerate(state["episodes"]):
-        episode_number = re.search(r"\bS\s*\d+\s*[-._–— ]+\s*0*(\d{1,3})\b|\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b|[-–—]\s*0*(\d{1,3})(?:\s*\(|\s*\[|\s|$)", title, re.IGNORECASE)
+        normalized_title = str(title or "").replace("—", "-").replace("–", "-").replace("−", "-")
+        episode_number = re.search(
+            r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b|"
+            r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b|"
+            r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b|"
+            r"[-._ ]0*(\d{1,3})(?:\s*(?:\(|\[|$))",
+            normalized_title,
+            re.IGNORECASE
+        )
         number = next((group for group in episode_number.groups() if group), None) if episode_number else None
         label = f"Episode {int(number):02d}" if number else f"Release {index + 1}"
         prefix = "☑" if index in state["selected"] else "□"
