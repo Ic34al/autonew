@@ -2211,7 +2211,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                         await send_sticker_to_channel(target_channel, Var.STICKER_ID)
                 except FloodWait as flood:
                     await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                    if str(target_channel) == str(Var.MAIN_CHANNEL):
+                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
                 except Exception as sticker_error:
                     await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
