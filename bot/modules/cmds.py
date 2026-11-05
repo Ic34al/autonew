@@ -3575,48 +3575,72 @@ async def anime_search_cmd(client, message: Message):
                 api_response.raise_for_status()
                 api_payload = api_response.json()
 
-            # Search results are a dictionary keyed by release name. Each
-            # value contains show, episode and downloads[{res, magnet}].
-            api_results = api_payload.get("results", {}) if isinstance(api_payload, dict) else {}
-            if isinstance(api_results, dict):
-                api_items = api_results.items()
-            elif isinstance(api_results, list):
-                api_items = enumerate(api_results)
-            else:
-                api_items = []
+            # Search API can omit an episode that is still present in the
+            # site's latest catalogue. Query both search and latest so a
+            # rolling RSS/search window does not hide episodes such as S2-04.
+            api_payloads = [api_payload]
+            try:
+                latest_response = await api_client.get(
+                    "https://subsplease.org/api/",
+                    params={"f": "latest", "tz": "Etc/GMT"}
+                )
+                latest_response.raise_for_status()
+                api_payloads.append(latest_response.json())
+            except Exception as latest_error:
+                await rep.report(
+                    f"/search SubsPlease latest fallback failed for {anime_name}: {latest_error}",
+                    "warning"
+                )
 
-            for release_key, item in api_items:
-                if not isinstance(item, dict):
+            for payload in api_payloads:
+                if not isinstance(payload, dict):
                     continue
-                show_name = str(item.get("show") or "").strip()
-                episode_name = str(item.get("episode") or "").strip()
-                base_title = " ".join(x for x in (show_name, episode_name) if x).strip()
-                if not base_title:
-                    base_title = str(release_key or item.get("title") or "").strip()
-                normalized_title = normalize(base_title)
-                if not base_title or not any(
-                    x and (x in normalized_title or normalized_title in x)
-                    for x in aliases
-                ):
-                    continue
+                api_results = (
+                    payload.get("results")
+                    or payload.get("latest")
+                    or payload.get("releases")
+                    or payload.get("data")
+                    or {}
+                )
+                if isinstance(api_results, dict):
+                    api_items = list(api_results.items())
+                elif isinstance(api_results, list):
+                    api_items = list(enumerate(api_results))
+                else:
+                    api_items = []
 
-                downloads = item.get("downloads") or []
-                if isinstance(downloads, dict):
-                    downloads = list(downloads.values())
-                for download in downloads:
-                    if not isinstance(download, dict):
+                for release_key, item in api_items:
+                    if not isinstance(item, dict):
                         continue
-                    candidate = download.get("magnet") or download.get("torrent") or download.get("url")
-                    if not candidate:
+                    show_name = str(item.get("show") or "").strip()
+                    episode_name = str(item.get("episode") or "").strip()
+                    base_title = " ".join(x for x in (show_name, episode_name) if x).strip()
+                    if not base_title:
+                        base_title = str(item.get("title") or release_key or "").strip()
+                    normalized_title = normalize(base_title)
+                    if not base_title or not any(
+                        x and (x in normalized_title or normalized_title in x)
+                        for x in aliases
+                    ):
                         continue
-                    candidate = str(candidate).strip()
-                    if not await is_valid_torrent_url(candidate):
-                        continue
-                    resolution = str(download.get("res") or download.get("resolution") or "").strip()
-                    release_title = f"{base_title} [{resolution}p]" if resolution else base_title
-                    if candidate not in seen:
-                        seen.add(candidate)
-                        matches.append((release_title, candidate))
+
+                    downloads = item.get("downloads") or []
+                    if isinstance(downloads, dict):
+                        downloads = list(downloads.values())
+                    for download in downloads:
+                        if not isinstance(download, dict):
+                            continue
+                        candidate = download.get("magnet") or download.get("torrent") or download.get("url")
+                        if not candidate:
+                            continue
+                        candidate = str(candidate).strip()
+                        if not await is_valid_torrent_url(candidate):
+                            continue
+                        resolution = str(download.get("res") or download.get("resolution") or "").strip()
+                        release_title = f"{base_title} [{resolution}p]" if resolution else base_title
+                        if candidate not in seen:
+                            seen.add(candidate)
+                            matches.append((release_title, candidate))
         except Exception as api_error:
             await rep.report(
                 f"/search SubsPlease API fallback failed for {anime_name}: {api_error}",
@@ -3634,17 +3658,40 @@ async def anime_search_cmd(client, message: Message):
         # 480p, 720p, 1080p and HDRip. Do not pass qualities_override here:
         # older deployed get_animes builds do not accept that keyword.
         import re
+
+        def extract_episode_number(title):
+            # Prefer the episode number after the season marker (S2 - 04),
+            # rather than accidentally treating the season number as episode 2.
+            patterns = (
+                r"\bS\s*\d+\s*[-._ ]+\s*0*(\d{1,3})\b",
+                r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b",
+                r"[-–]\s*0*(\d{1,3})(?:\s*\(|\s*\[|\s|$)",
+            )
+            for pattern in patterns:
+                found = re.search(pattern, title, re.IGNORECASE)
+                if found:
+                    return int(found.group(1))
+            return None
+
         selected = {}
         for title, torrent in matches:
-            ep_match = re.search(r"(?:S\s*\d+\s*[- ]*)?(?:EP?\s*)?(\d{1,3})(?:\s*\(|\s*\[|\s|$)", title, re.IGNORECASE)
-            episode_key = ep_match.group(1) if ep_match else title.lower()
+            episode_number = extract_episode_number(title)
+            # Keep unnumbered releases separate; never merge them under a
+            # guessed season number or a common fallback key.
+            episode_key = f"ep{episode_number:03d}" if episode_number is not None else f"release:{torrent}"
             resolution_match = re.search(r"(360|480|720|1080|2160)\s*p?", title, re.IGNORECASE)
             resolution = int(resolution_match.group(1)) if resolution_match else 0
             previous = selected.get(episode_key)
             if previous is None or resolution > previous[0]:
-                selected[episode_key] = (resolution, title, torrent)
+                selected[episode_key] = (resolution, episode_number, title, torrent)
 
-        selected_matches = [(title, torrent) for _, title, torrent in selected.values()]
+        selected_matches = [
+            (title, torrent)
+            for _, _, title, torrent in sorted(
+                selected.values(),
+                key=lambda item: (item[1] is None, item[1] if item[1] is not None else 9999, item[2].lower())
+            )
+        ]
         if not selected_matches:
             return await status.edit_text("<b>No selectable episodes were found.</b>")
 
@@ -3661,8 +3708,8 @@ async def anime_search_cmd(client, message: Message):
             episodes = state["episodes"]
             chosen = state["selected"]
             for index, (title, _) in enumerate(episodes):
-                ep_match = re.search(r"(?:S\s*\d+\s*[- ]*)?(?:EP?\s*)?(\d{1,3})", title, re.IGNORECASE)
-                label = f"Episode {ep_match.group(1)}" if ep_match else f"Release {index + 1}"
+                episode_number = extract_episode_number(title)
+                label = f"Episode {episode_number:02d}" if episode_number is not None else f"Release {index + 1}"
                 prefix = "☑" if index in chosen else "□"
                 rows.append(InlineKeyboardButton(f"{prefix} {label}", callback_data=f"aselect:{message_id}:{index}"))
             keyboard = [rows[i:i + 2] for i in range(0, len(rows), 2)]
@@ -3711,8 +3758,9 @@ def build_anime_search_keyboard(message_id, state):
     import re
     rows = []
     for index, (title, _) in enumerate(state["episodes"]):
-        ep_match = re.search(r"(?:S\s*\d+\s*[- ]*)?(?:EP?\s*)?(\d{1,3})", title, re.IGNORECASE)
-        label = f"Episode {ep_match.group(1)}" if ep_match else f"Release {index + 1}"
+        episode_number = re.search(r"\bS\s*\d+\s*[-._ ]+\s*0*(\d{1,3})\b|\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b|[-–]\s*0*(\d{1,3})(?:\s*\(|\s*\[|\s|$)", title, re.IGNORECASE)
+        number = next((group for group in episode_number.groups() if group), None) if episode_number else None
+        label = f"Episode {int(number):02d}" if number else f"Release {index + 1}"
         prefix = "☑" if index in state["selected"] else "□"
         rows.append(InlineKeyboardButton(f"{prefix} {label}", callback_data=f"aselect:{message_id}:{index}"))
     keyboard = [rows[i:i + 2] for i in range(0, len(rows), 2)]
