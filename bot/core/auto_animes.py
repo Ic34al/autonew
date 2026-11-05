@@ -6881,7 +6881,7 @@ async def find_matching_quality_release(rss_url, requested_title):
             return {"title": candidate_title, "link": candidate_link}
     return None
 
-async def process_low_end(name, torrent_url, force=False, destination_channel=None)
+async def process_low_end(name, torrent_url, force=False, destination_channel=None):
     try:
         aniInfo = TextEditor(name)
         await aniInfo.load_info()
