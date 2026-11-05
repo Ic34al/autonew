@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -4041,6 +4041,19 @@ async def anime_search_destination_callback(client, callback_query):
                 elif result == "uploaded":
                     completed += 1
                     await rep.report(f"/search upload completed in {destination}: {title}", "info")
+                    # The sticker belongs immediately after each episode in
+                    # the exact channel selected in the /search destination step.
+                    try:
+                        await asleep(Var.STICKER_INTERVAL)
+                        await send_sticker_to_channel(destination, Var.STICKER_ID)
+                    except FloodWait as flood:
+                        await asleep(max(1, int(flood.value) + 1))
+                        await send_sticker_to_channel(destination, Var.STICKER_ID)
+                    except Exception as sticker_error:
+                        await rep.report(
+                            f"/search episode uploaded to {destination}, but destination sticker failed: {sticker_error}",
+                            "warning"
+                        )
                 else:
                     failed += 1
                     await rep.report(f"/search did not confirm upload for {title} (result={result!r})", "warning")
