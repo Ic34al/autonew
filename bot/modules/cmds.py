@@ -4047,11 +4047,55 @@ async def anime_search_destination_callback(client, callback_query):
             except Exception as item_error:
                 failed += 1
                 await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
+        # After every selected episode has been processed, publish ONE
+        # Main Channel join-request announcement for the dedicated channel.
+        # No announcement is sent when nothing new was uploaded.
+        main_announcement = None
+        if destination != int(Var.MAIN_CHANNEL) and completed > 0:
+            try:
+                invite = await client.create_chat_invite_link(
+                    destination,
+                    creates_join_request=True
+                )
+                episode_word = "episode" if completed == 1 else "episodes"
+                announcement_text = (
+                    f"<b>{anime_name}</b>\n"
+                    f"<b>{completed} new {episode_word} uploaded!</b>\n\n"
+                    "Join the anime channel to watch."
+                )
+                main_announcement = await client.send_message(
+                    chat_id=Var.MAIN_CHANNEL,
+                    text=announcement_text,
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton(
+                            DOWNLOAD_ANIME_BTN,
+                            url=invite.invite_link
+                        )
+                    ]])
+                )
+                await rep.report(
+                    f"/search Main Channel join-request announcement sent for {anime_name} "
+                    f"(episodes={completed}, message_id={main_announcement.id})",
+                    "info"
+                )
+            except Exception as announce_error:
+                await rep.report(
+                    f"/search episodes uploaded but Main Channel join announcement failed: {announce_error}",
+                    "error"
+                )
+
         await callback_query.message.edit_text(
             f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
             f"<b>Destination:</b> {chat.title or destination}\n"
             f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
-            f"<b>Failed / unconfirmed:</b> {failed}"
+            f"<b>Failed / unconfirmed:</b> {failed}\n"
+            + (
+                "<b>Main Channel:</b> Join-request post sent."
+                if main_announcement else
+                ("<b>Main Channel:</b> No new episodes uploaded; no join post sent."
+                 if destination != int(Var.MAIN_CHANNEL) else
+                 "<b>Main Channel:</b> Episodes were posted directly here.")
+            )
         )
     except Exception as error:
         await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
