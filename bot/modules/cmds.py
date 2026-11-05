@@ -3565,22 +3565,42 @@ async def anime_search_cmd(client, message: Message):
                 "The configured RSS feeds did not contain a matching downloadable entry."
             )
 
+        # One source torrent per episode: prefer the highest available source
+        # (1080p > 720p > SD). The encoder creates the configured output set:
+        # 480p, 720p, 1080p and HDRip. Do not pass qualities_override here:
+        # older deployed get_animes builds do not accept that keyword.
+        import re
+        selected = {}
+        for title, torrent in matches:
+            ep_match = re.search(r"(?:S\\s*\\d+\\s*[- ]*)?(?:EP?\\s*)?(\\d{1,3})(?:\\s*\\(|\\s*\\[|\\s|$)", title, re.IGNORECASE)
+            episode_key = ep_match.group(1) if ep_match else title.lower()
+            resolution_match = re.search(r"(360|480|720|1080|2160)\\s*p?", title, re.IGNORECASE)
+            resolution = int(resolution_match.group(1)) if resolution_match else 0
+            previous = selected.get(episode_key)
+            if previous is None or resolution > previous[0]:
+                selected[episode_key] = (resolution, title, torrent)
+
+        selected_matches = [(title, torrent) for _, title, torrent in selected.values()]
         await status.edit_text(
-            f"<b>Found {len(matches)} matching release(s) for {anime_name}.</b>\n"
-            "<b>Quality:</b> 720p only\n<b>Status:</b> Processing automatically."
+            f"<b>Found {len(matches)} matching RSS release(s) for {anime_name}.</b>\\n"
+            f"<b>Unique episodes selected:</b> {len(selected_matches)}\\n"
+            "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n"
+            "<b>Status:</b> Processing one best source per episode."
         )
         submitted = 0
-        for title, torrent in matches:
+        for title, torrent in selected_matches:
             try:
-                await rep.report(f"/search: processing 720p episode: {title}", "info")
-                await get_animes(title, torrent, force=False, qualities_override=["720"])
+                await rep.report(f"/search: processing episode for four outputs: {title}", "info")
+                await get_animes(title, torrent, force=False)
                 submitted += 1
             except Exception as item_error:
                 await rep.report(f"/search episode failed ({title}): {item_error}", "error")
         await status.edit_text(
-            f"<b>Search complete:</b> <code>{anime_name}</code>\n"
-            f"<b>Matching RSS entries:</b> {len(matches)}\n"
-            f"<b>Submitted:</b> {submitted}\n<b>Quality:</b> 720p only\n"
+            f"<b>Search complete:</b> <code>{anime_name}</code>\\n"
+            f"<b>Matching RSS entries:</b> {len(matches)}\\n"
+            f"<b>Unique episodes selected:</b> {len(selected_matches)}\\n"
+            f"<b>Submitted:</b> {submitted}\\n"
+            "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n"
             "Previously published episodes are skipped by the episode database."
         )
     except Exception as error:
