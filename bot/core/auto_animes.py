@@ -2237,14 +2237,18 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
-                try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-                except FloodWait as flood:
-                    await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-                except Exception as sticker_error:
-                    await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+                # Manual /search uploads send their sticker from the selection
+                # workflow, using the exact chosen destination. This prevents
+                # the generic uploader path from placing it in Main Channel.
+                if not manual_search:
+                    try:
+                        await asleep(Var.STICKER_INTERVAL)
+                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                    except FloodWait as flood:
+                        await asyncio.sleep(max(1, int(flood.value) + 1))
+                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                    except Exception as sticker_error:
+                        await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
