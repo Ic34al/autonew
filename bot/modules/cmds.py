@@ -3862,14 +3862,23 @@ async def anime_search_upload_callback(client, callback_query):
             # Manual /search selections must bypass the in-memory completed/ongoing
             # cache; otherwise a previously scanned episode can be silently skipped.
             # get_animes still checks the persisted Main Channel post to prevent duplicates.
-            await get_animes(title, torrent, force=True)
+                        result = await get_animes(title, torrent, force=True, manual_search=True)
+            if result == "already_published":
+                await rep.report(f"/search skipped: already published in Main Channel: {title}", "warning")
+            elif result == "uploaded":
+                await rep.report(f"/search upload completed successfully: {title}", "info")
+            else:
+                await rep.report(
+                    f"/search handler returned without a confirmed upload for {title} (result={result!r}). Check preceding Anime Logs.",
+                    "warning"
+                )
             submitted += 1
         except Exception as item_error:
             await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
     await callback_query.message.edit_text(
-        f"<b>Selected upload finished:</b> <code>{anime_name}</code>\n"
-        f"<b>Selected:</b> {len(queue)}\n<b>Submitted:</b> {submitted}\n"
-        "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip"
+        f"<b>Selected upload processing ended:</b> <code>{anime_name}</code>\n"
+        f"<b>Selected:</b> {len(queue)}\n<b>Processed by handler:</b> {submitted}\n"
+        "<i>Check Anime Logs for confirmed download, upload and channel-post results.</i>"
     )
 
 # Admin commands: dedicated anime channel routing
