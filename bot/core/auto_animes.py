@@ -1097,7 +1097,23 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             return
         ani_cache['ongoing'].add(episode_key)
 
-        target_channel = int(destination_channel) if destination_channel is not None else int(Var.MAIN_CHANNEL)
+        # Resolve the mapped anime channel for automatic releases too.
+        # Previously low-end mode always defaulted to MAIN_CHANNEL and bypassed /addanime.
+        if destination_channel is not None:
+            channel_to_use = destination_channel
+        else:
+            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+
+        channel_info = await validate_channel_id(channel_to_use)
+        if not channel_info:
+            await rep.report(
+                f"Anime destination {channel_to_use} is unavailable; falling back to Main Channel.",
+                "error"
+            )
+            channel_to_use = Var.MAIN_CHANNEL
+            channel_info = await validate_channel_id(channel_to_use)
+
+        target_channel = int(channel_info.id) if channel_info else int(Var.MAIN_CHANNEL)
         existing_target_post = (
             await db.getAnimeMainPost(ani_id, ep_no)
             if target_channel == int(Var.MAIN_CHANNEL)
@@ -1311,16 +1327,30 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                     f"Low-end episode {name} is not ready to publish; missing qualities: {', '.join(missing_low_end)}"
                 )
 
-            target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
-            final_post = await bot.send_photo(
+            # Publish the quality/download buttons in the anime's own channel.
+            episode_post = await bot.send_photo(
                 target_channel, photo=photo_url,
                 caption=final_caption, reply_markup=final_markup
             )
-            if not final_post or not getattr(final_post, "id", None):
-                raise RuntimeError(f"Main Channel did not confirm post for {name}.")
+            if not episode_post or not getattr(episode_post, "id", None):
+                raise RuntimeError(f"Anime channel did not confirm post for {name}.")
 
-            if str(target_channel) == str(Var.MAIN_CHANNEL):
-                await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
+            if target_channel != int(Var.MAIN_CHANNEL):
+                # Main Channel announcement has one button only; it creates a
+                # join-request invite for this anime-specific channel.
+                watch_markup = await build_anime_watch_markup(target_channel)
+                final_post = await bot.send_photo(
+                    Var.MAIN_CHANNEL, photo=photo_url,
+                    caption=final_caption, reply_markup=watch_markup
+                )
+                if not final_post or not getattr(final_post, "id", None):
+                    raise RuntimeError(f"Main Channel announcement failed for {name}.")
+                await db.saveAnimeDestinationPost(ani_id, ep_no, target_channel, episode_post.id)
+                await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
+            else:
+                final_post = episode_post
+
+            await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
             for uploaded_qual in file_store_links:
                 await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
             await db.markAnimeResumeComplete(ani_id, ep_no)
@@ -1329,12 +1359,15 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
             try:
                 await asleep(Var.STICKER_INTERVAL)
-                if str(target_channel) == str(Var.MAIN_CHANNEL):
-                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                if target_channel != int(Var.MAIN_CHANNEL):
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
             except FloodWait as flood:
                 await asyncio.sleep(max(1, int(flood.value) + 1))
-                if str(target_channel) == str(Var.MAIN_CHANNEL):
-                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                if target_channel != int(Var.MAIN_CHANNEL):
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
             except Exception as sticker_error:
                 await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
