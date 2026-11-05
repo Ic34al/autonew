@@ -3846,40 +3846,93 @@ async def anime_search_upload_callback(client, callback_query):
     chosen = sorted(state["selected"])
     if not chosen:
         return await callback_query.answer("Select at least one episode first.", show_alert=True)
-    queue = [state["episodes"][i] for i in chosen]
-    anime_name = state["anime"]
-    ANIME_SEARCH_RESULTS.pop(message_id, None)
-    await callback_query.answer(f"Uploading {len(queue)} selected episode(s).")
-    await callback_query.message.edit_text(
-        f"<b>Uploading selected episodes:</b> <code>{anime_name}</code>\n"
-        f"<b>Selected:</b> {len(queue)}\n"
-        "<b>Qualities:</b> 480p | 720p | 1080p | HDRip"
-    )
-    submitted = 0
-    for title, torrent in queue:
+
+    channels = [{"id": int(Var.MAIN_CHANNEL), "name": "Main Channel"}]
+    known = await db.get_all_anime_channels()
+    me = await client.get_me()
+    seen = {int(Var.MAIN_CHANNEL)}
+    for anime_name, raw_id in known.items():
         try:
-            await rep.report(f"/search selected upload: {title}", "info")
-            # Manual /search selections must bypass the in-memory completed/ongoing
-            # cache; otherwise a previously scanned episode can be silently skipped.
-            # get_animes still checks the persisted Main Channel post to prevent duplicates.
-            result = await get_animes(title, torrent, force=True, manual_search=True)
-            if result == "already_published":
-                await rep.report(f"/search skipped: already published in Main Channel: {title}", "warning")
-            elif result == "uploaded":
-                await rep.report(f"/search upload completed successfully: {title}", "info")
-            else:
-                await rep.report(
-                    f"/search handler returned without a confirmed upload for {title} (result={result!r}). Check preceding Anime Logs.",
-                    "warning"
-                )
-            submitted += 1
-        except Exception as item_error:
-            await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
+            channel_id = int(raw_id)
+            if channel_id in seen:
+                continue
+            chat = await client.get_chat(channel_id)
+            member = await client.get_chat_member(channel_id, me.id)
+            status = str(getattr(member, "status", "")).lower()
+            if (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")) and getattr(member, "can_post_messages", True) is not False:
+                channels.append({"id": channel_id, "name": (chat.title or anime_name)[:45]})
+                seen.add(channel_id)
+        except Exception:
+            continue
+
+    rows = [[InlineKeyboardButton(ch["name"], callback_data=f"searchdest:{message_id}:{ch['id']}")] for ch in channels]
+    await callback_query.answer()
     await callback_query.message.edit_text(
-        f"<b>Selected upload processing ended:</b> <code>{anime_name}</code>\n"
-        f"<b>Selected:</b> {len(queue)}\n<b>Processed by handler:</b> {submitted}\n"
-        "<i>Check Anime Logs for confirmed download, upload and channel-post results.</i>"
+        f"<b>Selected episodes:</b> {len(chosen)}\n"
+        f"<b>Anime:</b> <code>{state['anime']}</code>\n"
+        "<b>Choose the channel where these episodes should be posted:</b>",
+        reply_markup=InlineKeyboardMarkup(rows)
     )
+
+
+@bot.on_callback_query(filters.regex(r"^searchdest:(\d+):(-?\d+)$"))
+async def anime_search_destination_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    _, raw_message_id, raw_destination = callback_query.data.split(":")
+    message_id, destination = int(raw_message_id), int(raw_destination)
+    state = ANIME_SEARCH_RESULTS.get(message_id)
+    if not state or state["user_id"] != callback_query.from_user.id:
+        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+    try:
+        chat = await client.get_chat(destination)
+        me = await client.get_me()
+        member = await client.get_chat_member(destination, me.id)
+        status = str(getattr(member, "status", "")).lower()
+        if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
+            return await callback_query.answer("Bot is not an administrator in this channel.", show_alert=True)
+        if getattr(member, "can_post_messages", True) is False:
+            return await callback_query.answer("Bot cannot post in this channel.", show_alert=True)
+
+        queue = [state["episodes"][i] for i in sorted(state["selected"])]
+        anime_name = state["anime"]
+        ANIME_SEARCH_RESULTS.pop(message_id, None)
+        await callback_query.answer(f"Uploading {len(queue)} episode(s).")
+        await callback_query.message.edit_text(
+            f"<b>Uploading selected episodes:</b> <code>{anime_name}</code>\n"
+            f"<b>Destination:</b> {chat.title or destination}\n"
+            f"<b>Selected:</b> {len(queue)}"
+        )
+        completed = skipped = failed = 0
+        for title, torrent in queue:
+            try:
+                await rep.report(f"/search selected upload to {destination}: {title}", "info")
+                result = await get_animes(
+                    title, torrent, force=True, manual_search=True,
+                    destination_channel=destination
+                )
+                if result == "already_published":
+                    skipped += 1
+                    await rep.report(f"/search skipped: already posted in selected channel {destination}: {title}", "warning")
+                elif result == "uploaded":
+                    completed += 1
+                    await rep.report(f"/search upload completed in {destination}: {title}", "info")
+                else:
+                    failed += 1
+                    await rep.report(f"/search did not confirm upload for {title} (result={result!r})", "warning")
+            except Exception as item_error:
+                failed += 1
+                await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
+        await callback_query.message.edit_text(
+            f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
+            f"<b>Destination:</b> {chat.title or destination}\n"
+            f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
+            f"<b>Failed / unconfirmed:</b> {failed}"
+        )
+    except Exception as error:
+        await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
+        await rep.report(f"/search destination upload error: {error}", "error")
+
 
 # Admin commands: dedicated anime channel routing
 @bot.on_message(filters.command("channeladd") & filters.private & filters.user(Var.ADMINS))
