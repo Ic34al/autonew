@@ -7818,7 +7818,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         # episode even after it falls out of the RSS feed window.
         await db.saveAnimeResume(ani_id, ep_no, name, torrent)
         
-        if force or not existing_main_post:
+        if force or not existing_target_post:
             
             if "[Batch]" in name or "(Batch)" in name:
                 await rep.report(f"Batch torrent detected; processing 720p batch: {name}", "info")
