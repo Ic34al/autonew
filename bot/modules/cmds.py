@@ -4041,19 +4041,6 @@ async def anime_search_destination_callback(client, callback_query):
                 elif result == "uploaded":
                     completed += 1
                     await rep.report(f"/search upload completed in {destination}: {title}", "info")
-                    # The sticker belongs immediately after each episode in
-                    # the exact channel selected in the /search destination step.
-                    try:
-                        await asleep(Var.STICKER_INTERVAL)
-                        await send_sticker_to_channel(destination, Var.STICKER_ID)
-                    except FloodWait as flood:
-                        await asleep(max(1, int(flood.value) + 1))
-                        await send_sticker_to_channel(destination, Var.STICKER_ID)
-                    except Exception as sticker_error:
-                        await rep.report(
-                            f"/search episode uploaded to {destination}, but destination sticker failed: {sticker_error}",
-                            "warning"
-                        )
                 else:
                     failed += 1
                     await rep.report(f"/search did not confirm upload for {title} (result={result!r})", "warning")
@@ -4070,22 +4057,82 @@ async def anime_search_destination_callback(client, callback_query):
                     destination,
                     creates_join_request=True
                 )
-                episode_word = "episode" if completed == 1 else "episodes"
+                # Build one premium, thumbnail-led announcement after all
+                # selected episodes have finished uploading. Keep the exact
+                # episode numbers (including gaps) rather than implying a range.
+                episode_numbers = []
+                for episode_title, _torrent in queue:
+                    try:
+                        parsed_episode = TextEditor(episode_title).pdata.get("episode_number")
+                        if parsed_episode is not None:
+                            episode_numbers.append(int(parsed_episode))
+                    except (TypeError, ValueError):
+                        continue
+                episode_numbers = sorted(set(episode_numbers))
+                episode_label = (
+                    ", ".join(f"{number:02d}" for number in episode_numbers)
+                    if episode_numbers else f"{completed} uploaded"
+                )
+
+                metadata = TextEditor(anime_name)
+                await metadata.load_info()
+                anime_data = metadata.adata or {}
+                anime_title_data = anime_data.get("title") or {}
+                display_title = (
+                    anime_title_data.get("english")
+                    or anime_title_data.get("romaji")
+                    or anime_name
+                )
+                synopsis = re.sub(r"<[^>]+>", "", anime_data.get("description") or "")
+                synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+                if len(synopsis) > 220:
+                    synopsis = synopsis[:217].rsplit(" ", 1)[0] + "..."
+                genres = ", ".join(anime_data.get("genres") or []) or "Anime"
+                status = str(anime_data.get("status") or "ONGOING").replace("_", " ").title()
+                season_value = metadata.pdata.get("anime_season") or "01"
+                if isinstance(season_value, list):
+                    season_value = season_value[-1] if season_value else "01"
+                audio_value = metadata.pdata.get("audio_type") or "Japanese [English Sub]"
+                quality_value = metadata.pdata.get("quality_label") or "Multi Quality"
+
                 announcement_text = (
-                    f"<b>{anime_name}</b>\n"
-                    f"<b>{completed} new {episode_word} uploaded!</b>\n\n"
-                    "Join the anime channel to watch."
+                    f"<blockquote><b>✦ {display_title} ✦</b></blockquote>\\n"
+                    "<b>╔━━━━━━━━━━━━━━━━━━━━━╗</b>\\n"
+                    f"<blockquote><b>⌲ Season:</b> <i>{season_value}</i>\\n"
+                    f"<b>❍ Episodes Added:</b> <i>{episode_label}</i>\\n"
+                    f"<b>▣ Quality:</b> <i>{quality_value}</i>\\n"
+                    f"<b>◉ Audio:</b> <i>{audio_value}</i></blockquote>\\n"
+                    "<b>╚━━━━━━━━━━━━━━━━━━━━━╝</b>\\n"
+                    f"<blockquote><b>♡ Genres:</b> <i>{genres}</i>\\n"
+                    f"<b>✧ Status:</b> <i>{status}</i></blockquote>\\n"
+                    + (f"<blockquote><b>▸ Synopsis:</b> <i>{synopsis}</i></blockquote>\\n" if synopsis else "")
+                    + "<blockquote><b>ANIME SOUL</b> • New episodes are now available!</blockquote>"
                 )
-                main_announcement = await client.send_message(
-                    chat_id=Var.MAIN_CHANNEL,
-                    text=announcement_text,
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton(
-                            '• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •',
-                            url=invite.invite_link
-                        )
-                    ]])
-                )
+                watch_markup = InlineKeyboardMarkup([[
+                    InlineKeyboardButton(
+                        "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •",
+                        url=invite.invite_link
+                    )
+                ]])
+                poster_url = await metadata.get_poster()
+                try:
+                    main_announcement = await client.send_photo(
+                        chat_id=Var.MAIN_CHANNEL,
+                        photo=poster_url,
+                        caption=announcement_text,
+                        reply_markup=watch_markup
+                    )
+                except Exception as photo_error:
+                    await rep.report(
+                        f"/search poster send failed for {anime_name}; sending text fallback: {photo_error}",
+                        "warning"
+                    )
+                    main_announcement = await client.send_message(
+                        chat_id=Var.MAIN_CHANNEL,
+                        text=announcement_text,
+                        reply_markup=watch_markup,
+                        disable_web_page_preview=True
+                    )
                 await rep.report(
                     f"/search Main Channel join-request announcement sent for {anime_name} "
                     f"(episodes={completed}, message_id={main_announcement.id})",
