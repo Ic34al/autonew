@@ -3575,22 +3575,21 @@ async def anime_search_cmd(client, message: Message):
                 api_response.raise_for_status()
                 api_payload = api_response.json()
 
-            # Search API can omit an episode that is still present in the
-            # site's latest catalogue. Query both search and latest so a
-            # rolling RSS/search window does not hide episodes such as S2-04.
-            api_payloads = [api_payload]
-            try:
-                latest_response = await api_client.get(
-                    "https://subsplease.org/api/",
-                    params={"f": "latest", "tz": "Etc/GMT"}
-                )
-                latest_response.raise_for_status()
-                api_payloads.append(latest_response.json())
-            except Exception as latest_error:
-                await rep.report(
-                    f"/search SubsPlease latest fallback failed for {anime_name}: {latest_error}",
-                    "warning"
-                )
+                # Search API can omit an episode that is still present in the
+                # site's latest catalogue. Query latest while the client is open.
+                api_payloads = [api_payload]
+                try:
+                    latest_response = await api_client.get(
+                        "https://subsplease.org/api/",
+                        params={"f": "latest", "tz": "Etc/GMT"}
+                    )
+                    latest_response.raise_for_status()
+                    api_payloads.append(latest_response.json())
+                except Exception as latest_error:
+                    await rep.report(
+                        f"/search SubsPlease latest fallback failed for {anime_name}: {latest_error}",
+                        "warning"
+                    )
 
             for payload in api_payloads:
                 if not isinstance(payload, dict):
