@@ -1357,19 +1357,10 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            try:
-                await asleep(Var.STICKER_INTERVAL)
-                await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-                if target_channel != int(Var.MAIN_CHANNEL):
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except FloodWait as flood:
-                await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-                if target_channel != int(Var.MAIN_CHANNEL):
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except Exception as sticker_error:
-                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+            # Do not send episode stickers to either the selected channel or
+            # Main Channel. The selected-channel workflow is episode-only;
+            # Main Channel receives only its configured joining announcement.
+
 
             if stat_msg:
                 await stat_msg.delete()
@@ -4587,14 +4578,8 @@ async def get_animes(name, torrent, force=False):
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
-                try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except FloodWait as flood:
-                    await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except Exception as sticker_error:
-                    await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+                # No standalone sticker for an episode uploaded through a
+                # selected destination. Main Channel gets only the joining post.
 
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
@@ -7218,15 +7203,9 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            try:
-                await asleep(Var.STICKER_INTERVAL)
-                if destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
-                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-            except FloodWait as flood:
-                await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except Exception as sticker_error:
-                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
+            # Selected-channel episode uploads must never create a sticker
+            # message in Main Channel. Keep this workflow sticker-free.
+
 
             if stat_msg:
                 await stat_msg.delete()
