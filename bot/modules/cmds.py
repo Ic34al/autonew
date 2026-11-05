@@ -3564,35 +3564,59 @@ async def anime_search_cmd(client, message: Message):
         try:
             import httpx
             async with httpx.AsyncClient(
-                timeout=20,
+                timeout=25,
                 headers={"User-Agent": "Mozilla/5.0"}
             ) as api_client:
+                # SubsPlease search uses the "s" parameter (not "q").
                 api_response = await api_client.get(
                     "https://subsplease.org/api/",
-                    params={"f": "search", "q": anime_name}
+                    params={"f": "search", "tz": "Etc/GMT", "s": anime_name}
                 )
                 api_response.raise_for_status()
                 api_payload = api_response.json()
-            for item in api_payload.get("results", []) or []:
-                title = str(item.get("title") or "").strip()
-                normalized_title = normalize(title)
-                if not title or not any(
+
+            # Search results are a dictionary keyed by release name. Each
+            # value contains show, episode and downloads[{res, magnet}].
+            api_results = api_payload.get("results", {}) if isinstance(api_payload, dict) else {}
+            if isinstance(api_results, dict):
+                api_items = api_results.items()
+            elif isinstance(api_results, list):
+                api_items = enumerate(api_results)
+            else:
+                api_items = []
+
+            for release_key, item in api_items:
+                if not isinstance(item, dict):
+                    continue
+                show_name = str(item.get("show") or "").strip()
+                episode_name = str(item.get("episode") or "").strip()
+                base_title = " ".join(x for x in (show_name, episode_name) if x).strip()
+                if not base_title:
+                    base_title = str(release_key or item.get("title") or "").strip()
+                normalized_title = normalize(base_title)
+                if not base_title or not any(
                     x and (x in normalized_title or normalized_title in x)
                     for x in aliases
                 ):
                     continue
-                candidates = [
-                    item.get("magnet"),
-                    item.get("torrent"),
-                    item.get("link"),
-                ]
-                for candidate in candidates:
-                    if candidate and await is_valid_torrent_url(str(candidate)):
-                        candidate = str(candidate).strip()
-                        if candidate not in seen:
-                            seen.add(candidate)
-                            matches.append((title, candidate))
-                        break
+
+                downloads = item.get("downloads") or []
+                if isinstance(downloads, dict):
+                    downloads = list(downloads.values())
+                for download in downloads:
+                    if not isinstance(download, dict):
+                        continue
+                    candidate = download.get("magnet") or download.get("torrent") or download.get("url")
+                    if not candidate:
+                        continue
+                    candidate = str(candidate).strip()
+                    if not await is_valid_torrent_url(candidate):
+                        continue
+                    resolution = str(download.get("res") or download.get("resolution") or "").strip()
+                    release_title = f"{base_title} [{resolution}p]" if resolution else base_title
+                    if candidate not in seen:
+                        seen.add(candidate)
+                        matches.append((release_title, candidate))
         except Exception as api_error:
             await rep.report(
                 f"/search SubsPlease API fallback failed for {anime_name}: {api_error}",
