@@ -3719,7 +3719,12 @@ async def anime_search_cmd(client, message: Message):
             # Open a separate client for historical show-page and f=show requests.
             async with httpx.AsyncClient(
                 timeout=25,
-                headers={"User-Agent": "Mozilla/5.0"}
+                follow_redirects=True,
+                max_redirects=10,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; AnimeSoulBot/1.0)",
+                    "Accept": "text/html,application/json,*/*",
+                }
             ) as catalogue_client:
                 for page_url, show_name in show_pages.items():
                     try:
