@@ -3859,7 +3859,10 @@ async def anime_search_upload_callback(client, callback_query):
     for title, torrent in queue:
         try:
             await rep.report(f"/search selected upload: {title}", "info")
-            await get_animes(title, torrent, force=False)
+            # Manual /search selections must bypass the in-memory completed/ongoing
+            # cache; otherwise a previously scanned episode can be silently skipped.
+            # get_animes still checks the persisted Main Channel post to prevent duplicates.
+            await get_animes(title, torrent, force=True)
             submitted += 1
         except Exception as item_error:
             await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
