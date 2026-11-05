@@ -3559,10 +3559,50 @@ async def anime_search_cmd(client, message: Message):
                 if torrent and torrent not in seen:
                     seen.add(torrent)
                     matches.append((title, torrent))
+        # RSS is a rolling feed and can omit older releases that remain listed
+        # on the SubsPlease show page. Supplement it with SubsPlease's search API.
+        try:
+            import httpx
+            async with httpx.AsyncClient(
+                timeout=20,
+                headers={"User-Agent": "Mozilla/5.0"}
+            ) as api_client:
+                api_response = await api_client.get(
+                    "https://subsplease.org/api/",
+                    params={"f": "search", "q": anime_name}
+                )
+                api_response.raise_for_status()
+                api_payload = api_response.json()
+            for item in api_payload.get("results", []) or []:
+                title = str(item.get("title") or "").strip()
+                normalized_title = normalize(title)
+                if not title or not any(
+                    x and (x in normalized_title or normalized_title in x)
+                    for x in aliases
+                ):
+                    continue
+                candidates = [
+                    item.get("magnet"),
+                    item.get("torrent"),
+                    item.get("link"),
+                ]
+                for candidate in candidates:
+                    if candidate and await is_valid_torrent_url(str(candidate)):
+                        candidate = str(candidate).strip()
+                        if candidate not in seen:
+                            seen.add(candidate)
+                            matches.append((title, candidate))
+                        break
+        except Exception as api_error:
+            await rep.report(
+                f"/search SubsPlease API fallback failed for {anime_name}: {api_error}",
+                "warning"
+            )
+
         if not matches:
             return await status.edit_text(
                 f"<b>No matching torrent release found:</b> <code>{anime_name}</code>\n"
-                "The configured RSS feeds did not contain a matching downloadable entry."
+                "RSS and SubsPlease search API did not return a usable torrent link."
             )
 
         # One source torrent per episode: prefer the highest available source
