@@ -1103,10 +1103,13 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             return
         ani_cache['ongoing'].add(episode_key)
 
-        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no) if destination_channel in (None, Var.MAIN_CHANNEL, str(Var.MAIN_CHANNEL)) else None
-        if existing_main_post:
-            await db.markAnimeResumeComplete(ani_id, ep_no)
-            ani_cache['completed'].add(episode_key)
+        target_channel = int(destination_channel) if destination_channel is not None else int(Var.MAIN_CHANNEL)
+        existing_target_post = (
+            await db.getAnimeMainPost(ani_id, ep_no)
+            if target_channel == int(Var.MAIN_CHANNEL)
+            else await db.getAnimeDestinationPost(ani_id, ep_no, target_channel)
+        )
+        if existing_target_post:
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
@@ -1131,7 +1134,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = destination_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -2015,7 +2018,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
             
             channel_valid = False
             for attempt in range(3):
@@ -2199,20 +2202,20 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
 
                 # Only mark the canonical Main Channel post when that was the destination.
                 target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
-                if str(target_channel) == str(Var.MAIN_CHANNEL):
+                if int(target_channel) == int(Var.MAIN_CHANNEL):
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
+                else:
+                    await db.saveAnimeDestinationPost(ani_id, ep_no, target_channel, post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
                 try:
                     await asleep(Var.STICKER_INTERVAL)
-                    if str(target_channel) == str(Var.MAIN_CHANNEL):
-                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
                 except FloodWait as flood:
                     await asyncio.sleep(max(1, int(flood.value) + 1))
-                    if str(target_channel) == str(Var.MAIN_CHANNEL):
-                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
+                    await send_sticker_to_channel(target_channel, Var.STICKER_ID)
                 except Exception as sticker_error:
                     await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
@@ -2336,7 +2339,7 @@ async def process_low_end(name, torrent_url, force=False):
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -3165,7 +3168,7 @@ async def get_animes(name, torrent, force=False):
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
             
             channel_valid = False
             for attempt in range(3):
@@ -3475,7 +3478,7 @@ async def process_low_end(name, torrent_url, force=False):
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -4304,7 +4307,7 @@ async def get_animes(name, torrent, force=False):
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
             
             channel_valid = False
             for attempt in range(3):
@@ -4613,7 +4616,7 @@ async def process_low_end(name, torrent_url, force=False):
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -5442,7 +5445,7 @@ async def get_animes(name, torrent, force=False):
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
             
             channel_valid = False
             for attempt in range(3):
@@ -5751,7 +5754,7 @@ async def process_low_end(name, torrent_url, force=False):
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -6580,7 +6583,7 @@ async def get_animes(name, torrent, force=False):
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
             
             channel_valid = False
             for attempt in range(3):
@@ -6927,7 +6930,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
 
             channel_valid = False
             for attempt in range(3):
@@ -7757,10 +7760,13 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         ani_cache['ongoing'].add(episode_key)
 
         # If the Main Channel post already exists, never publish it twice.
-        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no) if destination_channel in (None, Var.MAIN_CHANNEL, str(Var.MAIN_CHANNEL)) else None
-        if existing_main_post:
-            await db.markAnimeResumeComplete(ani_id, ep_no)
-            ani_cache['completed'].add(episode_key)
+        target_channel = int(destination_channel) if destination_channel is not None else int(Var.MAIN_CHANNEL)
+        existing_target_post = (
+            await db.getAnimeMainPost(ani_id, ep_no)
+            if target_channel == int(Var.MAIN_CHANNEL)
+            else await db.getAnimeDestinationPost(ani_id, ep_no, target_channel)
+        )
+        if existing_target_post:
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
@@ -7782,7 +7788,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = destination_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
             
             channel_valid = False
             for attempt in range(3):
