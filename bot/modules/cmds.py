@@ -3581,32 +3581,144 @@ async def anime_search_cmd(client, message: Message):
                 selected[episode_key] = (resolution, title, torrent)
 
         selected_matches = [(title, torrent) for _, title, torrent in selected.values()]
+        if not selected_matches:
+            return await status.edit_text("<b>No selectable episodes were found.</b>")
+
+        # Keep the search results pending until the admin chooses episodes.
+        ANIME_SEARCH_RESULTS[status.id] = {
+            "user_id": message.from_user.id,
+            "anime": anime_name,
+            "episodes": selected_matches[:30],
+            "selected": set(),
+        }
+
+        def build_episode_keyboard(message_id, state):
+            rows = []
+            episodes = state["episodes"]
+            chosen = state["selected"]
+            for index, (title, _) in enumerate(episodes):
+                ep_match = re.search(r"(?:S\\s*\\d+\\s*[- ]*)?(?:EP?\\s*)?(\\d{1,3})", title, re.IGNORECASE)
+                label = f"Episode {ep_match.group(1)}" if ep_match else f"Release {index + 1}"
+                prefix = "☑" if index in chosen else "□"
+                rows.append(InlineKeyboardButton(f"{prefix} {label}", callback_data=f"aselect:{message_id}:{index}"))
+            keyboard = [rows[i:i + 2] for i in range(0, len(rows), 2)]
+            keyboard.append([
+                InlineKeyboardButton("Select All", callback_data=f"aselectall:{message_id}"),
+                InlineKeyboardButton("Clear", callback_data=f"aselectclear:{message_id}"),
+            ])
+            keyboard.append([InlineKeyboardButton("⬆ Upload Selected", callback_data=f"aupload:{message_id}")])
+            return InlineKeyboardMarkup(keyboard)
+
         await status.edit_text(
-            f"<b>Found {len(matches)} matching RSS release(s) for {anime_name}.</b>\\n"
-            f"<b>Unique episodes selected:</b> {len(selected_matches)}\\n"
-            "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n"
-            "<b>Status:</b> Processing one best source per episode."
-        )
-        submitted = 0
-        for title, torrent in selected_matches:
-            try:
-                await rep.report(f"/search: processing episode for four outputs: {title}", "info")
-                await get_animes(title, torrent, force=False)
-                submitted += 1
-            except Exception as item_error:
-                await rep.report(f"/search episode failed ({title}): {item_error}", "error")
-        await status.edit_text(
-            f"<b>Search complete:</b> <code>{anime_name}</code>\\n"
-            f"<b>Matching RSS entries:</b> {len(matches)}\\n"
-            f"<b>Unique episodes selected:</b> {len(selected_matches)}\\n"
-            f"<b>Submitted:</b> {submitted}\\n"
-            "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n"
-            "Previously published episodes are skipped by the episode database."
+            f"<b>Search results:</b> <code>{anime_name}</code>\\n"
+            f"<b>Episodes found:</b> {len(selected_matches)}\\n"
+            "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n\\n"
+            "Choose only the episodes you want to upload, then tap <b>Upload Selected</b>.",
+            reply_markup=build_episode_keyboard(status.id, ANIME_SEARCH_RESULTS[status.id])
         )
     except Exception as error:
         await status.edit_text(f"<b>Search failed:</b> <code>{str(error)[:600]}</code>")
         await rep.report(f"/search failed: {error}", "error")
 
+
+
+@bot.on_callback_query(filters.regex(r"^aselect:(\\d+):(\\d+)$"))
+async def anime_search_select_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    _, message_id, raw_index = callback_query.data.split(":")
+    state = ANIME_SEARCH_RESULTS.get(int(message_id))
+    if not state or state["user_id"] != callback_query.from_user.id:
+        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+    index = int(raw_index)
+    if index >= len(state["episodes"]):
+        return await callback_query.answer("Episode not found.", show_alert=True)
+    if index in state["selected"]:
+        state["selected"].remove(index)
+    else:
+        state["selected"].add(index)
+    await callback_query.message.edit_reply_markup(
+        reply_markup=build_anime_search_keyboard(int(message_id), state)
+    )
+    await callback_query.answer("Selection updated.")
+
+
+def build_anime_search_keyboard(message_id, state):
+    import re
+    rows = []
+    for index, (title, _) in enumerate(state["episodes"]):
+        ep_match = re.search(r"(?:S\\s*\\d+\\s*[- ]*)?(?:EP?\\s*)?(\\d{1,3})", title, re.IGNORECASE)
+        label = f"Episode {ep_match.group(1)}" if ep_match else f"Release {index + 1}"
+        prefix = "☑" if index in state["selected"] else "□"
+        rows.append(InlineKeyboardButton(f"{prefix} {label}", callback_data=f"aselect:{message_id}:{index}"))
+    keyboard = [rows[i:i + 2] for i in range(0, len(rows), 2)]
+    keyboard.append([
+        InlineKeyboardButton("Select All", callback_data=f"aselectall:{message_id}"),
+        InlineKeyboardButton("Clear", callback_data=f"aselectclear:{message_id}"),
+    ])
+    keyboard.append([InlineKeyboardButton("⬆ Upload Selected", callback_data=f"aupload:{message_id}")])
+    return InlineKeyboardMarkup(keyboard)
+
+
+@bot.on_callback_query(filters.regex(r"^aselectall:(\\d+)$"))
+async def anime_search_select_all_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    message_id = int(callback_query.data.split(":")[1])
+    state = ANIME_SEARCH_RESULTS.get(message_id)
+    if not state or state["user_id"] != callback_query.from_user.id:
+        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+    state["selected"] = set(range(len(state["episodes"])))
+    await callback_query.message.edit_reply_markup(reply_markup=build_anime_search_keyboard(message_id, state))
+    await callback_query.answer("All episodes selected.")
+
+
+@bot.on_callback_query(filters.regex(r"^aselectclear:(\\d+)$"))
+async def anime_search_clear_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    message_id = int(callback_query.data.split(":")[1])
+    state = ANIME_SEARCH_RESULTS.get(message_id)
+    if not state or state["user_id"] != callback_query.from_user.id:
+        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+    state["selected"].clear()
+    await callback_query.message.edit_reply_markup(reply_markup=build_anime_search_keyboard(message_id, state))
+    await callback_query.answer("Selection cleared.")
+
+
+@bot.on_callback_query(filters.regex(r"^aupload:(\\d+)$"))
+async def anime_search_upload_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Not authorized.", show_alert=True)
+    message_id = int(callback_query.data.split(":")[1])
+    state = ANIME_SEARCH_RESULTS.get(message_id)
+    if not state or state["user_id"] != callback_query.from_user.id:
+        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+    chosen = sorted(state["selected"])
+    if not chosen:
+        return await callback_query.answer("Select at least one episode first.", show_alert=True)
+    queue = [state["episodes"][i] for i in chosen]
+    anime_name = state["anime"]
+    ANIME_SEARCH_RESULTS.pop(message_id, None)
+    await callback_query.answer(f"Uploading {len(queue)} selected episode(s).")
+    await callback_query.message.edit_text(
+        f"<b>Uploading selected episodes:</b> <code>{anime_name}</code>\\n"
+        f"<b>Selected:</b> {len(queue)}\\n"
+        "<b>Qualities:</b> 480p | 720p | 1080p | HDRip"
+    )
+    submitted = 0
+    for title, torrent in queue:
+        try:
+            await rep.report(f"/search selected upload: {title}", "info")
+            await get_animes(title, torrent, force=False)
+            submitted += 1
+        except Exception as item_error:
+            await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
+    await callback_query.message.edit_text(
+        f"<b>Selected upload finished:</b> <code>{anime_name}</code>\\n"
+        f"<b>Selected:</b> {len(queue)}\\n<b>Submitted:</b> {submitted}\\n"
+        "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip"
+    )
 
 # Admin commands: dedicated anime channel routing
 @bot.on_message(filters.command("channeladd") & filters.private & filters.user(Var.ADMINS))
