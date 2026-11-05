@@ -4084,7 +4084,7 @@ async def anime_search_destination_callback(client, callback_query):
                     or anime_name
                 )
                 synopsis = re.sub(r"<[^>]+>", "", anime_data.get("description") or "")
-                synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+                synopsis = re.sub(r"\s+", " ", synopsis).strip()
                 if len(synopsis) > 220:
                     synopsis = synopsis[:217].rsplit(" ", 1)[0] + "..."
                 genres = ", ".join(anime_data.get("genres") or []) or "Anime"
