@@ -7759,7 +7759,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
-            return
+            return "already_published"
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
         # episode even after it falls out of the RSS feed window.
@@ -8004,6 +8004,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             # Existing Main Channel post is already recorded.
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
+        return "uploaded"
     except Exception as error:
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
