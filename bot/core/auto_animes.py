@@ -7695,7 +7695,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
     return output_path
 
 
-async def get_animes(name, torrent, force=False, destination_channel=None):
+async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -7722,7 +7722,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None):
                     
         upload_mode = await db.get_upload_mode()
         print(f"get_animes: upload_mode={upload_mode}")
-        if upload_mode == "low_end":
+        # Manual /search provides one exact selected torrent. The low-end auto mode\n        # ignores that torrent and substitutes configured RSS_LOW_END feeds, so use\n        # the standard selected-torrent pipeline for manual searches.\n        if upload_mode == "low_end" and not manual_search:
             print(f"get_animes: calling process_low_end for {name}")
             await process_low_end(name, torrent, force=force, destination_channel=destination_channel)
             return
