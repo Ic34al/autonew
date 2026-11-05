@@ -3720,13 +3720,13 @@ async def anime_search_cmd(client, message: Message):
                     page_response = await api_client.get(page_url)
                     page_response.raise_for_status()
                     sid_match = re.search(
-                        r'<table[^>]*id=["\\']show-release-table["\\'][^>]*\\bsid=["\\'](\\d+)["\\']',
+                        r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
                         page_response.text,
                         re.IGNORECASE
                     )
                     if not sid_match:
                         sid_match = re.search(
-                            r'<table[^>]*\\bsid=["\\'](\\d+)["\\'][^>]*id=["\\']show-release-table["\\']',
+                            r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
                             page_response.text,
                             re.IGNORECASE
                         )
