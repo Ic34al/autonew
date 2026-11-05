@@ -2025,38 +2025,51 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             return
         ani_cache['ongoing'].add(episode_key)
 
-        # Main-channel duplicates are checked only for normal/main-channel tasks.
-        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no) if destination_channel in (None, Var.MAIN_CHANNEL, str(Var.MAIN_CHANNEL)) else None
-        if existing_main_post:
+        # Resolve the real destination before duplicate checks. Scheduled
+        # automatic releases must use the anime's mapped channel; explicit
+        # /search or /addtask destinations must be respected.
+        if destination_channel is not None:
+            channel_to_use = int(destination_channel)
+        else:
+            channel_to_use = await get_or_create_anime_channel(name, aniInfo)
+
+        channel_info = await validate_channel_id(channel_to_use)
+        if not channel_info:
+            await rep.report(
+                f"Anime destination {channel_to_use} is unavailable; falling back to Main Channel.",
+                "error"
+            )
+            channel_to_use = int(Var.MAIN_CHANNEL)
+        else:
+            channel_to_use = int(channel_info.id)
+
+        existing_target_post = (
+            await db.getAnimeMainPost(ani_id, ep_no)
+            if channel_to_use == int(Var.MAIN_CHANNEL)
+            else await db.getAnimeDestinationPost(ani_id, ep_no, channel_to_use)
+        )
+        if existing_target_post:
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
-            return
+            return "already_published"
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
         # episode even after it falls out of the RSS feed window.
         await db.saveAnimeResume(ani_id, ep_no, name, torrent)
-        
-        if force or not existing_main_post:
-            
+
+        if force or not existing_target_post:
+
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n{name}", "warning")
                 return
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
-            
-            channel_valid = False
-            for attempt in range(3):
-                if await validate_channel_id(channel_to_use):
-                    channel_valid = True
-                    break
-                await asyncio.sleep(2)
-            
+            # channel_to_use was resolved and validated before duplicate checks.
+            channel_valid = bool(await validate_channel_id(channel_to_use))
             if not channel_valid:
-                await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
-                channel_to_use = Var.MAIN_CHANNEL
+                channel_to_use = int(Var.MAIN_CHANNEL)
             
             post_msg = None
             photo_path = None
