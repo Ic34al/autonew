@@ -52,6 +52,17 @@ DOWNLOAD_BTN = "Download Now"
 DOWNLOAD_ANIME_BTN = "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •"
 DOWNLAOD_CHNL_BTN = "Join Channel"
 
+async def build_anime_watch_markup(channel_id):
+    """Create one join-request button for the anime's dedicated channel."""
+    invite = await bot.create_chat_invite_link(
+        channel_id,
+        creates_join_request=True
+    )
+    return InlineKeyboardMarkup([[
+        InlineKeyboardButton(DOWNLOAD_ANIME_BTN, url=invite.invite_link)
+    ]])
+
+
 import hashlib
 import time
 import os
@@ -227,9 +238,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
         batch_markup = InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)])
         if channel_to_use != Var.MAIN_CHANNEL:
             batch_post = await bot.send_photo(channel_to_use, photo=batch_photo, caption=caption, reply_markup=batch_markup)
-            dedicated_chat = await bot.get_chat(channel_to_use)
-            batch_url = f"https://t.me/{dedicated_chat.username}/{batch_post.id}" if dedicated_chat.username else f"https://t.me/c/{str(channel_to_use).replace('-100', '')}/{batch_post.id}"
-            main_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Watch Episodes", url=batch_url)]])
+            main_markup = await build_anime_watch_markup(channel_to_use)
             await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=main_markup)
         else:
             batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=batch_markup)
@@ -497,23 +506,8 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
 
         buttons = None
         try:
-            if post_msg and chat_info.username:
-                post_link = f"https://t.me/{chat_info.username}/{post_msg.id}"
-                buttons = InlineKeyboardMarkup([[InlineKeyboardButton(f"{DOWNLOAD_BTN}", url=post_link)]])
-            elif post_msg:
-                # Private anime channels use join-request invite links so admins
-                # can approve each subscriber before they enter.
-                invite = await bot.create_chat_invite_link(
-                    channel_to_use,
-                    creates_join_request=True
-                )
-                invite_link = invite.invite_link
-                raw_channel_id = str(chat_info.id).replace("-100", "")
-                post_link = f"https://t.me/c/{raw_channel_id}/{post_msg.id}"
-                buttons = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(f"{DOWNLOAD_ANIME_BTN}", url=post_link),
-                    InlineKeyboardButton("Request to Join", url=invite_link)
-                ]])
+            if post_msg:
+                buttons = await build_anime_watch_markup(channel_to_use)
         except Exception as e:
             await rep.report(f"Failed to construct buttons for mirror: {e}", "warning")
             buttons = None
@@ -7951,9 +7945,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                                     episode_post = await bot.send_photo(channel_to_use, photo=photo_file, caption=caption, reply_markup=markup)
                             else:
                                 episode_post = await bot.send_photo(channel_to_use, photo=photo_url, caption=caption, reply_markup=markup)
-                            dedicated_chat = await bot.get_chat(channel_to_use)
-                            episode_url = f"https://t.me/{dedicated_chat.username}/{episode_post.id}" if dedicated_chat.username else f"https://t.me/c/{str(channel_to_use).replace('-100', '')}/{episode_post.id}"
-                            announcement_markup = InlineKeyboardMarkup([[InlineKeyboardButton("Watch Episodes", url=episode_url)]])
+                            announcement_markup = await build_anime_watch_markup(channel_to_use)
                             if photo_path and ospath.exists(photo_path):
                                 with open(photo_path, 'rb') as photo_file:
                                     post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
