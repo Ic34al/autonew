@@ -1764,24 +1764,62 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
         pass
 
     cover_data = data.get("coverImage") or {}
-    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
-    banner_url = data.get("bannerImage")
-    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
-    artwork_url = cover_url or banner_url
-    if not artwork_url:
-        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+    # Try every artwork source, with retries. Never silently substitute a
+    # previous anime's cached/local thumbnail.
+    artwork_urls = []
+    for candidate in (
+        cover_data.get("extraLarge"),
+        cover_data.get("large"),
+        data.get("poster_url"),
+        data.get("bannerImage"),
+    ):
+        if candidate and candidate not in artwork_urls:
+            artwork_urls.append(candidate)
+
+    if not artwork_urls:
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable for '{title}': AniList returned no artwork URL.",
+            "warning"
+        )
         return None
 
+    art = None
+    last_art_error = None
     try:
         async with httpx.AsyncClient(
             timeout=httpx.Timeout(25.0, connect=10.0),
             follow_redirects=True,
         ) as client:
-            response = await client.get(artwork_url)
-            response.raise_for_status()
-            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+            for artwork_url in artwork_urls:
+                for attempt in range(1, 4):
+                    try:
+                        response = await client.get(artwork_url)
+                        response.raise_for_status()
+                        candidate_art = Image.open(
+                            io.BytesIO(response.content)
+                        ).convert("RGB")
+                        candidate_art.load()
+                        art = candidate_art
+                        break
+                    except Exception as exc:
+                        last_art_error = exc
+                        await rep.report(
+                            f"Thumbnail attempt {attempt}/3 failed for '{title}' "
+                            f"({artwork_url}): {exc}",
+                            "warning"
+                        )
+                        if attempt < 3:
+                            await asyncio.sleep(attempt * 2)
+                if art is not None:
+                    break
     except Exception as exc:
-        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        last_art_error = exc
+
+    if art is None:
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable after retries for '{title}': {last_art_error}",
+            "warning"
+        )
         return None
 
     W, H = 1600, 900
