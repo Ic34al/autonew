@@ -586,6 +586,45 @@ async def get_anilist_titles_from_cleaned(name: str) -> list:
     except Exception as e:
         await rep.report(f"get_anilist_titles_from_cleaned error: {e}", "warning")
         return []
+def _anime_title_match_score(query, media):
+    """Return a conservative title-match score to reject unrelated AniList artwork."""
+    import difflib
+
+    def norm(value):
+        value = re.sub(r"\\[[^\\]]*\\]|\\([^)]*\\)", " ", str(value or ""))
+        value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+        ignored = {"season", "the", "tv", "series", "part"}
+        return " ".join(word for word in value.split() if word not in ignored)
+
+    wanted = norm(query)
+    if not wanted:
+        return 0.0
+
+    titles = media.get("title") or {}
+    candidates = [
+        titles.get("english"),
+        titles.get("romaji"),
+        titles.get("native"),
+        *(media.get("synonyms") or []),
+    ]
+    best = 0.0
+    wanted_tokens = set(wanted.split())
+    for candidate in candidates:
+        candidate_norm = norm(candidate)
+        if not candidate_norm:
+            continue
+        if wanted == candidate_norm:
+            return 1.0
+        candidate_tokens = set(candidate_norm.split())
+        overlap = (
+            2 * len(wanted_tokens & candidate_tokens)
+            / max(1, len(wanted_tokens) + len(candidate_tokens))
+        )
+        sequence = difflib.SequenceMatcher(None, wanted, candidate_norm).ratio()
+        best = max(best, overlap, sequence)
+    return best
+
+
 class TextEditor:
     def __init__(self, name):
         self.__name = name
@@ -614,6 +653,15 @@ class TextEditor:
                 )
 
                 if media:
+                    match_score = _anime_title_match_score(search_name, media)
+                    if match_score < 0.62:
+                        await rep.report(
+                            f"Rejected unrelated AniList result for '{search_name}' "
+                            f"(title match {match_score:.2f}); trying next title variant.",
+                            "warning"
+                        )
+                        continue
+
                     self.adata = {
                         "id": media.get("id"),
                         "title": media.get("title", {}),
@@ -655,13 +703,23 @@ class TextEditor:
 
             cache_names.append(ani_name)
 
-            self.adata = await AniLister(
+            media = await AniLister(
                 ani_name,
                 datetime.now().year,
                 is_movie=is_movie,
             ).get_anidata()
 
-            if self.adata:
+            if media:
+                match_score = _anime_title_match_score(ani_name, media)
+                if match_score < 0.62:
+                    await rep.report(
+                        f"Rejected unrelated AniList result for '{ani_name}' "
+                        f"(title match {match_score:.2f}); trying next title variant.",
+                        "warning"
+                    )
+                    self.adata = {}
+                    continue
+                self.adata = media
                 break
 
     async def load_jikan(self):
