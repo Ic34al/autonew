@@ -412,18 +412,20 @@ class FFEncoder:
             LOGS.info("Encoding cancelled before FFmpeg process start because /pause is active.")
             return None
 
+        # Capture FFmpeg stderr so failed encodes show the real cause in Anime Logs.
         self.__proc = await create_subprocess_shell(
             ffcode,
             stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL,
+            stderr=PIPE,
         )
         proc_pid = self.__proc.pid
         ffpids_cache.append(proc_pid)
 
         progress_task = create_task(self.progress())
+        stderr_output = b""
 
         try:
-            await self.__proc.wait()
+            _, stderr_output = await self.__proc.communicate()
         finally:
             try:
                 progress_task.cancel()
@@ -432,6 +434,11 @@ class FFEncoder:
                 pass
 
         return_code = self.__proc.returncode
+        if isinstance(stderr_output, bytes):
+            stderr_text = stderr_output.decode("utf-8", errors="replace")
+        else:
+            stderr_text = str(stderr_output or "")
+        stderr_tail = "\\n".join(stderr_text.splitlines()[-35:]).strip()
 
         try:
             ffpids_cache.remove(proc_pid)
@@ -451,14 +458,29 @@ class FFEncoder:
             LOGS.info(f"Encoding successful! Output file: {self.out_path}")
             return self.out_path
         else:
-            error_message = (
-                f"FFmpeg exited with return code {return_code}"
-            )
-            LOGS.error(f"Encoding failed with error: {error_message}")
-            await rep.report(
-                f"Encoding failed: {error_message}",
-                "error",
-            )
+            error_message = f"FFmpeg exited with return code {return_code}"
+            if stderr_tail:
+                # Keep reports readable while preserving the useful final diagnostics.
+                diagnostic = stderr_tail[-3500:]
+                LOGS.error(
+                    f"Encoding failed for {self.__name} ({self.__qual}p): "
+                    f"{error_message}\\n{diagnostic}"
+                )
+                await rep.report(
+                    f"{self.__qual}p encoding failed for {self.__name}. "
+                    f"{error_message}\\n<pre>{diagnostic}</pre>",
+                    "error",
+                )
+            else:
+                LOGS.error(
+                    f"Encoding failed for {self.__name} ({self.__qual}p): "
+                    f"{error_message}; FFmpeg returned no stderr output."
+                )
+                await rep.report(
+                    f"{self.__qual}p encoding failed for {self.__name}: "
+                    f"{error_message}. FFmpeg returned no diagnostic output.",
+                    "error",
+                )
             return None
     
     async def cancel_encode(self):
