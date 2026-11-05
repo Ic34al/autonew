@@ -4068,7 +4068,7 @@ async def anime_search_destination_callback(client, callback_query):
                     text=announcement_text,
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton(
-                            DOWNLOAD_ANIME_BTN,
+                            '• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •',
                             url=invite.invite_link
                         )
                     ]])
