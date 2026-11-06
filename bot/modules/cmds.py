@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -4147,15 +4147,6 @@ async def anime_search_destination_callback(client, callback_query):
                         f"/search destination sticker failed for {destination}: {destination_sticker_error}",
                         "warning"
                     )
-                try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except Exception as main_sticker_error:
-                    await rep.report(
-                        f"/search Main Channel sticker failed: {main_sticker_error}",
-                        "warning"
-                    )
-
                 # Use the exact selected episode numbers; compress only a
                 # genuinely continuous sequence into a range on the artwork.
                 episode_numbers = []
@@ -4195,32 +4186,66 @@ async def anime_search_destination_callback(client, callback_query):
                 studio_value = (studio_names[0].get("name") if studio_names else "ANIME SOUL")
                 year_value = anime_data.get("seasonYear") or "—"
 
-                # Real newline characters are intentional; do not double-escape.
+                # Match the established episode-post style: custom 16:9
+                # streaming thumbnail, followed by a clean caption (no quote-box
+                # blocks and no escaped newline sequences).
+                episode_word = "EPISODES" if len(episode_numbers) != 1 else "EPISODE"
+                episode_caption = (
+                    f"{episode_numbers[0]:02d}" if len(episode_numbers) == 1
+                    else episode_label
+                )
+                synopsis_caption = synopsis.upper() if synopsis else ""
                 announcement_text = (
-                    f"<blockquote><b>✦ {display_title} ✦</b></blockquote>\n"
-                    f"<b>✦ EPISODES {episode_label} NOW AVAILABLE ✦</b>\n"
-                    f"<blockquote><b>Season:</b> <i>{season_value}</i>\n"
-                    f"<b>Quality:</b> <i>{quality_value}</i>\n"
-                    f"<b>Audio:</b> <i>{audio_value}</i></blockquote>\n"
-                    f"<blockquote><b>Genres:</b> <i>{genres}</i>\n"
-                    f"<b>Status:</b> <i>{status}</i></blockquote>\n"
-                    + (f"<blockquote><b>Synopsis:</b> <i>{synopsis}</i></blockquote>\n" if synopsis else "")
-                    + "<blockquote><b>ANIME SOUL</b> • Watch the newly added episodes below.</blockquote>"
+                    f"<b>✦ {display_title} ✦</b>\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n\n"
+                    f"➜ <b>SEASON:</b> {str(season_value).zfill(2)}\n"
+                    f"➜ <b>{episode_word}:</b> {episode_caption}\n"
+                    f"➜ <b>QUALITY:</b> {quality_value}\n"
+                    f"➜ <b>AUDIO:</b> {audio_value}\n"
+                    "━━━━━━━━━━━━━━━━━━━━\n\n"
+                    + (f"<blockquote>≡ {synopsis_caption}</blockquote>\n" if synopsis_caption else "")
+                    + f"✦ <b>STATUS:</b> {status.upper()}\n"
+                    + f"✦ <b>POWERED BY:</b> <b>ONGOING ANIME TIME</b>"
                 )
                 watch_markup = InlineKeyboardMarkup([[
                     InlineKeyboardButton("• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •", url=invite.invite_link)
                 ]])
-                poster_url = await metadata.get_poster()
-                episode_card = await build_episode_announcement_thumbnail(
-                    poster_url, display_title, season_value, episode_label,
-                    quality_value, audio_value, genres, status, year_value, studio_value
-                )
-                main_announcement = await client.send_photo(
-                    chat_id=Var.MAIN_CHANNEL,
-                    photo=episode_card,
-                    caption=announcement_text,
-                    reply_markup=watch_markup
-                )
+                import tempfile
+                poster_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        prefix="anime_soul_announcement_", suffix=".jpg", delete=False
+                    ) as temp_poster:
+                        poster_path = temp_poster.name
+                    generated_poster = await build_anime_soul_poster(
+                        metadata, anime_name, poster_path, episode_label=episode_caption
+                    )
+                    if generated_poster and os.path.exists(generated_poster):
+                        with open(generated_poster, "rb") as poster_file:
+                            main_announcement = await client.send_photo(
+                                chat_id=Var.MAIN_CHANNEL,
+                                photo=poster_file,
+                                caption=announcement_text,
+                                reply_markup=watch_markup
+                            )
+                    else:
+                        raise RuntimeError("Custom ANIME SOUL thumbnail was not generated")
+                finally:
+                    if poster_path and os.path.exists(poster_path):
+                        try:
+                            os.remove(poster_path)
+                        except OSError:
+                            pass
+
+                # Exactly one Main Channel sticker, immediately AFTER the post.
+                try:
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                except Exception as main_sticker_error:
+                    await rep.report(
+                        f"/search Main Channel post sent, but its following sticker failed: {main_sticker_error}",
+                        "warning"
+                    )
                 await rep.report(
                     f"/search Main Channel join-request announcement sent for {anime_name} "
                     f"(episodes={completed}, message_id={main_announcement.id})",
