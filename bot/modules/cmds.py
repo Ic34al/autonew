@@ -4212,12 +4212,12 @@ async def anime_search_destination_callback(client, callback_query):
                 })
                 synopsis_caption = html.escape(synopsis.translate(small_caps)) if synopsis else ""
                 announcement_text = (
-                    f"<b>{html.escape(display_title)}</b>\\n"
-                    "──────────────────────\\n"
-                    f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\\n"
-                    f"<b>➤ Quality: {html.escape(str(quality_value))}</b>\\n"
-                    f"<b>➥ {episode_word.title()}: {html.escape(str(episode_caption))}</b>\\n"
-                    "──────────────────────\\n"
+                    f"<b>{html.escape(display_title)}</b>\n"
+                    "──────────────────────\n"
+                    f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
+                    f"<b>➤ Quality: {html.escape(str(quality_value))}</b>\n"
+                    f"<b>➥ {episode_word.title()}: {html.escape(str(episode_caption))}</b>\n"
+                    "──────────────────────\n"
                     + (f"<blockquote expandable>≡ {synopsis_caption}</blockquote>" if synopsis_caption else "")
                 )
                 watch_markup = InlineKeyboardMarkup([[
