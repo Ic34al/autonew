@@ -7236,8 +7236,7 @@ async def fetch_animes():
         value = re.sub(r"\b(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|hevc|x26[45])\b", " ", value, flags=re.I)
         value = re.sub(r"\[[^\]]*(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|hevc|x26[45]|subsplease|erai-raws|horriblesubs)[^\]]*\]", " ", value, flags=re.I)
         value = re.sub(r"\([^)]*(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|hevc|x26[45])[^)]*\)", " ", value, flags=re.I)
-        value = re.sub(r"\[[^\]]+\]", " ", value)
-        value = re.sub(r"\([^)]*\)", " ", value)
+        # Preserve unknown bracketed text because RSS may bracket the anime title.\n        value = re.sub(r"\([^)]*\)", " ", value)
         value = re.sub(r"\s+-\s+\d{1,3}(?:v\d+)?\s*$", " ", value)
         return re.sub(r"[^a-z0-9]+", "", value)
 
