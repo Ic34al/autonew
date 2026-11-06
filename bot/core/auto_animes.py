@@ -7100,16 +7100,19 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n\n{name}", "warning")
-                return
+                ani_cache['ongoing'].discard(episode_key)
+                return "skipped"
 
             if "(Batch)" in name:
                 await rep.report(f"Torrent Skipped!\n\n{name}", "warning")
-                return
+                ani_cache['ongoing'].discard(episode_key)
+                return "skipped"
 
             if hasattr(torrent_url, 'size') and torrent_url.size:
                 if is_torrent_oversized(str(torrent_url.size), max_size_gb=4.5):
                     await rep.report(f"Torrent Skipped! - Size exceeds 4.5GB limit\n\n{name}", "warning")
-                    return
+                    ani_cache['ongoing'].discard(episode_key)
+                    return "skipped"
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
@@ -7182,7 +7185,9 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 rss_link = Var.RSS_LOW_END.get(qual)
                 if not rss_link:
                     continue
-                feed = await getfeed(rss_link)
+                # Match this exact anime and episode in every quality feed.
+                # Never take the newest unrelated item from a quality RSS.
+                feed = await find_matching_quality_release(rss_link, name)
                 if not feed or not feed.get("link"):
                     continue
 
@@ -7205,7 +7210,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         except Exception as e:
                             await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
                             await stat_msg.delete()
-                            return
+                            raise RuntimeError(f"{qual} processing failed for {name}; retry is safe.")
                         await rep.report("Successfully Compressed Now Going To Upload...", "info")
                         await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
                         await asleep(1.5)
@@ -7214,7 +7219,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         except Exception as e:
                             await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
                             await stat_msg.delete()
-                            return
+                            raise RuntimeError(f"{qual} processing failed for {name}; retry is safe.")
                         await rep.report("Successfully Uploaded File into Channel...", "info")
                         msg_id = msg.id
                         file_store_links[qual] = msg_id
@@ -7289,7 +7294,14 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 if grouped_buttons else None
             )
 
-            required_low_end = ["480", "720", "1080", "HDRi"]
+            # Low-end mode has configured 480p/720p/1080p feeds only.
+            # HDRip is not a configured low-end feed and must not block publishing.
+            required_low_end = [
+                quality for quality in ("480", "720", "1080")
+                if Var.RSS_LOW_END.get(quality)
+            ]
+            if not required_low_end:
+                raise RuntimeError("No low-end quality RSS feeds are configured.")
             missing_low_end = [q for q in required_low_end if q not in file_store_links]
             if missing_low_end:
                 raise RuntimeError(
@@ -8229,7 +8241,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             if not dl_path or not ospath.exists(dl_path):
                 await rep.report(f"File Download Incomplete for {name}, Try Again", "error")
                 await stat_msg.delete()
-                return
+                raise RuntimeError(f"File download incomplete for {name}; RSS item remains retryable.")
             
             post_id = int(datetime.datetime.now().timestamp() * 1000000)
             ffEvent = Event()
