@@ -244,7 +244,8 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=batch_markup)
         if batch_post:
             await asleep(Var.STICKER_INTERVAL)
-            await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
+            if channel_to_use != Var.MAIN_CHANNEL:
+                await send_sticker_to_channel(channel_to_use, Var.STICKER_ID)
     else:
         await rep.report(f"No batch qualities uploaded for {anime_name}; no Main Channel post sent", "warning")
     import logging
@@ -873,8 +874,6 @@ async def process_manga_chapter(title, chapter_url, manual=False):
                 reply_markup=InlineKeyboardMarkup(main_buttons)
             )
 
-            await asleep(Var.STICKER_INTERVAL)
-            await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
 
             backup_id = getattr(Var, 'BACKUP_CHANNEL', 0)
             try:
@@ -2606,14 +2605,6 @@ async def process_low_end(name, torrent_url, force=False):
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            try:
-                await asleep(Var.STICKER_INTERVAL)
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except FloodWait as flood:
-                await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except Exception as sticker_error:
-                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
             if stat_msg:
                 await stat_msg.delete()
@@ -3756,14 +3747,6 @@ async def process_low_end(name, torrent_url, force=False):
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            try:
-                await asleep(Var.STICKER_INTERVAL)
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except FloodWait as flood:
-                await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except Exception as sticker_error:
-                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
             if stat_msg:
                 await stat_msg.delete()
@@ -4888,14 +4871,6 @@ async def process_low_end(name, torrent_url, force=False):
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            try:
-                await asleep(Var.STICKER_INTERVAL)
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except FloodWait as flood:
-                await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except Exception as sticker_error:
-                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
             if stat_msg:
                 await stat_msg.delete()
@@ -6020,14 +5995,6 @@ async def process_low_end(name, torrent_url, force=False):
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            try:
-                await asleep(Var.STICKER_INTERVAL)
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except FloodWait as flood:
-                await asyncio.sleep(max(1, int(flood.value) + 1))
-                await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-            except Exception as sticker_error:
-                await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
             if stat_msg:
                 await stat_msg.delete()
@@ -6843,14 +6810,6 @@ async def get_animes(name, torrent, force=False):
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
-                try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except FloodWait as flood:
-                    await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except Exception as sticker_error:
-                    await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
@@ -8056,14 +8015,6 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
-                try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except FloodWait as flood:
-                    await asyncio.sleep(max(1, int(flood.value) + 1))
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except Exception as sticker_error:
-                    await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
 
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
