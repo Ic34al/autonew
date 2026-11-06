@@ -121,8 +121,12 @@ async def build_episode_announcement_thumbnail(
         draw.text((x + 18, y + 34), value[:42], font=regular, fill=(22, 29, 43))
         y += 88
 
+    genre_line = str(genres or "Anime")
+    if len(genre_line) > 54:
+        genre_line = genre_line[:51] + "..."
+    draw.text((x, height - 112), genre_line, font=small, fill=(72, 79, 94))
     footer = f"{str(year or '—')}  •  {str(studio or 'ANIME SOUL')[:28]}  •  {str(status or 'Releasing')}"
-    draw.text((x, height - 52), footer, font=small, fill=(72, 79, 94))
+    draw.text((x, height - 72), footer, font=small, fill=(72, 79, 94))
     output = BytesIO()
     canvas.save(output, format="JPEG", quality=91, optimize=True)
     output.seek(0)
