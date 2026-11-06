@@ -3819,7 +3819,7 @@ async def anime_search_cmd(client, message: Message):
                         directory_response.text, re.IGNORECASE | re.DOTALL
                     ):
                         clean_label = re.sub(r"<[^>]+>", " ", label)
-                        clean_label = re.sub(r"\\s+", " ", clean_label).strip()
+                        clean_label = re.sub(r"\s+", " ", clean_label).strip()
                         if clean_label and title_matches(normalize(clean_label)):
                             page_url = (
                                 href if href.startswith("http")
@@ -3840,15 +3840,15 @@ async def anime_search_cmd(client, message: Message):
                             # SID may be on the table or embedded in page JavaScript.
                             sid_match = (
                                 re.search(
-                                    r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
+                                    r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\bsid=[\"'](\d+)[\"']",
                                     page_response.text, re.IGNORECASE
                                 )
                                 or re.search(
-                                    r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
+                                    r"<table[^>]*\bsid=[\"'](\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
                                     page_response.text, re.IGNORECASE
                                 )
                                 or re.search(
-                                    r"\\b(?:sid|show_id|showId)\\b\\s*[:=]\\s*[\"']?(\\d+)",
+                                    r"\b(?:sid|show_id|showId)\b\s*[:=]\s*[\"']?(\d+)",
                                     page_response.text, re.IGNORECASE
                                 )
                             )
