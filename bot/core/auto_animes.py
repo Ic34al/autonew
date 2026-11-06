@@ -7422,7 +7422,7 @@ async def get_or_create_anime_channel(name: str, aniInfo):
 
         seen = set()
         for candidate in candidates:
-            value = re.sub(r"\\s+", " ", str(candidate or "")).strip()
+            value = re.sub(r"\s+", " ", str(candidate or "")).strip()
             if not value:
                 continue
             keys = (value.lower(), normalize_anime_name_for_search(value))
