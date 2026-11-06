@@ -32,6 +32,10 @@ import shutil
 import time
 import hashlib
 
+# Scheduled releases take priority over manual /search queues.
+AUTO_UPLOAD_PRIORITY_LOCK = asyncio.Lock()
+AUTO_UPLOAD_PRIORITY_PENDING = asyncio.Event()
+
 MAX_ABOUT_LEN = 255
 
 btn_formatter = {
@@ -7331,8 +7335,13 @@ async def fetch_animes():
                 "info"
             )
             try:
-                await get_animes(title, link)
-                seen_rss_links.setdefault(feed_url, set()).add(link)
+                AUTO_UPLOAD_PRIORITY_PENDING.set()
+                try:
+                    async with AUTO_UPLOAD_PRIORITY_LOCK:
+                        await get_animes(title, link)
+                        seen_rss_links.setdefault(feed_url, set()).add(link)
+                finally:
+                    AUTO_UPLOAD_PRIORITY_PENDING.clear()
             except asyncio.CancelledError:
                 raise
             except Exception:
