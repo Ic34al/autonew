@@ -7416,7 +7416,40 @@ async def fetch_animes():
                         except Exception as alias_error:
                             await rep.report(f"AniList aliases unavailable for {original}: {alias_error}", "warning")
                         alias_cache[cache_key] = aliases
+                    # Only scan anime explicitly selected with /addanime.
+                    # A matching RSS release without a configured anime channel
+                    # must be ignored; it must never fall back to Main Channel.
+                    selected_channel = None
+                    for alias in alias_cache[cache_key]:
+                        alias_value = re.sub(r"\\s+", " ", str(alias or "")).strip()
+                        if not alias_value:
+                            continue
+                        alias_keys = (
+                            alias_value.lower(),
+                            normalize_anime_name_for_search(alias_value),
+                        )
+                        for alias_key in dict.fromkeys(k for k in alias_keys if k):
+                            selected_channel = await db.get_anime_channel(alias_key)
+                            if not selected_channel:
+                                selected_channel = await db.get_selected_anime_channel(alias_key)
+                            if selected_channel:
+                                break
+                        if selected_channel:
+                            break
+                    if not selected_channel:
+                        await rep.report(
+                            f"Skipped unselected scheduled anime (no /addanime channel): {original}",
+                            "info"
+                        )
+                        continue
                     scheduled.append((original, alias_cache[cache_key]))
+
+            if not scheduled:
+                await rep.report(
+                    "No selected anime in today's schedule. Add an anime channel with /addanime to enable its uploads.",
+                    "info"
+                )
+                continue
 
             feed_urls = list(dict.fromkeys(
                 url for url in (
