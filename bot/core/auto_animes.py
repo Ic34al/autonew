@@ -1403,10 +1403,33 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 announcement_caption = await build_main_channel_announcement_caption(
                     aniInfo, name, ep_no, file_store_links
                 )
-                final_post = await bot.send_photo(
-                    Var.MAIN_CHANNEL, photo=photo_url,
-                    caption=announcement_caption, reply_markup=watch_markup
-                )
+                import tempfile
+                announcement_poster_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        prefix="anime_soul_announcement_", suffix=".jpg", delete=False
+                    ) as poster_file:
+                        announcement_poster_path = poster_file.name
+                    generated_poster = await build_anime_soul_poster(
+                        aniInfo, name, announcement_poster_path, episode_label=ep_no
+                    )
+                    if generated_poster and os.path.exists(generated_poster):
+                        with open(generated_poster, "rb") as poster_file:
+                            final_post = await bot.send_photo(
+                                Var.MAIN_CHANNEL, photo=poster_file,
+                                caption=announcement_caption, reply_markup=watch_markup
+                            )
+                    else:
+                        final_post = await bot.send_photo(
+                            Var.MAIN_CHANNEL, photo=photo_url,
+                            caption=announcement_caption, reply_markup=watch_markup
+                        )
+                finally:
+                    if announcement_poster_path and os.path.exists(announcement_poster_path):
+                        try:
+                            os.remove(announcement_poster_path)
+                        except OSError:
+                            pass
                 if not final_post or not getattr(final_post, "id", None):
                     raise RuntimeError(f"Main Channel announcement failed for {name}.")
                 await db.saveAnimeDestinationPost(ani_id, ep_no, target_channel, episode_post.id)
