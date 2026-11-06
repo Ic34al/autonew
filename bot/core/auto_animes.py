@@ -508,7 +508,7 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
     quality_text = ", ".join(quality_labels) if quality_labels else "Multi Quality"
 
     description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
-    description = re.sub(r"\\s+", " ", description).strip()
+    description = re.sub(r"\s+", " ", description).strip()
     if len(description) > 240:
         description = description[:237].rsplit(" ", 1)[0] + "..."
     small_caps = str.maketrans({
@@ -525,12 +525,12 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
         episode_label = html.escape(str(episode_number or "—"))
     episode_word = "Episode"
     caption = (
-        f"<b>{html.escape(str(display_title))}</b>\\n"
-        "──────────────────────\\n"
-        f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\\n"
-        f"<b>➤ Quality: {html.escape(quality_text)}</b>\\n"
-        f"<b>➥ {episode_word}: {episode_label}</b>\\n"
-        "──────────────────────\\n"
+        f"<b>{html.escape(str(display_title))}</b>\n"
+        "──────────────────────\n"
+        f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
+        f"<b>➤ Quality: {html.escape(quality_text)}</b>\n"
+        f"<b>➥ {episode_word}: {episode_label}</b>\n"
+        "──────────────────────\n"
         + (f"<blockquote expandable>≡ {synopsis}</blockquote>" if synopsis else "")
     )
     return caption
@@ -1391,19 +1391,32 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             if not episode_post or not getattr(episode_post, "id", None):
                 raise RuntimeError(f"Anime channel did not confirm post for {name}.")
 
+            # The priority sticker is always sent AFTER the actual episode post.
+            await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+            await send_sticker_to_channel(target_channel)
+
             if target_channel != int(Var.MAIN_CHANNEL):
-                # Main Channel announcement has one button only; it creates a
-                # join-request invite for this anime-specific channel.
+                # Keep the established Main Channel announcement layout:
+                # title/audio/quality/episode + native expandable synopsis.
+                # This creates a fresh join-request invite for this anime channel.
                 watch_markup = await build_anime_watch_markup(target_channel)
+                announcement_caption = await build_main_channel_announcement_caption(
+                    aniInfo, name, ep_no, file_store_links
+                )
                 final_post = await bot.send_photo(
                     Var.MAIN_CHANNEL, photo=photo_url,
-                    caption=final_caption, reply_markup=watch_markup
+                    caption=announcement_caption, reply_markup=watch_markup
                 )
                 if not final_post or not getattr(final_post, "id", None):
                     raise RuntimeError(f"Main Channel announcement failed for {name}.")
                 await db.saveAnimeDestinationPost(ani_id, ep_no, target_channel, episode_post.id)
                 await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
+                # Sticker for Main Channel announcement is sent only after it exists.
+                await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+                await send_sticker_to_channel(Var.MAIN_CHANNEL)
             else:
+                # If Main Channel itself is the destination, its single episode
+                # post above is the only Main Channel post; never create a mirror.
                 final_post = episode_post
 
             await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
@@ -1413,9 +1426,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            # Do not send episode stickers to either the selected channel or
-            # Main Channel. The selected-channel workflow is episode-only;
-            # Main Channel receives only its configured joining announcement.
+            # Both published destinations receive the priority sticker immediately after their post.
 
 
             if stat_msg:
