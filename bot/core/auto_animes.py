@@ -53,7 +53,7 @@ MANGA_READ_BUTTON = "Read Now"
 MANGA_CHNL_BUTTON = "Join Channel"
 
 DOWNLOAD_BTN = "Download Now"
-DOWNLOAD_ANIME_BTN = "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •"
+DOWNLOAD_ANIME_BTN = "• CLICK HERE TO WATCH •"
 DOWNLAOD_CHNL_BTN = "Join Channel"
 
 async def build_anime_watch_markup(channel_id):
@@ -485,6 +485,16 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
     pdata = getattr(aniInfo, "pdata", {}) or {}
     titles = data.get("title") or {}
     display_title = titles.get("english") or titles.get("romaji") or anime_name
+    season_value = pdata.get("anime_season") or "01"
+    if isinstance(season_value, list):
+        season_value = season_value[-1] if season_value else "01"
+    try:
+        season_number = str(int(season_value))
+    except (TypeError, ValueError):
+        season_number = str(season_value)
+    if season_number and "season" not in str(display_title).lower():
+        display_title = f"{display_title} Season {season_number}"
+    display_title = str(display_title).upper()
 
     audio_value = pdata.get("audio_type")
     if not audio_value:
@@ -503,7 +513,11 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
     for quality in ("480", "720", "1080", "HDRi"):
         if quality in (qualities or {}):
             quality_labels.append(quality_names[quality])
-    quality_text = ", ".join(quality_labels) if quality_labels else "Multi Quality"
+    quality_text = (
+        ", ".join(quality_labels[:-1]) + " & " + quality_labels[-1]
+        if len(quality_labels) > 1
+        else (quality_labels[0] if quality_labels else "Multi Quality")
+    )
 
     description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
     description = re.sub(r"\s+", " ", description).strip()
