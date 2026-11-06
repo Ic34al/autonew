@@ -3620,9 +3620,18 @@ async def anime_search_cmd(client, message: Message):
         ]
 
         def title_matches(normalized_title):
-            if not normalized_title:
+            # Reject tiny labels (e.g. navigation links "K", "L", "M") that
+            # were previously accepted because a one-letter string is a
+            # substring of every alias. Only compare meaningful show titles.
+            normalized_title = str(normalized_title or "").strip()
+            if len(normalized_title) < 5 or len(normalized_title.split()) < 2:
                 return False
-            if any(x and (x in normalized_title or normalized_title in x) for x in aliases):
+            if any(
+                len(alias) >= 8 and len(alias.split()) >= 2
+                and (alias == normalized_title or alias in normalized_title
+                     or normalized_title in alias)
+                for alias in aliases
+            ):
                 return True
             title_tokens = set(normalized_title.split())
             return any(
@@ -3784,7 +3793,9 @@ async def anime_search_cmd(client, message: Message):
                 for item in iterable:
                     if not isinstance(item, dict):
                         continue
-                    show_name = str(item.get("show") or item.get("title") or "").strip()
+                    # Only the explicit show field is a reliable show name.
+                    # Generic title/key fields can contain episode labels or IDs.
+                    show_name = str(item.get("show") or "").strip()
                     if not show_name or not title_matches(normalize(show_name)):
                         continue
                     page_path = (
@@ -3820,7 +3831,16 @@ async def anime_search_cmd(client, message: Message):
                     ):
                         clean_label = re.sub(r"<[^>]+>", " ", label)
                         clean_label = re.sub(r"\s+", " ", clean_label).strip()
-                        if clean_label and title_matches(normalize(clean_label)):
+                        # The directory contains one-letter navigation links.
+                        # Accept only real /shows/ entries with a meaningful title.
+                        href = str(href or "").strip()
+                        if (
+                            clean_label
+                            and len(clean_label) >= 5
+                            and len(clean_label.split()) >= 2
+                            and "/shows/" in href
+                            and title_matches(normalize(clean_label))
+                        ):
                             page_url = (
                                 href if href.startswith("http")
                                 else "https://subsplease.org/" + href.lstrip("/")
