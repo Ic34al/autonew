@@ -7378,6 +7378,13 @@ async def fetch_animes():
     )
     seen_links = set()
     alias_cache = {}
+    last_schedule_status = None
+
+    async def report_schedule_status_once(key, message, level="info"):
+        nonlocal last_schedule_status
+        if key != last_schedule_status:
+            await rep.report(message, level)
+            last_schedule_status = key
 
     while True:
         await asleep(30)
@@ -7398,6 +7405,8 @@ async def fetch_animes():
             timeout = aiohttp.ClientTimeout(total=18)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 scheduled = []
+                unselected_titles = []
+                alias_errors = []
                 for item in schedule:
                     if not isinstance(item, dict) or not item.get("title"):
                         continue
@@ -7419,7 +7428,7 @@ async def fetch_animes():
                                         aliases.update(v for v in titles.values() if v)
                                         aliases.update(v for v in (media.get("synonyms") or []) if v)
                         except Exception as alias_error:
-                            await rep.report(f"AniList aliases unavailable for {original}: {alias_error}", "warning")
+                            alias_errors.append(f"{original}: {alias_error}")
                         alias_cache[cache_key] = aliases
                     # Only scan anime explicitly selected with /addanime.
                     # A matching RSS release without a configured anime channel
@@ -7442,19 +7451,39 @@ async def fetch_animes():
                         if selected_channel:
                             break
                     if not selected_channel:
-                        await rep.report(
-                            f"Skipped unselected scheduled anime (no /addanime channel): {original}",
-                            "info"
-                        )
+                        unselected_titles.append(original)
                         continue
                     scheduled.append((original, alias_cache[cache_key]))
 
+                if alias_errors:
+                    await report_schedule_status_once(
+                        ("alias_errors", tuple(alias_errors)),
+                        f"AniList alias lookup warnings for {len(alias_errors)} title(s): "
+                        + "; ".join(alias_errors[:5]),
+                        "warning"
+                    )
+
             if not scheduled:
-                await rep.report(
-                    "No selected anime in today's schedule. Add an anime channel with /addanime to enable its uploads.",
+                status_key = ("no_selected", tuple(sorted(unselected_titles)))
+                await report_schedule_status_once(
+                    status_key,
+                    "No selected anime found in today's schedule. "
+                    f"Ignored {len(unselected_titles)} unselected scheduled title(s); "
+                    "add the exact anime with /addanime to enable uploads.",
                     "info"
                 )
                 continue
+
+            if unselected_titles:
+                await report_schedule_status_once(
+                    ("selected_and_ignored", tuple(sorted(x[0] for x in scheduled)), tuple(sorted(unselected_titles))),
+                    f"Schedule selection: {len(scheduled)} selected, "
+                    f"{len(unselected_titles)} unselected title(s) ignored. "
+                    "Only selected anime will be processed.",
+                    "info"
+                )
+            else:
+                last_schedule_status = None
 
             feed_urls = list(dict.fromkeys(
                 url for url in (
@@ -7500,10 +7529,6 @@ async def fetch_animes():
                     )
                     subsplease_feed = "subsplease" in str(feed_url).casefold()
                     if not (dual_multi_audio or japanese_english_sub or subsplease_feed):
-                        await rep.report(
-                            f"Skipped release without a recognized audio/subtitle format: {title}",
-                            "info"
-                        )
                         continue
                     for scheduled_title, aliases in scheduled:
                         if title_matches(title, aliases):
