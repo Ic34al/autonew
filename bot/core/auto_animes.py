@@ -439,48 +439,42 @@ async def find_existing_anime_channel(anime_name: str):
     return None
 
 async def send_sticker_to_channel(channel, sticker_id=None):
-    """Fetch the one sticker from the configured public pack through Telegram Bot API and send it."""
-    if not Var.SEND_STICKER:
-        await rep.report("Sticker sending is disabled: set SEND_STICKER=True in Heroku config.", "warning")
+    """Send the configured Ongoing Anime Time sticker after a published post."""
+    if not getattr(Var, "SEND_STICKER", True):
+        await rep.report("Sticker sending is disabled; enable SEND_STICKER in Heroku config.", "warning")
         return False
 
-    sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
     try:
-        # Bot API getStickerSet returns sticker objects with usable file_id values.
-        # Do not use Pyrogram's raw StickerSet.documents as if they were Sticker objects.
-        endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getStickerSet"
-        async with httpx.AsyncClient(timeout=25.0) as session:
-            response = await session.get(endpoint, params={"name": sticker_set_name})
-            response.raise_for_status()
-            payload = response.json()
+        # Prefer the explicit configured/database sticker ID. The old helper
+        # ignored this argument and always selected the first sticker in a pack.
+        configured_id = sticker_id or getattr(Var, "STICKER_ID", None)
+        if configured_id:
+            sent_message = await bot.send_sticker(chat_id=channel, sticker=configured_id)
+        else:
+            sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
+            endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getStickerSet"
+            async with httpx.AsyncClient(timeout=25.0) as session:
+                response = await session.get(endpoint, params={"name": sticker_set_name})
+                response.raise_for_status()
+                payload = response.json()
+            if not payload.get("ok"):
+                raise RuntimeError(payload.get("description", "Telegram getStickerSet failed"))
+            stickers = payload.get("result", {}).get("stickers") or []
+            if not stickers or not stickers[0].get("file_id"):
+                raise RuntimeError(f"Sticker pack {sticker_set_name} is empty")
+            sent_message = await bot.send_sticker(chat_id=channel, sticker=stickers[0]["file_id"])
 
-        if not payload.get("ok"):
-            description = payload.get("description", "Telegram returned an unknown error")
-            raise RuntimeError(f"getStickerSet failed: {description}")
-
-        stickers = payload.get("result", {}).get("stickers") or []
-        if not stickers:
-            raise RuntimeError(f"Sticker pack {sticker_set_name} contains no stickers")
-
-        sticker_file_id = stickers[0].get("file_id")
-        if not sticker_file_id:
-            raise RuntimeError("Telegram returned a sticker without file_id")
-
-        sent_message = await bot.send_sticker(
-            chat_id=channel,
-            sticker=sticker_file_id
-        )
         if not sent_message:
-            raise RuntimeError("Telegram did not return a sent sticker message")
-
+            raise RuntimeError("Telegram did not confirm the sticker message")
         await rep.report(
-            f"Successfully sent Ongoing Anime Time sticker to {channel} (message_id={sent_message.id})",
+            f"Successfully sent Ongoing Anime Time sticker after episode post to {channel} "
+            f"(message_id={sent_message.id})",
             "info"
         )
         return True
-    except Exception as e:
+    except Exception as error:
         await rep.report(
-            f"Sticker send failed for {channel} using pack {sticker_set_name}: {type(e).__name__}: {e}",
+            f"Sticker send failed after episode post in {channel}: {type(error).__name__}: {error}",
             "error"
         )
         return False
@@ -7895,7 +7889,30 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 batch_audio = "Dual" if re.search(r"\bdual\b", name, re.IGNORECASE) else ("Dub" if re.search(r"\b(dub|english)\b", name, re.IGNORECASE) else "Sub")
                 await process_batch_anime(name, torrent, batch_audio)
                 if 'ani_id' in locals() and 'ep_no' in locals():
-                    await db.markAnimeResumeComplete(ani_id, ep_no)
+                    # Send the Ongoing Anime Time sticker immediately after each
+                # confirmed episode post. Dedicated auto-channel posts receive
+                # one sticker there and one after the Main Channel announcement;
+                # manual /search sends it only to the selected destination.
+                sticker_targets = []
+                if destination_channel is not None:
+                    sticker_targets = [int(destination_channel)]
+                elif channel_to_use != int(Var.MAIN_CHANNEL):
+                    sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
+                else:
+                    sticker_targets = [int(Var.MAIN_CHANNEL)]
+
+                for sticker_target in dict.fromkeys(sticker_targets):
+                    try:
+                        await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+                        await send_sticker_to_channel(sticker_target, getattr(Var, "STICKER_ID", None))
+                    except Exception as sticker_error:
+                        await rep.report(
+                            f"Episode post succeeded but Ongoing Anime Time sticker failed in "
+                            f"{sticker_target}: {sticker_error}",
+                            "error"
+                        )
+
+                await db.markAnimeResumeComplete(ani_id, ep_no)
                     ani_cache['completed'].add(episode_key)
                     ani_cache['ongoing'].discard(episode_key)
                 return
