@@ -7445,17 +7445,25 @@ async def fetch_animes():
                         continue
                     if not published_today(entry, today):
                         continue
-                    # Today's ongoing schedule accepts ONLY dual/multi-audio
-                    # releases. Single-audio and subtitle-only releases must
-                    # never enter the upload queue, even when the title matches.
+                    # Today's scheduled ongoing anime may be released as:
+                    # 1) Dual/Multi Audio, or 2) Japanese audio with English subs.
+                    # SubsPlease releases are Japanese audio + English subtitles
+                    # by default, even when the RSS title omits an explicit label.
                     release_title = str(title)
                     dual_multi_audio = re.search(
                         r"(?i)(?:\bdual(?:[- ]audio)?\b|\bmulti(?:[- ]audio)?\b)",
                         release_title
                     )
-                    if not dual_multi_audio:
+                    japanese_english_sub = re.search(
+                        r"(?i)(?:japanese.{0,20}(?:english\s*subs?|subtitles?)|"
+                        r"(?:english\s*subs?|subtitles?).{0,20}japanese|"
+                        r"\beng(?:lish)?[- ]?sub\b|\bsubbed\b)",
+                        release_title
+                    )
+                    subsplease_feed = "subsplease" in str(feed_url).casefold()
+                    if not (dual_multi_audio or japanese_english_sub or subsplease_feed):
                         await rep.report(
-                            f"Skipped non-dual-audio release (today schedule requires dual/multi audio): {title}",
+                            f"Skipped release without a recognized audio/subtitle format: {title}",
                             "info"
                         )
                         continue
