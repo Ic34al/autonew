@@ -1152,8 +1152,10 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 await asyncio.sleep(2)
 
             if not channel_valid:
-                await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
-                channel_to_use = Var.MAIN_CHANNEL
+                raise RuntimeError(
+                    f"Configured destination channel {channel_to_use} is invalid after retries; "
+                    "stopping this episode instead of sending it to Main Channel."
+                )
 
             all_banners = await db.list_anime_banners()
             banner_url = None
