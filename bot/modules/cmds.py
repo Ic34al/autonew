@@ -53,6 +53,82 @@ ADD_TASK_JOBS: dict[str, dict] = {}
 
 RANDOM_PIC = None
 
+
+async def build_episode_announcement_thumbnail(
+    poster_url, title, season, episodes, quality, audio, genres, status, year, studio
+):
+    """Create the landscape anime + episode-range card used in Main Channel."""
+    import aiohttp
+    from io import BytesIO
+    from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+    width, height = 1280, 720
+    canvas = Image.new("RGB", (width, height), (20, 22, 30))
+    draw = ImageDraw.Draw(canvas)
+
+    try:
+        timeout = aiohttp.ClientTimeout(total=25)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(poster_url) as response:
+                response.raise_for_status()
+                raw = await response.read()
+        poster = Image.open(BytesIO(raw)).convert("RGB")
+        art = ImageOps.fit(poster, (560, height), method=Image.Resampling.LANCZOS)
+        canvas.paste(art, (0, 0))
+    except Exception as image_error:
+        draw.rectangle((0, 0, 560, height), fill=(38, 42, 56))
+        draw.text((45, 330), "ANIME SOUL", fill=(245, 245, 250))
+        await rep.report(f"Announcement artwork fallback used: {image_error}", "warning")
+
+    # Dark information panel with a clean streaming-card hierarchy.
+    draw.rectangle((560, 0, width, height), fill=(242, 243, 246))
+    try:
+        regular = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 23)
+        bold = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 34)
+        small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 18)
+    except Exception:
+        regular = bold = small = ImageFont.load_default()
+
+    x, right = 610, 1230
+    title_text = str(title or "Anime")
+    words, lines, line = title_text.split(), [], ""
+    for word in words:
+        candidate = (line + " " + word).strip()
+        if draw.textbbox((0, 0), candidate, font=bold)[2] <= right - x:
+            line = candidate
+        else:
+            if line:
+                lines.append(line)
+            line = word
+    if line:
+        lines.append(line)
+    y = 72
+    for line in lines[:3]:
+        draw.text((x, y), line, font=bold, fill=(25, 30, 42))
+        y += 45
+
+    draw.rectangle((x, y + 8, right, y + 14), fill=(47, 91, 160))
+    y += 45
+    rows = [
+        ("SEASON", str(season)),
+        ("EPISODES ADDED", str(episodes)),
+        ("QUALITY", str(quality)),
+        ("AUDIO", str(audio)),
+    ]
+    for label, value in rows:
+        draw.rounded_rectangle((x, y, right, y + 72), radius=12, fill=(224, 228, 235))
+        draw.text((x + 18, y + 9), label, font=small, fill=(76, 87, 106))
+        draw.text((x + 18, y + 34), value[:42], font=regular, fill=(22, 29, 43))
+        y += 88
+
+    footer = f"{str(year or '—')}  •  {str(studio or 'ANIME SOUL')[:28]}  •  {str(status or 'Releasing')}"
+    draw.text((x, height - 52), footer, font=small, fill=(72, 79, 94))
+    output = BytesIO()
+    canvas.save(output, format="JPEG", quality=91, optimize=True)
+    output.seek(0)
+    output.name = "anime_soul_episode_update.jpg"
+    return output
+
 def get_random_pic():
     plist = getattr(Var, "PHOTO_LIST", None)
     if not plist:
@@ -4057,82 +4133,90 @@ async def anime_search_destination_callback(client, callback_query):
                     destination,
                     creates_join_request=True
                 )
-                # Build one premium, thumbnail-led announcement after all
-                # selected episodes have finished uploading. Keep the exact
-                # episode numbers (including gaps) rather than implying a range.
+                # Send the destination sticker first, then the Main Channel
+                # sticker, followed immediately by the custom episode update.
+                try:
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(destination, Var.STICKER_ID)
+                except Exception as destination_sticker_error:
+                    await rep.report(
+                        f"/search destination sticker failed for {destination}: {destination_sticker_error}",
+                        "warning"
+                    )
+                try:
+                    await asleep(Var.STICKER_INTERVAL)
+                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                except Exception as main_sticker_error:
+                    await rep.report(
+                        f"/search Main Channel sticker failed: {main_sticker_error}",
+                        "warning"
+                    )
+
+                # Use the exact selected episode numbers; compress only a
+                # genuinely continuous sequence into a range on the artwork.
                 episode_numbers = []
                 for episode_title, _torrent in queue:
                     try:
-                        parsed_episode = TextEditor(episode_title).pdata.get("episode_number")
-                        if parsed_episode is not None:
-                            episode_numbers.append(int(parsed_episode))
+                        number = TextEditor(episode_title).pdata.get("episode_number")
+                        if number is not None:
+                            episode_numbers.append(int(number))
                     except (TypeError, ValueError):
                         continue
                 episode_numbers = sorted(set(episode_numbers))
-                episode_label = (
-                    ", ".join(f"{number:02d}" for number in episode_numbers)
-                    if episode_numbers else f"{completed} uploaded"
-                )
+                if episode_numbers and episode_numbers == list(range(episode_numbers[0], episode_numbers[-1] + 1)):
+                    episode_label = f"{episode_numbers[0]:02d}–{episode_numbers[-1]:02d}"
+                elif episode_numbers:
+                    episode_label = ", ".join(f"{number:02d}" for number in episode_numbers)
+                else:
+                    episode_label = f"{completed} uploaded"
 
                 metadata = TextEditor(anime_name)
                 await metadata.load_info()
                 anime_data = metadata.adata or {}
-                anime_title_data = anime_data.get("title") or {}
-                display_title = (
-                    anime_title_data.get("english")
-                    or anime_title_data.get("romaji")
-                    or anime_name
-                )
+                title_data = anime_data.get("title") or {}
+                display_title = title_data.get("english") or title_data.get("romaji") or anime_name
                 synopsis = re.sub(r"<[^>]+>", "", anime_data.get("description") or "")
                 synopsis = re.sub(r"\s+", " ", synopsis).strip()
-                if len(synopsis) > 220:
-                    synopsis = synopsis[:217].rsplit(" ", 1)[0] + "..."
+                if len(synopsis) > 240:
+                    synopsis = synopsis[:237].rsplit(" ", 1)[0] + "..."
                 genres = ", ".join(anime_data.get("genres") or []) or "Anime"
-                status = str(anime_data.get("status") or "ONGOING").replace("_", " ").title()
+                status = str(anime_data.get("status") or "RELEASING").replace("_", " ").title()
                 season_value = metadata.pdata.get("anime_season") or "01"
                 if isinstance(season_value, list):
                     season_value = season_value[-1] if season_value else "01"
                 audio_value = metadata.pdata.get("audio_type") or "Japanese [English Sub]"
                 quality_value = metadata.pdata.get("quality_label") or "Multi Quality"
+                studios = anime_data.get("studios") or {}
+                studio_names = studios.get("nodes") or [] if isinstance(studios, dict) else []
+                studio_value = (studio_names[0].get("name") if studio_names else "ANIME SOUL")
+                year_value = anime_data.get("seasonYear") or "—"
 
+                # Real newline characters are intentional; do not double-escape.
                 announcement_text = (
-                    f"<blockquote><b>✦ {display_title} ✦</b></blockquote>\\n"
-                    "<b>╔━━━━━━━━━━━━━━━━━━━━━╗</b>\\n"
-                    f"<blockquote><b>⌲ Season:</b> <i>{season_value}</i>\\n"
-                    f"<b>❍ Episodes Added:</b> <i>{episode_label}</i>\\n"
-                    f"<b>▣ Quality:</b> <i>{quality_value}</i>\\n"
-                    f"<b>◉ Audio:</b> <i>{audio_value}</i></blockquote>\\n"
-                    "<b>╚━━━━━━━━━━━━━━━━━━━━━╝</b>\\n"
-                    f"<blockquote><b>♡ Genres:</b> <i>{genres}</i>\\n"
-                    f"<b>✧ Status:</b> <i>{status}</i></blockquote>\\n"
-                    + (f"<blockquote><b>▸ Synopsis:</b> <i>{synopsis}</i></blockquote>\\n" if synopsis else "")
-                    + "<blockquote><b>ANIME SOUL</b> • New episodes are now available!</blockquote>"
+                    f"<blockquote><b>✦ {display_title} ✦</b></blockquote>\n"
+                    f"<b>✦ EPISODES {episode_label} NOW AVAILABLE ✦</b>\n"
+                    f"<blockquote><b>Season:</b> <i>{season_value}</i>\n"
+                    f"<b>Quality:</b> <i>{quality_value}</i>\n"
+                    f"<b>Audio:</b> <i>{audio_value}</i></blockquote>\n"
+                    f"<blockquote><b>Genres:</b> <i>{genres}</i>\n"
+                    f"<b>Status:</b> <i>{status}</i></blockquote>\n"
+                    + (f"<blockquote><b>Synopsis:</b> <i>{synopsis}</i></blockquote>\n" if synopsis else "")
+                    + "<blockquote><b>ANIME SOUL</b> • Watch the newly added episodes below.</blockquote>"
                 )
                 watch_markup = InlineKeyboardMarkup([[
-                    InlineKeyboardButton(
-                        "• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •",
-                        url=invite.invite_link
-                    )
+                    InlineKeyboardButton("• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •", url=invite.invite_link)
                 ]])
                 poster_url = await metadata.get_poster()
-                try:
-                    main_announcement = await client.send_photo(
-                        chat_id=Var.MAIN_CHANNEL,
-                        photo=poster_url,
-                        caption=announcement_text,
-                        reply_markup=watch_markup
-                    )
-                except Exception as photo_error:
-                    await rep.report(
-                        f"/search poster send failed for {anime_name}; sending text fallback: {photo_error}",
-                        "warning"
-                    )
-                    main_announcement = await client.send_message(
-                        chat_id=Var.MAIN_CHANNEL,
-                        text=announcement_text,
-                        reply_markup=watch_markup,
-                        disable_web_page_preview=True
-                    )
+                episode_card = await build_episode_announcement_thumbnail(
+                    poster_url, display_title, season_value, episode_label,
+                    quality_value, audio_value, genres, status, year_value, studio_value
+                )
+                main_announcement = await client.send_photo(
+                    chat_id=Var.MAIN_CHANNEL,
+                    photo=episode_card,
+                    caption=announcement_text,
+                    reply_markup=watch_markup
+                )
                 await rep.report(
                     f"/search Main Channel join-request announcement sent for {anime_name} "
                     f"(episodes={completed}, message_id={main_announcement.id})",
