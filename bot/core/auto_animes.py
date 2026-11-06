@@ -1142,7 +1142,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel
 
             channel_valid = False
             for attempt in range(3):
@@ -7406,16 +7406,56 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Only explicitly selected anime use dedicated channels."""
+    """Resolve /addanime channel mappings for scheduled RSS titles and AniList aliases."""
     try:
         base_name = extract_base_anime_name(name)
-        selected = await db.get_selected_anime_channel(normalize_anime_name_for_search(base_name))
-        if not selected:
-            return Var.MAIN_CHANNEL
-        if not await validate_channel_id(selected):
-            await rep.report(f"Dedicated channel {selected} for {base_name} is inaccessible; using Main Channel.", "error")
-            return Var.MAIN_CHANNEL
-        return selected
+        candidates = [base_name, name, normalize_anime_name_for_search(base_name)]
+        data = getattr(aniInfo, "adata", {}) or {}
+        title_data = data.get("title", {}) or {}
+        if isinstance(title_data, dict):
+            candidates.extend(title_data.get(key) for key in ("english", "romaji", "native"))
+        candidates.extend(data.get("synonyms", []) or [])
+        try:
+            candidates.extend(await get_all_possible_anime_names(base_name))
+        except Exception as alias_error:
+            await rep.report(f"Could not expand channel aliases for {base_name}: {alias_error}", "warning")
+
+        seen = set()
+        for candidate in candidates:
+            value = re.sub(r"\\s+", " ", str(candidate or "")).strip()
+            if not value:
+                continue
+            keys = (value.lower(), normalize_anime_name_for_search(value))
+            for key in dict.fromkeys(k for k in keys if k):
+                if key in seen:
+                    continue
+                seen.add(key)
+                mapped = await db.get_anime_channel(key)
+                if not mapped:
+                    # Also accept mappings created by the newer explicit selector.
+                    mapped = await db.get_selected_anime_channel(key)
+                if not mapped:
+                    continue
+                chat = await validate_channel_id(mapped)
+                if not chat:
+                    await rep.report(
+                        f"Configured /addanime channel {mapped} for '{key}' is inaccessible. "
+                        "Episode will not silently fall back to Main Channel.",
+                        "error"
+                    )
+                    return Var.MAIN_CHANNEL
+                await rep.report(
+                    f"Dedicated channel mapping matched: {base_name} -> {chat.id} (alias: {key}). "
+                    "Main Channel will receive the join-request announcement.",
+                    "success"
+                )
+                return chat.id
+
+        await rep.report(
+            f"No /addanime channel mapping found for '{base_name}'; using Main Channel.",
+            "warning"
+        )
+        return Var.MAIN_CHANNEL
     except Exception as error:
         await rep.report(f"Dedicated-channel lookup failed for {name}: {error}", "error")
         return Var.MAIN_CHANNEL
@@ -7878,8 +7918,14 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             return
         ani_cache['ongoing'].add(episode_key)
 
-        # If the Main Channel post already exists, never publish it twice.
-        target_channel = int(destination_channel) if destination_channel is not None else int(Var.MAIN_CHANNEL)
+        # Resolve the actual per-anime destination BEFORE duplicate checks.
+        # /addanime mappings live in anime_channels; the resolver checks that
+        # collection as well as the newer selected_anime_channels collection.
+        target_channel = (
+            int(destination_channel)
+            if destination_channel is not None
+            else int(await get_or_create_anime_channel(name, aniInfo))
+        )
         existing_target_post = (
             await db.getAnimeMainPost(ani_id, ep_no)
             if target_channel == int(Var.MAIN_CHANNEL)
@@ -8077,6 +8123,9 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                             else:
                                 post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
                             await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
+                            await db.saveAnimeDestinationPost(
+                                ani_id, ep_no, channel_to_use, episode_post.id
+                            )
                         elif photo_path and ospath.exists(photo_path):
                             with open(photo_path, 'rb') as photo_file:
                                 post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=markup)
