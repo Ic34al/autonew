@@ -8112,6 +8112,21 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
+                # Send stickers only after the episode post is confirmed.
+                sticker_targets = []
+                if destination_channel is not None:
+                    sticker_targets = [] if manual_search else [int(destination_channel)]
+                elif channel_to_use != int(Var.MAIN_CHANNEL):
+                    sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
+                else:
+                    sticker_targets = [int(Var.MAIN_CHANNEL)]
+
+                for sticker_target in dict.fromkeys(sticker_targets):
+                    await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+                    await send_sticker_to_channel(
+                        sticker_target, getattr(Var, "STICKER_ID", None)
+                    )
+
                 await db.markAnimeResumeComplete(ani_id, ep_no)
 
                 # Mark complete only after the Main Channel post exists.
