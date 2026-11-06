@@ -7438,12 +7438,10 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                     continue
                 chat = await validate_channel_id(mapped)
                 if not chat:
-                    await rep.report(
+                    raise RuntimeError(
                         f"Configured /addanime channel {mapped} for '{key}' is inaccessible. "
-                        "Episode will not silently fall back to Main Channel.",
-                        "error"
+                        "Episode upload stopped to prevent publishing to the wrong channel."
                     )
-                    return Var.MAIN_CHANNEL
                 await rep.report(
                     f"Dedicated channel mapping matched: {base_name} -> {chat.id} (alias: {key}). "
                     "Main Channel will receive the join-request announcement.",
@@ -7458,7 +7456,7 @@ async def get_or_create_anime_channel(name: str, aniInfo):
         return Var.MAIN_CHANNEL
     except Exception as error:
         await rep.report(f"Dedicated-channel lookup failed for {name}: {error}", "error")
-        return Var.MAIN_CHANNEL
+        raise
 
 
 async def create_anime_channel(name, aniInfo):
