@@ -494,7 +494,7 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
         season_number = str(season_value)
     if season_number and "season" not in str(display_title).lower():
         display_title = f"{display_title} Season {season_number}"
-    display_title = str(display_title).upper()
+    display_title = str(display_title).strip()
 
     audio_value = pdata.get("audio_type")
     if not audio_value:
