@@ -7061,7 +7061,7 @@ async def find_matching_quality_release(rss_url, requested_title):
             return {"title": candidate_title, "link": candidate_link}
     return None
 
-async def process_low_end(name, torrent_url, force=False, destination_channel=None):
+async def process_low_end(name, torrent_url, force=False, destination_channel=None, mapped_channel=None):
     try:
         aniInfo = TextEditor(name)
         await aniInfo.load_info()
@@ -7081,6 +7081,8 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
         target_channel = (
             int(destination_channel)
             if destination_channel is not None
+            else int(mapped_channel)
+            if mapped_channel is not None
             else int(await get_or_create_anime_channel(name, aniInfo))
         )
         existing_target_post = (
@@ -7500,7 +7502,7 @@ async def fetch_animes():
                     if not selected_channel:
                         unselected_titles.append(original)
                         continue
-                    scheduled.append((original, alias_cache[cache_key]))
+                    scheduled.append((original, alias_cache[cache_key], int(selected_channel)))
 
                 if alias_errors:
                     await report_schedule_status_once(
@@ -7579,14 +7581,14 @@ async def fetch_animes():
                     subsplease_feed = "subsplease" in str(feed_url).casefold()
                     if not (dual_multi_audio or japanese_english_sub or subsplease_feed):
                         continue
-                    for scheduled_title, aliases in scheduled:
+                    for scheduled_title, aliases, selected_channel in scheduled:
                         if title_matches(title, aliases):
                             # Japanese + English-sub releases are the explicit
                             # exception: publish them to Main Channel, even when
                             # this anime has a dedicated /addanime channel.
                             # Dual/Multi Audio continues to use its selected channel.
                             route_to_main = bool(japanese_english_sub or subsplease_feed) and not dual_multi_audio
-                            eligible.append((title, link, feed_url, scheduled_title, route_to_main))
+                            eligible.append((title, link, feed_url, scheduled_title, route_to_main, selected_channel))
                             break
 
             # Different quality feeds can expose the same torrent link. Process
@@ -7610,19 +7612,20 @@ async def fetch_animes():
             await rep.report(
                 f"Matched {len(eligible)} selected scheduled release(s): "
                 + "; ".join(
-                    f"{row[3]} -> {row[0]} ({'Main Channel: Japanese + English Sub' if row[4] else 'selected anime channel: Dual/Multi Audio'})"
+                    f"{row[3]} -> {row[0]} ({'Main Channel: Japanese + English Sub' if row[4] else 'selected channel ' + str(row[5]) + ': Dual/Multi Audio'})"
                     for row in eligible
                 ),
                 "success"
             )
 
-            for title, link, feed_url, scheduled_title, route_to_main in eligible:
+            for title, link, feed_url, scheduled_title, route_to_main, selected_channel in eligible:
                 try:
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
                         result = await get_animes(
                             title, link,
-                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None
+                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None,
+                            mapped_channel=None if route_to_main else selected_channel
                         )
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
@@ -8102,7 +8105,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False):
+async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False, mapped_channel=None):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -8134,7 +8137,10 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         # the standard selected-torrent pipeline for manual searches.
         if upload_mode == "low_end" and not manual_search:
             print(f"get_animes: calling process_low_end for {name}")
-            return await process_low_end(name, torrent, force=force, destination_channel=destination_channel)
+            return await process_low_end(
+                name, torrent, force=force,
+                destination_channel=destination_channel, mapped_channel=mapped_channel
+            )
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -8167,6 +8173,8 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         target_channel = (
             int(destination_channel)
             if destination_channel is not None
+            else int(mapped_channel)
+            if mapped_channel is not None
             else int(await get_or_create_anime_channel(name, aniInfo))
         )
         existing_target_post = (
