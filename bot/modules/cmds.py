@@ -4199,18 +4199,26 @@ async def anime_search_destination_callback(client, callback_query):
                     f"{episode_numbers[0]:02d}" if len(episode_numbers) == 1
                     else episode_label
                 )
-                synopsis_caption = synopsis.upper() if synopsis else ""
+                # Match the requested LINK CLICK caption exactly:
+                # bold title + bold metadata lines, small-cap synopsis,
+                # and Telegram's native expandable blockquote.
+                import html
+                small_caps = str.maketrans({
+                    "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ",
+                    "g":"ɢ","h":"ʜ","i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ",
+                    "m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ","q":"ǫ","r":"ʀ",
+                    "s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x",
+                    "y":"ʏ","z":"ᴢ"
+                })
+                synopsis_caption = html.escape(synopsis.translate(small_caps)) if synopsis else ""
                 announcement_text = (
-                    f"<b>✦ {display_title} ✦</b>\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n\n"
-                    f"➜ <b>SEASON:</b> {str(season_value).zfill(2)}\n"
-                    f"➜ <b>{episode_word}:</b> {episode_caption}\n"
-                    f"➜ <b>QUALITY:</b> {quality_value}\n"
-                    f"➜ <b>AUDIO:</b> {audio_value}\n"
-                    "━━━━━━━━━━━━━━━━━━━━\n\n"
-                    + (f"<blockquote>≡ {synopsis_caption}</blockquote>\n" if synopsis_caption else "")
-                    + f"✦ <b>STATUS:</b> {status.upper()}\n"
-                    + f"✦ <b>POWERED BY:</b> <b>ONGOING ANIME TIME</b>"
+                    f"<b>{html.escape(display_title)}</b>\\n"
+                    "──────────────────────\\n"
+                    f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\\n"
+                    f"<b>➤ Quality: {html.escape(str(quality_value))}</b>\\n"
+                    f"<b>➥ {episode_word.title()}: {html.escape(str(episode_caption))}</b>\\n"
+                    "──────────────────────\\n"
+                    + (f"<blockquote expandable>≡ {synopsis_caption}</blockquote>" if synopsis_caption else "")
                 )
                 watch_markup = InlineKeyboardMarkup([[
                     InlineKeyboardButton("• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •", url=invite.invite_link)
