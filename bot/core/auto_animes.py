@@ -438,19 +438,19 @@ async def find_existing_anime_channel(anime_name: str):
             return channel_id
     return None
 
+_ONGOING_PRIORITY_STICKER_FILE_ID = None
+
 async def send_sticker_to_channel(channel, sticker_id=None):
-    """Send the configured Ongoing Anime Time sticker after a published post."""
+    """Always send the FIRST sticker from the user's priority sticker pack."""
+    global _ONGOING_PRIORITY_STICKER_FILE_ID
     if not getattr(Var, "SEND_STICKER", True):
         await rep.report("Sticker sending is disabled; enable SEND_STICKER in Heroku config.", "warning")
         return False
 
     try:
-        # Prefer the explicit configured/database sticker ID. The old helper
-        # ignored this argument and always selected the first sticker in a pack.
-        configured_id = sticker_id or getattr(Var, "STICKER_ID", None)
-        if configured_id:
-            sent_message = await bot.send_sticker(chat_id=channel, sticker=configured_id)
-        else:
+        # Do not use STICKER_ID or the caller's sticker_id: those may point to
+        # an older/different sticker. The requested pack's first sticker wins.
+        if not _ONGOING_PRIORITY_STICKER_FILE_ID:
             sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
             endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getStickerSet"
             async with httpx.AsyncClient(timeout=25.0) as session:
@@ -461,23 +461,79 @@ async def send_sticker_to_channel(channel, sticker_id=None):
                 raise RuntimeError(payload.get("description", "Telegram getStickerSet failed"))
             stickers = payload.get("result", {}).get("stickers") or []
             if not stickers or not stickers[0].get("file_id"):
-                raise RuntimeError(f"Sticker pack {sticker_set_name} is empty")
-            sent_message = await bot.send_sticker(chat_id=channel, sticker=stickers[0]["file_id"])
+                raise RuntimeError(f"Priority sticker pack {sticker_set_name} is empty")
+            _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
 
+        sent_message = await bot.send_sticker(
+            chat_id=channel,
+            sticker=_ONGOING_PRIORITY_STICKER_FILE_ID
+        )
         if not sent_message:
-            raise RuntimeError("Telegram did not confirm the sticker message")
+            raise RuntimeError("Telegram did not confirm the priority sticker message")
         await rep.report(
-            f"Successfully sent Ongoing Anime Time sticker after episode post to {channel} "
-            f"(message_id={sent_message.id})",
+            f"Sent FIRST priority sticker from Ongoing_Anime_stickers_by_fStikBot "
+            f"after post to {channel} (message_id={sent_message.id})",
             "info"
         )
         return True
     except Exception as error:
-        await rep.report(
-            f"Sticker send failed after episode post in {channel}: {type(error).__name__}: {error}",
-            "error"
-        )
+        await rep.report(f"Priority sticker delivery failed for {channel}: {error}", "error")
         return False
+
+async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_number, qualities):
+    """Build the exact established Main Channel caption with Telegram expandable synopsis."""
+    import html
+    data = getattr(aniInfo, "adata", {}) or {}
+    pdata = getattr(aniInfo, "pdata", {}) or {}
+    titles = data.get("title") or {}
+    display_title = titles.get("english") or titles.get("romaji") or anime_name
+
+    audio_value = pdata.get("audio_type")
+    if not audio_value:
+        lowered = str(anime_name).lower()
+        if "dual audio" in lowered or "dual-audio" in lowered:
+            audio_value = "Dual Audio"
+        elif "multi audio" in lowered or "multi-audio" in lowered:
+            audio_value = "Multi Audio"
+        elif "english dub" in lowered or "english-dub" in lowered:
+            audio_value = "English Dub"
+        else:
+            audio_value = "Japanese [English Sub]"
+
+    quality_labels = []
+    quality_names = {"480": "480p", "720": "720p", "1080": "1080p", "HDRi": "HDRip", "HDRip": "HDRip"}
+    for quality in ("480", "720", "1080", "HDRi"):
+        if quality in (qualities or {}):
+            quality_labels.append(quality_names[quality])
+    quality_text = ", ".join(quality_labels) if quality_labels else "Multi Quality"
+
+    description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
+    description = re.sub(r"\\s+", " ", description).strip()
+    if len(description) > 240:
+        description = description[:237].rsplit(" ", 1)[0] + "..."
+    small_caps = str.maketrans({
+        "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ",
+        "g":"ɢ","h":"ʜ","i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ",
+        "m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ","q":"ǫ","r":"ʀ",
+        "s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x",
+        "y":"ʏ","z":"ᴢ"
+    })
+    synopsis = html.escape(description.translate(small_caps)) if description else ""
+    try:
+        episode_label = f"{int(episode_number):02d}"
+    except (TypeError, ValueError):
+        episode_label = html.escape(str(episode_number or "—"))
+    episode_word = "Episode"
+    caption = (
+        f"<b>{html.escape(str(display_title))}</b>\\n"
+        "──────────────────────\\n"
+        f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\\n"
+        f"<b>➤ Quality: {html.escape(quality_text)}</b>\\n"
+        f"<b>➥ {episode_word}: {episode_label}</b>\\n"
+        "──────────────────────\\n"
+        + (f"<blockquote expandable>≡ {synopsis}</blockquote>" if synopsis else "")
+    )
+    return caption
 
 async def validate_channel_id(channel_id):
     if not channel_id:
