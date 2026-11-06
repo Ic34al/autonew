@@ -7895,7 +7895,9 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 # manual /search sends it only to the selected destination.
                 sticker_targets = []
                 if destination_channel is not None:
-                    sticker_targets = [int(destination_channel)]
+                    # /search sends its own combined destination/Main Channel
+                    # sticker after the selected batch finishes in cmds.py.
+                    sticker_targets = [] if manual_search else [int(destination_channel)]
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
