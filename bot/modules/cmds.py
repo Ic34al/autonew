@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -4175,11 +4175,19 @@ async def anime_search_destination_callback(client, callback_query):
         completed = skipped = failed = 0
         for title, torrent in queue:
             try:
-                await rep.report(f"/search selected upload to {destination}: {title}", "info")
-                result = await get_animes(
-                    title, torrent, force=True, manual_search=True,
-                    destination_channel=destination
-                )
+                while True:
+                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                        await asleep(1)
+                        continue
+                    async with AUTO_UPLOAD_PRIORITY_LOCK:
+                        if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                            continue
+                        await rep.report(f"/search selected upload to {destination}: {title}", "info")
+                        result = await get_animes(
+                            title, torrent, force=True, manual_search=True,
+                            destination_channel=destination
+                        )
+                        break
                 if result == "already_published":
                     skipped += 1
                     await rep.report(f"/search skipped: already posted in selected channel {destination}: {title}", "warning")
