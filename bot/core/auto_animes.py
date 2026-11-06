@@ -7345,7 +7345,7 @@ async def fetch_animes():
                     # Explicitly reject dual/multi-audio variants even when
                     # their anime title matches today's schedule.
                     if re.search(
-                        r"(?i)(?:\\bdual(?:[- ]audio)?\\b|\\bmulti[- ]audio\\b|\\bdual audio\\b)",
+                        r"(?i)(?:\bdual(?:[- ]audio)?\b|\bmulti[- ]audio\b)",
                         str(title)
                     ):
                         await rep.report(f"Skipped dual/multi-audio release (today schedule is single-audio only): {title}", "info")
