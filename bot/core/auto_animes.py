@@ -2313,6 +2313,22 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
+                # Post sticker only after Telegram confirms the episode announcement.
+                # Dedicated automatic routing posts to the anime channel and main channel.
+                sticker_targets = []
+                if destination_channel is not None:
+                    sticker_targets = [] if manual_search else [int(destination_channel)]
+                elif channel_to_use != int(Var.MAIN_CHANNEL):
+                    sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
+                else:
+                    sticker_targets = [int(Var.MAIN_CHANNEL)]
+
+                for sticker_target in dict.fromkeys(sticker_targets):
+                    await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+                    await send_sticker_to_channel(
+                        sticker_target, getattr(Var, "STICKER_ID", None)
+                    )
+
                 await db.markAnimeResumeComplete(ani_id, ep_no)
                 # Manual /search uploads send their sticker from the selection
                 # workflow, using the exact chosen destination. This prevents
@@ -7889,32 +7905,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 batch_audio = "Dual" if re.search(r"\bdual\b", name, re.IGNORECASE) else ("Dub" if re.search(r"\b(dub|english)\b", name, re.IGNORECASE) else "Sub")
                 await process_batch_anime(name, torrent, batch_audio)
                 if 'ani_id' in locals() and 'ep_no' in locals():
-                    # Send the Ongoing Anime Time sticker immediately after each
-                # confirmed episode post. Dedicated auto-channel posts receive
-                # one sticker there and one after the Main Channel announcement;
-                # manual /search sends it only to the selected destination.
-                sticker_targets = []
-                if destination_channel is not None:
-                    # /search sends its own combined destination/Main Channel
-                    # sticker after the selected batch finishes in cmds.py.
-                    sticker_targets = [] if manual_search else [int(destination_channel)]
-                elif channel_to_use != int(Var.MAIN_CHANNEL):
-                    sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
-                else:
-                    sticker_targets = [int(Var.MAIN_CHANNEL)]
-
-                for sticker_target in dict.fromkeys(sticker_targets):
-                    try:
-                        await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
-                        await send_sticker_to_channel(sticker_target, getattr(Var, "STICKER_ID", None))
-                    except Exception as sticker_error:
-                        await rep.report(
-                            f"Episode post succeeded but Ongoing Anime Time sticker failed in "
-                            f"{sticker_target}: {sticker_error}",
-                            "error"
-                        )
-
-                await db.markAnimeResumeComplete(ani_id, ep_no)
+                    await db.markAnimeResumeComplete(ani_id, ep_no)
                     ani_cache['completed'].add(episode_key)
                     ani_cache['ongoing'].discard(episode_key)
                 return
