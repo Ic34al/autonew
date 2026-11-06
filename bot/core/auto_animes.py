@@ -7502,7 +7502,12 @@ async def fetch_animes():
                         continue
                     for scheduled_title, aliases in scheduled:
                         if title_matches(title, aliases):
-                            eligible.append((title, link, feed_url, scheduled_title))
+                            # Japanese + English-sub releases are the explicit
+                            # exception: publish them to Main Channel, even when
+                            # this anime has a dedicated /addanime channel.
+                            # Dual/Multi Audio continues to use its selected channel.
+                            route_to_main = bool(japanese_english_sub or subsplease_feed) and not dual_multi_audio
+                            eligible.append((title, link, feed_url, scheduled_title, route_to_main))
                             break
 
             # Different quality feeds can expose the same torrent link. Process
@@ -7522,16 +7527,22 @@ async def fetch_animes():
                 continue
 
             await rep.report(
-                f"Matched {len(eligible)} scheduled release(s): "
-                + "; ".join(f"{row[3]} -> {row[0]}" for row in eligible),
+                f"Matched {len(eligible)} selected scheduled release(s): "
+                + "; ".join(
+                    f"{row[3]} -> {row[0]} ({'Main Channel: Japanese + English Sub' if row[4] else 'selected anime channel: Dual/Multi Audio'})"
+                    for row in eligible
+                ),
                 "success"
             )
 
-            for title, link, feed_url, scheduled_title in eligible:
+            for title, link, feed_url, scheduled_title, route_to_main in eligible:
                 try:
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
-                        result = await get_animes(title, link)
+                        result = await get_animes(
+                            title, link,
+                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None
+                        )
                     if result != "already_published":
                         seen_links.add(link)
                     else:
