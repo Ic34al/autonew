@@ -3764,11 +3764,10 @@ async def anime_search_cmd(client, message: Message):
                             seen.add(candidate)
                             matches.append((release_title, candidate))
 
-            # Fetch the complete historical catalogue for each matching show.
-            # SubsPlease f=search/f=latest are rolling/recent result sets;
-            # the show's own page exposes table#show-release-table[sid], and
-            # f=show&sid=... returns the show's full episode dictionary.
-            show_pages = {}
+            # Fetch the complete historical catalogue for every matching show.
+            # Search/latest endpoints may expose the show page or SID under
+            # different keys, so retain either identifier and query f=show.
+            show_catalogues = {}
             for payload in api_payloads:
                 if not isinstance(payload, dict):
                     continue
@@ -3786,17 +3785,22 @@ async def anime_search_cmd(client, message: Message):
                     if not isinstance(item, dict):
                         continue
                     show_name = str(item.get("show") or item.get("title") or "").strip()
-                    page_path = str(item.get("page") or "").strip()
-                    if not show_name or not page_path or not title_matches(normalize(show_name)):
+                    if not show_name or not title_matches(normalize(show_name)):
                         continue
-                    page_url = (
-                        page_path if page_path.startswith("http")
-                        else "https://subsplease.org/" + page_path.lstrip("/")
+                    page_path = (
+                        item.get("page") or item.get("show_page")
+                        or item.get("show_url") or item.get("url")
                     )
-                    show_pages[page_url] = show_name
+                    sid = item.get("sid") or item.get("show_id")
+                    page_url = ""
+                    if page_path:
+                        page_path = str(page_path).strip()
+                        page_url = (
+                            page_path if page_path.startswith("http")
+                            else "https://subsplease.org/" + page_path.lstrip("/")
+                        )
+                    show_catalogues[(str(sid or ""), page_url)] = show_name
 
-            # Search/latest client has exited its context by this point.
-            # Open a separate client for historical show-page and f=show requests.
             async with httpx.AsyncClient(
                 timeout=25,
                 follow_redirects=True,
@@ -3806,28 +3810,30 @@ async def anime_search_cmd(client, message: Message):
                     "Accept": "text/html,application/json,*/*",
                 }
             ) as catalogue_client:
-                for page_url, show_name in show_pages.items():
+                for (sid, page_url), show_name in show_catalogues.items():
                     try:
-                        page_response = await catalogue_client.get(page_url)
-                        page_response.raise_for_status()
-                        sid_match = re.search(
-                            r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\bsid=[\"'](\d+)[\"']",
-                            page_response.text,
-                            re.IGNORECASE
-                        )
-                        if not sid_match:
+                        if not sid and page_url:
+                            page_response = await catalogue_client.get(page_url)
+                            page_response.raise_for_status()
                             sid_match = re.search(
-                                r"<table[^>]*\bsid=[\"'](\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
-                                page_response.text,
-                                re.IGNORECASE
+                                r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
+                                page_response.text, re.IGNORECASE
+                            ) or re.search(
+                                r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
+                                page_response.text, re.IGNORECASE
                             )
-                        if not sid_match:
-                            await rep.report(f"/search: could not find SubsPlease show ID for {show_name}", "warning")
+                            if sid_match:
+                                sid = sid_match.group(1)
+                        if not sid:
+                            await rep.report(
+                                f"/search: no SubsPlease show ID/page available for {show_name}",
+                                "warning"
+                            )
                             continue
-    
+
                         show_response = await catalogue_client.get(
                             "https://subsplease.org/api/",
-                            params={"f": "show", "tz": "Etc/GMT", "sid": sid_match.group(1)}
+                            params={"f": "show", "tz": "Etc/GMT", "sid": sid}
                         )
                         show_response.raise_for_status()
                         show_payload = show_response.json()
@@ -3838,11 +3844,13 @@ async def anime_search_cmd(client, message: Message):
                             episode_items = episode_map
                         else:
                             episode_items = []
-    
+
                         for episode_item in episode_items:
                             if not isinstance(episode_item, dict):
                                 continue
-                            episode_no = str(episode_item.get("episode") or "").strip()
+                            episode_no = str(
+                                episode_item.get("episode") or episode_item.get("number") or ""
+                            ).strip()
                             if not episode_no:
                                 continue
                             downloads = episode_item.get("downloads") or []
@@ -3851,14 +3859,19 @@ async def anime_search_cmd(client, message: Message):
                             for download in downloads:
                                 if not isinstance(download, dict):
                                     continue
-                                candidate = download.get("magnet") or download.get("torrent") or download.get("url")
+                                candidate = (
+                                    download.get("magnet") or download.get("torrent")
+                                    or download.get("url")
+                                )
                                 if not candidate:
                                     continue
                                 candidate = str(candidate).strip()
                                 if not await is_valid_torrent_url(candidate):
                                     continue
-                                resolution = str(download.get("res") or download.get("resolution") or "").strip()
-                                release_title = f"{show_name} - {episode_no}"
+                                resolution = str(
+                                    download.get("res") or download.get("resolution") or ""
+                                ).strip()
+                                release_title = f"{show_name} - Episode {episode_no}"
                                 if resolution:
                                     release_title += f" [{resolution}p]"
                                 if candidate not in seen:
