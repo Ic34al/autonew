@@ -3896,7 +3896,7 @@ async def anime_search_cmd(client, message: Message):
                 r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b",
                 r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b",
                 r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b",
-                r"[-._ ]0*(\d{1,3})(?:\s*(?:\(|\[|$))",
+                r"(?:^|[-._])\s*0*(\d{1,3})(?=\s*(?:\(|\[|$))",
             )
             for pattern in patterns:
                 found = re.search(pattern, value, re.IGNORECASE)
@@ -3996,7 +3996,7 @@ def build_anime_search_keyboard(message_id, state):
             r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b|"
             r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b|"
             r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b|"
-            r"[-._ ]0*(\d{1,3})(?:\s*(?:\(|\[|$))",
+            r"(?:^|[-._])\s*0*(\d{1,3})(?=\s*(?:\(|\[|$))",
             normalized_title,
             re.IGNORECASE
         )
