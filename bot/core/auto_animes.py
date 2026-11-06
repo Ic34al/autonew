@@ -7499,6 +7499,21 @@ async def fetch_animes():
                                 break
                         if selected_channel:
                             break
+                    if selected_channel:
+                        try:
+                            selected_channel = int(str(selected_channel).strip())
+                        except (TypeError, ValueError):
+                            selected_chat = await validate_channel_id(selected_channel)
+                            if selected_chat:
+                                selected_channel = int(selected_chat.id)
+                            else:
+                                await report_schedule_status_once(
+                                    ("invalid_selected_channel", original, str(selected_channel)),
+                                    f"Selected channel mapping for '{original}' is inaccessible; release will not be redirected to Main Channel.",
+                                    "error"
+                                )
+                                selected_channel = None
+
                     if not selected_channel:
                         unselected_titles.append(original)
                         continue
