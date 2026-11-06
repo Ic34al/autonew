@@ -7445,14 +7445,19 @@ async def fetch_animes():
                         continue
                     if not published_today(entry, today):
                         continue
-                    # Only single-audio/subtitle releases are eligible.
-                    # Explicitly reject dual/multi-audio variants even when
-                    # their anime title matches today's schedule.
-                    if re.search(
-                        r"(?i)(?:\bdual(?:[- ]audio)?\b|\bmulti[- ]audio\b)",
-                        str(title)
-                    ):
-                        await rep.report(f"Skipped dual/multi-audio release (today schedule is single-audio only): {title}", "info")
+                    # Today's ongoing schedule accepts ONLY dual/multi-audio
+                    # releases. Single-audio and subtitle-only releases must
+                    # never enter the upload queue, even when the title matches.
+                    release_title = str(title)
+                    dual_multi_audio = re.search(
+                        r"(?i)(?:\bdual(?:[- ]audio)?\b|\bmulti(?:[- ]audio)?\b)",
+                        release_title
+                    )
+                    if not dual_multi_audio:
+                        await rep.report(
+                            f"Skipped non-dual-audio release (today schedule requires dual/multi audio): {title}",
+                            "info"
+                        )
                         continue
                     for scheduled_title, aliases in scheduled:
                         if title_matches(title, aliases):
