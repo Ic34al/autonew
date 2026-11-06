@@ -7213,32 +7213,59 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
         await rep.report(f"Low-end processing error: {str(e)}", "error")
 
 async def fetch_animes():
-    """Runtime fetcher: only today's scheduled anime releases are eligible."""
+    """Discover and upload every eligible release in today's SubsPlease schedule."""
     from zoneinfo import ZoneInfo
     from datetime import datetime, timezone
     from bot.modules.daily_schedule import fetch_today_schedule
 
     await rep.report(
-        "TODAY-ONLY AUTO UPLOADER STARTED. Old backlog, saved retries and unscheduled RSS items are disabled.",
+        "ONGOING ANIME SCANNER STARTED. Checking today's schedule and configured RSS feeds.",
         "info"
     )
     ist = ZoneInfo("Asia/Kolkata")
     seen_rss_links = {}
 
     def normalize_title(value):
-        value = re.sub(r"^\s*\[[^\]]+\]\s*", "", str(value or ""))
-        value = re.sub(r"\([^)]*(?:480p|720p|1080p|WEB[- ]?DL|BluRay|Batch)[^)]*\)", " ", value, flags=re.I)
-        value = re.sub(r"\[[^\]]*(?:480p|720p|1080p|WEB[- ]?DL|BluRay|Batch)[^\]]*\]", " ", value, flags=re.I)
-        value = re.sub(r"\s*-\s*(?:\d{1,3})(?:v\d+)?\s*$", "", value)
-        return re.sub(r"[^a-z0-9]+", "", value.casefold())
+        value = str(value or "").casefold()
+        # Remove fansub/source labels and release metadata without deleting
+        # meaningful season/title words.
+        value = re.sub(r"\[[^\]]*\]", " ", value)
+        value = re.sub(r"\([^)]*(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|batch|hevc|x26[45])[^)]*\)", " ", value, flags=re.I)
+        value = re.sub(r"\b(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|batch|hevc|x26[45])\b", " ", value, flags=re.I)
+        value = re.sub(r"\s+-\s+\d{1,3}(?:v\d+)?\s*$", " ", value)
+        return re.sub(r"[^a-z0-9]+", "", value)
+
+    def scheduled_match(rss_title, scheduled_titles):
+        normalized = normalize_title(rss_title)
+        if not normalized:
+            return False
+        for scheduled in scheduled_titles:
+            if len(scheduled) >= 5 and (scheduled in normalized or normalized in scheduled):
+                return True
+        # Fallback for small punctuation/title variations: require a strong
+        # overlap of meaningful words, rather than rejecting the whole feed.
+        words = {
+            word for word in re.findall(r"[a-z0-9]+", str(rss_title).casefold())
+            if len(word) >= 3 and not word.isdigit()
+        }
+        for scheduled in scheduled_titles:
+            target = {
+                word for word in re.findall(r"[a-z0-9]+", scheduled)
+                if len(word) >= 3 and not word.isdigit()
+            }
+            if target and len(words & target) / len(target) >= 0.75:
+                return True
+        return False
 
     def was_published_today(entry, today):
         published = (
             getattr(entry, "published_parsed", None)
             or getattr(entry, "updated_parsed", None)
         )
+        # Some RSS providers omit timestamps. The same-day SubsPlease
+        # schedule is the release-date authority in that case.
         if not published:
-            return False
+            return True
         try:
             published_at = datetime(*published[:6], tzinfo=timezone.utc)
             return published_at.astimezone(ist).date() == today
@@ -7257,9 +7284,6 @@ async def fetch_animes():
 
         try:
             today = datetime.now(ist).date()
-
-            # Fetch a fresh schedule after every restart and every scan.
-            # If schedule lookup fails, fail closed and upload nothing.
             schedule_items = await fetch_today_schedule()
             scheduled_titles = {
                 normalize_title(item.get("title"))
@@ -7269,7 +7293,7 @@ async def fetch_animes():
             scheduled_titles.discard("")
             if not scheduled_titles:
                 await rep.report(
-                    "Today's schedule is empty or unavailable. No automatic uploads will run.",
+                    "Today's SubsPlease schedule returned no anime. Scanner will retry; no old backlog will be uploaded.",
                     "warning"
                 )
                 continue
@@ -7277,84 +7301,72 @@ async def fetch_animes():
             feed_urls = list(dict.fromkeys(
                 url for url in (
                     list(Var.RSS_ITEMS_ANIME or [])
-                    + [
-                        Var.RSS_LOW_END.get(q)
-                        for q in ("480", "720", "1080")
-                    ]
+                    + [Var.RSS_LOW_END.get(q) for q in ("480", "720", "1080")]
                 ) if url
             ))
             if not feed_urls:
-                await rep.report("No RSS feeds configured. No automatic uploads will run.", "warning")
+                await rep.report("No anime RSS feeds are configured. Add RSS_ITEMS_ANIME/RSS_LOW_END feeds.", "error")
                 continue
 
-            feed_results = await asyncio.gather(*(getfeeds(url) for url in feed_urls))
+            feed_results = await asyncio.gather(
+                *(getfeeds(url) for url in feed_urls),
+                return_exceptions=True
+            )
             eligible = []
-
+            feed_count = 0
             for feed_url, entries in zip(feed_urls, feed_results):
-                if not entries:
+                if isinstance(entries, Exception) or not entries:
                     continue
+                feed_count += len(entries)
                 seen = seen_rss_links.setdefault(feed_url, set())
-
                 for entry in entries:
                     link = getattr(entry, "link", None)
                     title = getattr(entry, "title", None)
                     if not link or not title or link in seen:
                         continue
-
-                    # Block all old entries, including those left in RSS feeds
-                    # and all old MongoDB resume/checkpoint tasks.
                     if not was_published_today(entry, today):
                         continue
-
-                    rss_title = normalize_title(title)
-                    if not rss_title:
+                    if not scheduled_match(title, scheduled_titles):
                         continue
-
-                    # The anime must be listed in today's schedule.
-                    matches_schedule = any(
-                        scheduled in rss_title or rss_title in scheduled
-                        for scheduled in scheduled_titles
-                        if len(scheduled) >= 5
-                    )
-                    if not matches_schedule:
-                        continue
-
                     eligible.append((title, link, feed_url))
 
             if not eligible:
+                await rep.report(
+                    f"Ongoing scan: {len(schedule_items)} scheduled anime, {len(feed_urls)} feeds, "
+                    f"{feed_count} RSS entries; no new matching same-day release yet.",
+                    "info"
+                )
                 continue
 
-            # Today-only jobs are sorted by title for deterministic handling.
-            # Audio type is not used as a priority, so Sub/Dub/Dual are equal.
+            # Prefer newest release entries first; do not stop after the first
+            # eligible anime, otherwise other ongoing releases are starved.
             eligible.sort(key=lambda item: item[0].casefold())
-            title, link, feed_url = eligible[0]
-
             await rep.report(
-                f"TODAY'S SCHEDULED ANIME ONLY: {title}. "
-                "No old backlog or unscheduled files will be started.",
+                f"Found {len(eligible)} eligible ongoing release(s) for today. Processing all before manual queue resumes.",
                 "info"
             )
-            try:
-                AUTO_UPLOAD_PRIORITY_PENDING.set()
+            for title, link, feed_url in eligible:
                 try:
+                    AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
                         await get_animes(title, link)
-                        seen_rss_links.setdefault(feed_url, set()).add(link)
+                    seen_rss_links.setdefault(feed_url, set()).add(link)
+                    await rep.report(f"Today's ongoing release completed: {title}", "success")
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    await rep.report(
+                        f"Today's ongoing upload failed; it will be retried on the next scan: {title}\n{format_exc()}",
+                        "error"
+                    )
                 finally:
                     AUTO_UPLOAD_PRIORITY_PENDING.clear()
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                await rep.report(
-                    f"Today's scheduled upload failed and will be checked again: {title}\n{format_exc()}",
-                    "error"
-                )
 
         except asyncio.CancelledError:
             raise
         except Exception as error:
             await rep.report(
-                f"Today-only schedule check failed closed; no automatic upload started: {error}",
+                f"Ongoing anime scan failed; it will retry automatically: {error}\n{format_exc()}",
                 "error"
             )
 
