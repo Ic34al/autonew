@@ -1372,7 +1372,12 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 for i in range(0, len(all_buttons), 2)
             ]
 
-            final_caption = await aniInfo.get_caption()
+            # Use the new ANIME SOUL post template for the actual episode
+            # post too (not only the Main Channel join-request announcement).
+            # This replaces the legacy purple metadata caption everywhere.
+            final_caption = await build_main_channel_announcement_caption(
+                aniInfo, name, ep_no, file_store_links
+            )
             try:
                 fontchanger_status = await db.get_fontchanger()
                 if fontchanger_status == "on":
