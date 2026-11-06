@@ -1505,96 +1505,80 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Resolve a manually mapped anime channel across AniList/release-title aliases."""
+    """Resolve /addanime mapping using RSS, AniList English/Romaji/native and synonyms."""
     try:
         base_anime_name = extract_base_anime_name(name)
         normalized_name = normalize_anime_name_for_search(base_anime_name)
-
-        # /addanime stores every known title variant. Resolve those variants
-        # before falling back to auto-created channels, so today's scheduled
-        # RSS release is routed to the channel the admin actually configured.
         candidates = [base_anime_name, name, normalized_name]
+        title_data = (getattr(aniInfo, "adata", {}) or {}).get("title", {}) or {}
+        if isinstance(title_data, dict):
+            candidates.extend(title_data.get(key) for key in ("english", "romaji", "native"))
+        candidates.extend((getattr(aniInfo, "adata", {}) or {}).get("synonyms", []) or [])
         try:
             candidates.extend(await get_all_possible_anime_names(base_anime_name))
         except Exception as alias_error:
-            await rep.report(
-                f"Could not expand anime channel aliases for {base_anime_name}: {alias_error}",
-                "warning"
-            )
+            await rep.report(f"Could not expand anime channel aliases for {base_anime_name}: {alias_error}", "warning")
 
-        seen_candidates = set()
+        def mapping_keys(value):
+            value = str(value or "").strip()
+            if not value:
+                return []
+            normalized = normalize_anime_name_for_search(value)
+            compact = re.sub(r"\\s+", " ", value.lower()).strip()
+            return list(dict.fromkeys(key for key in (value.lower(), normalized, compact) if key))
+
+        seen = set()
         for candidate in candidates:
-            candidate = str(candidate or "").strip()
-            if not candidate:
-                continue
-            candidate_key = normalize_anime_name_for_search(candidate)
-            if not candidate_key or candidate_key in seen_candidates:
-                continue
-            seen_candidates.add(candidate_key)
-
-            try:
-                mapped_channel = await db.get_anime_channel(candidate_key)
-                if not mapped_channel:
-                    mapped_channel = await db.get_anime_channel(candidate.lower())
-                if mapped_channel:
-                    channel_info = await validate_channel_id(mapped_channel)
-                    if channel_info:
-                        # Keep the release's canonical name mapped as well,
-                        # avoiding repeated alias resolution on later episodes.
-                        await db.add_anime_channel_mapping(normalized_name, channel_info.id)
-                        await rep.report(
-                            f"Automatic release routed to configured anime channel: "
-                            f"{base_anime_name} -> {channel_info.id} (matched '{candidate}')",
-                            "info"
-                        )
-                        return channel_info.id
+            for key in mapping_keys(candidate):
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    mapped = await db.get_anime_channel(key)
+                    if not mapped:
+                        continue
+                    info = await validate_channel_id(mapped)
+                    if not info:
+                        await rep.report(f"Configured anime channel {mapped} for '{key}' is unavailable.", "warning")
+                        continue
+                    # Store all canonical variants against the same channel.
+                    for alias in candidates:
+                        for alias_key in mapping_keys(alias):
+                            try:
+                                await db.add_anime_channel_mapping(alias_key, info.id)
+                            except Exception:
+                                pass
                     await rep.report(
-                        f"Configured anime channel {mapped_channel} for '{candidate}' is unavailable; "
-                        "checking other aliases.",
-                        "warning"
+                        f"Automatic release routed to configured channel {info.id} "
+                        f"for {base_anime_name} (matched alias: {key}). Main Channel receives the join-request announcement.",
+                        "success"
                     )
-            except Exception as mapping_error:
-                await rep.report(
-                    f"Anime channel mapping lookup failed for '{candidate}': {mapping_error}",
-                    "warning"
-                )
+                    return info.id
+                except Exception as lookup_error:
+                    await rep.report(f"Anime channel mapping lookup failed for '{key}': {lookup_error}", "warning")
 
-        existing_channel = await find_existing_anime_channel(base_anime_name)
-        if existing_channel:
-            channel_info = await validate_channel_id(existing_channel)
-            if channel_info:
-                await db.add_anime_channel_mapping(normalized_name, channel_info.id)
-                await rep.report(
-                    f"Found existing anime channel for {base_anime_name}: {channel_info.id}",
-                    "info"
-                )
-                return channel_info.id
+        existing = await find_existing_anime_channel(base_anime_name)
+        if existing:
+            info = await validate_channel_id(existing)
+            if info:
+                return info.id
 
         channel_creation = await db.get_channel_creation()
         if not channel_creation or not Var.USER_SESSION:
-            await rep.report(
-                f"No dedicated channel mapping for {base_anime_name}; using Main Channel.",
-                "info"
-            )
+            await rep.report(f"No dedicated channel mapping found for '{base_anime_name}'; using Main Channel.", "warning")
             return Var.MAIN_CHANNEL
 
         await rep.report(f"Creating new channel for: {base_anime_name}", "info")
         new_channel = await create_anime_channel(name, aniInfo)
         if new_channel:
-            await db.add_anime_channel_mapping(normalized_name, new_channel)
-            await rep.report(
-                f"Created and saved anime channel mapping for {base_anime_name}: {new_channel}",
-                "info"
-            )
+            for alias in candidates:
+                for alias_key in mapping_keys(alias):
+                    await db.add_anime_channel_mapping(alias_key, new_channel)
             return new_channel
-
-        await rep.report(
-            f"Could not create dedicated channel for {base_anime_name}; using Main Channel.",
-            "error"
-        )
+        await rep.report(f"Could not create dedicated channel for {base_anime_name}; using Main Channel.", "error")
         return Var.MAIN_CHANNEL
-    except Exception as e:
-        await rep.report(f"Error in get_or_create_anime_channel: {e}", "error")
+    except Exception as error:
+        await rep.report(f"Error in get_or_create_anime_channel: {error}", "error")
         return Var.MAIN_CHANNEL
 
 async def create_anime_channel(name, aniInfo):
