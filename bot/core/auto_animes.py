@@ -7073,23 +7073,30 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
         encoding_enabled = await db.get_encoding()
         episode_key = f"{ani_id}:{ep_no or 'unknown'}"
         if not force and episode_key in ani_cache['completed']:
-            return
+            return "already_published"
         if not force and episode_key in ani_cache['ongoing']:
-            return
+            return "in_progress"
         ani_cache['ongoing'].add(episode_key)
 
-        existing_main_post = await db.getAnimeMainPost(ani_id, ep_no) if destination_channel in (None, Var.MAIN_CHANNEL, str(Var.MAIN_CHANNEL)) else None
-        if existing_main_post:
+        target_channel = (
+            int(destination_channel)
+            if destination_channel is not None
+            else int(await get_or_create_anime_channel(name, aniInfo))
+        )
+        existing_target_post = (
+            await db.getAnimeMainPost(ani_id, ep_no)
+            if target_channel == int(Var.MAIN_CHANNEL)
+            else await db.getAnimeDestinationPost(ani_id, ep_no, target_channel)
+        )
+        if existing_target_post:
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
-            return
+            return "already_published"
 
         await db.saveAnimeResume(ani_id, ep_no, name, torrent_url)
 
-        if force or (not (ani_data := await db.getAnime(ani_id)) \
-            or (ani_data and not (qual_data := ani_data.get(ep_no))) \
-            or (ani_data and qual_data and not all(qual for qual in qual_data.values()))):
+        if force or not existing_target_post:
 
             if "[Batch]" in name:
                 await rep.report(f"Torrent Skipped!\n\n{name}", "warning")
@@ -7106,7 +7113,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
             await rep.report(f"New Anime Torrent Found!\n\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel
 
             channel_valid = False
             for attempt in range(3):
@@ -7116,8 +7123,10 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 await asyncio.sleep(2)
 
             if not channel_valid:
-                await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
-                channel_to_use = Var.MAIN_CHANNEL
+                raise RuntimeError(
+                    f"Configured destination channel {channel_to_use} is inaccessible; "
+                    "low-end upload stopped to prevent posting to the wrong channel."
+                )
 
             all_banners = await db.list_anime_banners()
             banner_url = None
@@ -7262,7 +7271,9 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 for i in range(0, len(all_buttons), 2)
             ]
 
-            final_caption = await aniInfo.get_caption()
+            final_caption = await build_main_channel_announcement_caption(
+                aniInfo, name, ep_no, {quality: True for quality in file_store_links}
+            )
             try:
                 fontchanger_status = await db.get_fontchanger()
                 if fontchanger_status == "on":
@@ -7285,30 +7296,53 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                     f"Low-end episode {name} is not ready to publish; missing qualities: {', '.join(missing_low_end)}"
                 )
 
-            target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
-            final_post = await bot.send_photo(
-                target_channel, photo=photo_url,
-                caption=final_caption, reply_markup=final_markup
-            )
-            if not final_post or not getattr(final_post, "id", None):
-                raise RuntimeError(f"Main Channel did not confirm post for {name}.")
-
-            if destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
+            final_post = None
+            if channel_to_use != int(Var.MAIN_CHANNEL):
+                dedicated_post = await bot.send_photo(
+                    channel_to_use, photo=photo_url,
+                    caption=final_caption, reply_markup=final_markup
+                )
+                if not dedicated_post or not getattr(dedicated_post, "id", None):
+                    raise RuntimeError(f"Dedicated channel did not confirm post for {name}.")
+                announcement_markup = await build_anime_watch_markup(channel_to_use)
+                final_post = await bot.send_photo(
+                    Var.MAIN_CHANNEL, photo=photo_url,
+                    caption=final_caption, reply_markup=announcement_markup
+                )
+                if not final_post or not getattr(final_post, "id", None):
+                    raise RuntimeError(f"Main Channel announcement was not confirmed for {name}.")
+                await db.saveAnimeDedicatedPost(ani_id, ep_no, dedicated_post.id)
+                await db.saveAnimeDestinationPost(ani_id, ep_no, channel_to_use, dedicated_post.id)
                 await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
+            else:
+                final_post = await bot.send_photo(
+                    Var.MAIN_CHANNEL, photo=photo_url,
+                    caption=final_caption, reply_markup=final_markup
+                )
+                if not final_post or not getattr(final_post, "id", None):
+                    raise RuntimeError(f"Main Channel did not confirm post for {name}.")
+                await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
+
             for uploaded_qual in file_store_links:
                 await db.saveAnime(ani_id, ep_no, uploaded_qual, final_post.id)
             await db.markAnimeResumeComplete(ani_id, ep_no)
             if ani_id and ep_no:
                 await db.mark_episode_completed(ani_id, ep_no)
 
-            # Selected-channel episode uploads must never create a sticker
-            # message in Main Channel. Keep this workflow sticker-free.
-
+            sticker_targets = (
+                [int(channel_to_use), int(Var.MAIN_CHANNEL)]
+                if channel_to_use != int(Var.MAIN_CHANNEL)
+                else [int(Var.MAIN_CHANNEL)]
+            )
+            for sticker_target in dict.fromkeys(sticker_targets):
+                await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+                await send_sticker_to_channel(sticker_target, getattr(Var, "STICKER_ID", None))
 
             if stat_msg:
                 await stat_msg.delete()
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
+            return "uploaded"
 
     except Exception as e:
         if 'episode_key' in locals():
@@ -7377,14 +7411,15 @@ async def fetch_animes():
         "info"
     )
     seen_links = set()
+    retry_after = {}
     alias_cache = {}
-    last_schedule_status = None
+    last_schedule_status = {}
 
     async def report_schedule_status_once(key, message, level="info"):
-        nonlocal last_schedule_status
-        if key != last_schedule_status:
+        kind = key[0] if isinstance(key, tuple) and key else str(key)
+        if last_schedule_status.get(kind) != key:
             await rep.report(message, level)
-            last_schedule_status = key
+            last_schedule_status[kind] = key
 
     while True:
         await asleep(30)
@@ -7399,7 +7434,7 @@ async def fetch_animes():
             today = datetime.now(ist).date()
             schedule = await fetch_today_schedule()
             if not schedule:
-                await rep.report("Today's schedule is empty; will retry.", "warning")
+                await report_schedule_status_once(("empty_schedule", today.isoformat()), "Today's schedule is empty; will retry.", "warning")
                 continue
 
             timeout = aiohttp.ClientTimeout(total=18)
@@ -7492,7 +7527,7 @@ async def fetch_animes():
                 ) if url
             ))
             if not feed_urls:
-                await rep.report("No anime RSS feeds configured.", "error")
+                await report_schedule_status_once(("no_feeds",), "No anime RSS feeds configured.", "error")
                 continue
 
             feed_results = await asyncio.gather(
@@ -7509,6 +7544,8 @@ async def fetch_animes():
                     link = getattr(entry, "link", None)
                     title = getattr(entry, "title", None)
                     if not link or not title or link in seen_links:
+                        continue
+                    if retry_after.get(link, 0) > asyncio.get_running_loop().time():
                         continue
                     if not published_today(entry, today):
                         continue
@@ -7548,13 +7585,15 @@ async def fetch_animes():
             eligible = list(unique.values())
 
             if not eligible:
-                await rep.report(
-                    f"Schedule scan: {len(scheduled)} scheduled shows, {len(feed_urls)} RSS feeds, "
-                    f"{total_entries} RSS entries; no same-day scheduled release matched yet. "
+                await report_schedule_status_once(
+                    ("no_match", today.isoformat(), tuple(sorted(x[0] for x in scheduled)), len(feed_urls), total_entries),
+                    f"Schedule scan: {len(scheduled)} selected scheduled shows, {len(feed_urls)} RSS feeds, "
+                    f"{total_entries} RSS entries; no same-day release matched yet. "
                     f"Known schedule titles: {', '.join(x[0] for x in scheduled[:8])}",
                     "info"
                 )
                 continue
+            last_schedule_status.pop("no_match", None)
 
             await rep.report(
                 f"Matched {len(eligible)} selected scheduled release(s): "
@@ -7573,11 +7612,15 @@ async def fetch_animes():
                             title, link,
                             destination_channel=Var.MAIN_CHANNEL if route_to_main else None
                         )
-                    if result != "already_published":
+                    if result in ("uploaded", "already_published"):
                         seen_links.add(link)
+                        retry_after.pop(link, None)
+                        await rep.report(f"Scheduled anime processed: {scheduled_title} | {title}", "success")
+                    elif result == "in_progress":
+                        retry_after[link] = asyncio.get_running_loop().time() + 90
                     else:
-                        seen_links.add(link)
-                    await rep.report(f"Scheduled anime processed: {scheduled_title} | {title}", "success")
+                        # Keep failed download/encode/publish items retryable.
+                        retry_after[link] = asyncio.get_running_loop().time() + 300
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -8079,8 +8122,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         # the standard selected-torrent pipeline for manual searches.
         if upload_mode == "low_end" and not manual_search:
             print(f"get_animes: calling process_low_end for {name}")
-            await process_low_end(name, torrent, force=force, destination_channel=destination_channel)
-            return
+            return await process_low_end(name, torrent, force=force, destination_channel=destination_channel)
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -8102,9 +8144,9 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         episode_key = f"{ani_id}:{ep_no or 'unknown'}"
         encoding_enabled = await db.get_encoding()
         if not force and episode_key in ani_cache['completed']:
-            return
+            return "already_published"
         if not force and episode_key in ani_cache['ongoing']:
-            return
+            return "in_progress"
         ani_cache['ongoing'].add(episode_key)
 
         # Resolve the actual per-anime destination BEFORE duplicate checks.
@@ -8142,7 +8184,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             
             await rep.report(f"New Anime Torrent Found!\n{name}", "info")
             cleaned_name = clean_anime_title(name)
-            channel_to_use = target_channel if destination_channel is not None else await get_or_create_anime_channel(name, aniInfo)
+            channel_to_use = target_channel
             
             channel_valid = False
             for attempt in range(3):
@@ -8152,8 +8194,10 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 await asyncio.sleep(2)
             
             if not channel_valid:
-                await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
-                channel_to_use = Var.MAIN_CHANNEL
+                raise RuntimeError(
+                    f"Configured destination channel {channel_to_use} is inaccessible; "
+                    "upload stopped to prevent publishing to the wrong channel."
+                )
             
             post_msg = None
             photo_path = None
@@ -8171,14 +8215,6 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 photo_url = Var.CUSTOM_BANNER
             else:
                 photo_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
-            
-            caption = await aniInfo.get_caption()
-            try:
-                fontchanger_status = await db.get_fontchanger()
-                if fontchanger_status == "on":
-                    caption = obfuscate_text_for_copyright(caption)
-            except Exception as e:
-                await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
                 poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
@@ -8285,6 +8321,16 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             finally:
                 ffLock.release()
             
+            caption = await build_main_channel_announcement_caption(
+                aniInfo, name, ep_no, {quality: True for quality in uploaded_qualities}
+            )
+            try:
+                fontchanger_status = await db.get_fontchanger()
+                if fontchanger_status == "on":
+                    caption = obfuscate_text_for_copyright(caption)
+            except Exception as e:
+                await rep.report(f"Error applying font changer: {e}", "warning")
+
             await stat_msg.delete()
             if btns:
                 markup = InlineKeyboardMarkup(btns)
@@ -8348,7 +8394,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 # Send stickers only after the episode post is confirmed.
                 sticker_targets = []
                 if destination_channel is not None:
-                    sticker_targets = [] if manual_search else [int(destination_channel)]
+                    sticker_targets = [int(destination_channel)]
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
