@@ -7421,7 +7421,7 @@ async def fetch_animes():
                     # must be ignored; it must never fall back to Main Channel.
                     selected_channel = None
                     for alias in alias_cache[cache_key]:
-                        alias_value = re.sub(r"\\s+", " ", str(alias or "")).strip()
+                        alias_value = re.sub(r"\s+", " ", str(alias or "")).strip()
                         if not alias_value:
                             continue
                         alias_keys = (
