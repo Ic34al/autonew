@@ -7230,7 +7230,8 @@ async def fetch_animes():
         value = re.sub(r"\b(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|hevc|x26[45])\b", " ", value, flags=re.I)
         value = re.sub(r"\[[^\]]*(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|hevc|x26[45]|subsplease|erai-raws|horriblesubs)[^\]]*\]", " ", value, flags=re.I)
         value = re.sub(r"\([^)]*(?:480p|720p|1080p|2160p|web[- ]?dl|bluray|hevc|x26[45])[^)]*\)", " ", value, flags=re.I)
-        # Preserve unknown bracketed text because RSS may bracket the anime title.\n        value = re.sub(r"\([^)]*\)", " ", value)
+        value = re.sub(r"\[[^\]]+\]", " ", value)
+        value = re.sub(r"\([^)]*\)", " ", value)
         value = re.sub(r"\s+-\s+\d{1,3}(?:v\d+)?\s*$", " ", value)
         return re.sub(r"[^a-z0-9]+", "", value)
 
@@ -7254,8 +7255,9 @@ async def fetch_animes():
 
     def published_today(entry, today):
         stamp = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
+        # No timestamp means we cannot prove this is a release from today.
         if not stamp:
-            return True
+            return False
         try:
             return datetime(*stamp[:6], tzinfo=timezone.utc).astimezone(ist).date() == today
         except Exception:
@@ -7338,6 +7340,15 @@ async def fetch_animes():
                     if not link or not title or link in seen_links:
                         continue
                     if not published_today(entry, today):
+                        continue
+                    # Only single-audio/subtitle releases are eligible.
+                    # Explicitly reject dual/multi-audio variants even when
+                    # their anime title matches today's schedule.
+                    if re.search(
+                        r"(?i)(?:\\bdual(?:[- ]audio)?\\b|\\bmulti[- ]audio\\b|\\bdual audio\\b)",
+                        str(title)
+                    ):
+                        await rep.report(f"Skipped dual/multi-audio release (today schedule is single-audio only): {title}", "info")
                         continue
                     for scheduled_title, aliases in scheduled:
                         if title_matches(title, aliases):
