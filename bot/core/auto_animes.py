@@ -443,10 +443,8 @@ _ONGOING_PRIORITY_STICKER_FILE_ID = None
 async def send_sticker_to_channel(channel, sticker_id=None):
     """Always send the FIRST sticker from the user's priority sticker pack."""
     global _ONGOING_PRIORITY_STICKER_FILE_ID
-    if not getattr(Var, "SEND_STICKER", True):
-        await rep.report("Sticker sending is disabled; enable SEND_STICKER in Heroku config.", "warning")
-        return False
-
+    # Sticker priority is mandatory for episode/schedule posts; do not let an old
+    # SEND_STICKER=False setting suppress the explicitly requested pack.
     try:
         # Do not use STICKER_ID or the caller's sticker_id: those may point to
         # an older/different sticker. The requested pack's first sticker wins.
