@@ -252,7 +252,7 @@ class MongoDB:
         
     async def add_anime_channel_mapping(self, anime_name: str, channel: str | int):
         """Create or update the dedicated channel mapping for an anime."""
-        normalized_name = re.sub(r"\\s+", " ", str(anime_name).lower()).strip()
+        normalized_name = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
         if not normalized_name:
             raise ValueError("Anime name cannot be empty")
 
