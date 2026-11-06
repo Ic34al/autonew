@@ -3801,6 +3801,29 @@ async def anime_search_cmd(client, message: Message):
                         )
                     show_catalogues[(str(sid or ""), page_url)] = show_name
 
+            # Also discover matching titles from SubsPlease's complete show directory.
+            # Search/latest can omit the page/SID metadata needed for old episodes.
+            try:
+                directory_response = await catalogue_client.get("https://subsplease.org/shows/")
+                directory_response.raise_for_status()
+                for href, label in re.findall(
+                    r'<a[^>]+href=["\']([^"\']+)["\'][^>]*>(.*?)</a>',
+                    directory_response.text, re.IGNORECASE | re.DOTALL
+                ):
+                    clean_label = re.sub(r"<[^>]+>", " ", label)
+                    clean_label = re.sub(r"\s+", " ", clean_label).strip()
+                    if clean_label and title_matches(normalize(clean_label)):
+                        page_url = (
+                            href if href.startswith("http")
+                            else "https://subsplease.org/" + href.lstrip("/")
+                        )
+                        show_catalogues[("", page_url)] = clean_label
+            except Exception as directory_error:
+                await rep.report(
+                    f"/search SubsPlease show-directory lookup failed for {anime_name}: {directory_error}",
+                    "warning"
+                )
+
             async with httpx.AsyncClient(
                 timeout=25,
                 follow_redirects=True,
@@ -3815,12 +3838,21 @@ async def anime_search_cmd(client, message: Message):
                         if not sid and page_url:
                             page_response = await catalogue_client.get(page_url)
                             page_response.raise_for_status()
-                            sid_match = re.search(
-                                r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
-                                page_response.text, re.IGNORECASE
-                            ) or re.search(
-                                r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
-                                page_response.text, re.IGNORECASE
+                            # Page markup has changed over time; SID may be
+                            # on the release table, a data attribute, or a JS config.
+                            sid_match = (
+                                re.search(
+                                    r"<table[^>]*id=[\"']show-release-table[\"'][^>]*\\bsid=[\"'](\\d+)[\"']",
+                                    page_response.text, re.IGNORECASE
+                                )
+                                or re.search(
+                                    r"<table[^>]*\\bsid=[\"'](\\d+)[\"'][^>]*id=[\"']show-release-table[\"']",
+                                    page_response.text, re.IGNORECASE
+                                )
+                                or re.search(
+                                    r"\\b(?:sid|show_id|showId)\\b\\s*[:=]\\s*[\"']?(\\d+)",
+                                    page_response.text, re.IGNORECASE
+                                )
                             )
                             if sid_match:
                                 sid = sid_match.group(1)
@@ -3837,7 +3869,7 @@ async def anime_search_cmd(client, message: Message):
                         )
                         show_response.raise_for_status()
                         show_payload = show_response.json()
-                        episode_map = show_payload.get("episode", {}) if isinstance(show_payload, dict) else {}
+                        episode_map = (show_payload.get("episode") or show_payload.get("episodes") or {}) if isinstance(show_payload, dict) else {}
                         if isinstance(episode_map, dict):
                             episode_items = episode_map.values()
                         elif isinstance(episode_map, list):
