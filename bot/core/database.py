@@ -270,30 +270,28 @@ class MongoDB:
         await self.__anime_channels.delete_many(query)
 
     async def get_anime_channel(self, anime_name: str) -> int | None:
-        input_name = anime_name.lower()
-        input_name_no_colon = input_name.replace(":", "").replace("  ", " ").strip()
-        
-        entry = await self.__anime_channels.find_one({"anime_name": input_name})
-        if entry:
-            if 'channel_id' in entry:
-                return entry.get("channel_id")
-            else:
-                print(f"Warning: anime channel entry for '{anime_name}' missing 'channel_id' field: {entry}")
+        """Resolve /addanime mappings using exact normalized aliases."""
+        def title_key(value):
+            return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
 
-        cursor = self.__anime_channels.find()
-        async for entry in cursor:
-            if not isinstance(entry, dict) or 'anime_name' not in entry:
+        target = title_key(anime_name)
+        if not target:
+            return None
+
+        entry = await self.__anime_channels.find_one({
+            "anime_name": str(anime_name or "").casefold().strip()
+        })
+        if entry and entry.get("channel_id") is not None:
+            return entry.get("channel_id")
+
+        async for entry in self.__anime_channels.find():
+            if not isinstance(entry, dict):
                 continue
             stored_name = entry.get("anime_name")
-            stored_no_colon = stored_name.replace(":", "").replace("  ", " ").strip()
-            
-            if ':' in stored_name:
-                if input_name_no_colon == stored_no_colon and 'channel_id' in entry:
-                    return entry.get("channel_id")
-            else:
-                if stored_name in input_name and 'channel_id' in entry:
-                    return entry.get("channel_id")
-                    
+            channel_id = entry.get("channel_id")
+            if stored_name is not None and channel_id is not None and title_key(stored_name) == target:
+                return channel_id
+
         return None
 
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
