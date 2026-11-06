@@ -3801,6 +3801,15 @@ async def anime_search_cmd(client, message: Message):
                         )
                     show_catalogues[(str(sid or ""), page_url)] = show_name
 
+            async with httpx.AsyncClient(
+                timeout=25,
+                follow_redirects=True,
+                max_redirects=10,
+                headers={
+                    "User-Agent": "Mozilla/5.0 (compatible; AnimeSoulBot/1.0)",
+                    "Accept": "text/html,application/json,*/*",
+                }
+            ) as catalogue_client:
             # Also discover matching titles from SubsPlease's complete show directory.
             # Search/latest can omit the page/SID metadata needed for old episodes.
             try:
@@ -3824,15 +3833,6 @@ async def anime_search_cmd(client, message: Message):
                     "warning"
                 )
 
-            async with httpx.AsyncClient(
-                timeout=25,
-                follow_redirects=True,
-                max_redirects=10,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (compatible; AnimeSoulBot/1.0)",
-                    "Accept": "text/html,application/json,*/*",
-                }
-            ) as catalogue_client:
                 for (sid, page_url), show_name in show_catalogues.items():
                     try:
                         if not sid and page_url:
