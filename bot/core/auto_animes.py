@@ -521,8 +521,10 @@ async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
                         caption=caption,
                         reply_markup=buttons
                     )
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                    # Dedicated-channel episode mirrors do not get an
+                    # automatic Main Channel sticker here. The batch/search
+                    # announcement flow adds exactly one sticker after its
+                    # combined Main Channel post.
                 except Exception as e:
                     await rep.report(f"Failed to mirror to main channel {Var.MAIN_CHANNEL}: {e}", "error")
             else:
@@ -1728,7 +1730,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
-async def build_anime_soul_poster(anime_info, anime_name, output_path):
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
     """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
     import io
     import textwrap
@@ -1744,7 +1746,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path):
         return str(value or default).strip()
 
     season = clean_value(anime_info.pdata.get("anime_season"), "01")
-    episode = clean_value(anime_info.pdata.get("episode_number"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
     try:
         season = str(int(season))
     except Exception:
