@@ -15,7 +15,7 @@ from aiohttp import ClientSession
 from aiofiles import open as aiopen
 from aioshutil import rmtree as aiormtree
 from feedparser import parse as feedparse
-from pyrogram import filters, raw, utils
+from pyrogram import filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import InlineKeyboardButton
 from pyrogram.errors import MessageNotModified, FloodWait, UserNotParticipant, ReplyMarkupInvalid, MessageIdInvalid
@@ -198,24 +198,12 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
         chat_id = getattr(chat, "id", None) or getattr(msg, "chat_id", None)
         msg_id = getattr(msg, "id", None) or getattr(msg, "message_id", None)
         chat_type = str(getattr(chat, "type", "")).lower()
-        is_channel_post = "channel" in chat_type
-        if chat_id is not None and msg_id is not None:
+        if chat_id is not None and msg_id is not None and "channel" in chat_type:
             try:
                 if await db.isMessageManuallyEdited(int(chat_id), int(msg_id)):
-                    LOGS.info(
-                        f"Skipping automated edit of manually corrected post "
-                        f"{chat_id}/{msg_id}"
-                    )
+                    LOGS.info(f"Skipping automated edit of manually corrected channel post {chat_id}/{msg_id}")
                     return None
             except Exception as guard_error:
-                # Fail closed for channel posts: a database hiccup must never
-                # overwrite an administrator's manual caption correction.
-                if is_channel_post:
-                    LOGS.error(
-                        f"Manual-edit protection unavailable for channel post "
-                        f"{chat_id}/{msg_id}; automated edit blocked: {guard_error}"
-                    )
-                    return None
                 LOGS.warning(f"Manual-edit protection check failed: {guard_error}")
 
         is_caption = _is_caption_message(msg)
@@ -267,108 +255,19 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
             raise e
         return str(e)
 
-@bot.on_edited_message()
+@bot.on_edited_message(filters.channel)
 async def remember_manual_channel_post_edit(client, message):
-    """Persist admin edits to channel captions before any automated post update."""
+    """Protect an admin's manually corrected channel caption/text from bot rewrites."""
     try:
-        chat = getattr(message, "chat", None)
-        chat_type = str(getattr(chat, "type", "")).lower()
-        if "channel" not in chat_type:
-            return
-
-        chat_id = getattr(chat, "id", None)
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
         message_id = getattr(message, "id", None)
-        if chat_id is None or message_id is None:
-            return
-
-        # Preserve an intentionally empty caption too; do not use truthy fallback.
-        caption = getattr(message, "caption", None)
-        if caption is None:
-            caption = getattr(message, "text", None)
-
-        await db.markMessageManuallyEdited(
-            int(chat_id),
-            int(message_id),
-            caption=caption,
-        )
-
-        # If this post has a linked backup copy, protect that copy as well.
-        try:
-            mapping = await db.get_backup_mapping(int(chat_id), int(message_id))
-            if mapping:
-                backup_chat = mapping.get("backup_chat")
-                backup_msg_id = mapping.get("backup_msg_id")
-                if backup_chat is not None and backup_msg_id is not None:
-                    await db.markMessageManuallyEdited(
-                        int(backup_chat),
-                        int(backup_msg_id),
-                        caption=caption,
-                    )
-        except Exception as mapping_error:
-            LOGS.warning(
-                f"Could not protect linked backup for manually edited post "
-                f"{chat_id}/{message_id}: {mapping_error}"
+        if chat_id is not None and message_id is not None:
+            await db.markMessageManuallyEdited(
+                chat_id,
+                message_id,
+                caption=getattr(message, "caption", None) or getattr(message, "text", None),
             )
-
-        LOGS.info(
-            f"Saved manual channel caption edit protection for "
-            f"{chat_id}/{message_id}; caption_length={len(caption or '')}"
-        )
-    except Exception:
-        LOGS.error(format_exc())
-
-
-@bot.on_raw_update()
-async def remember_manual_channel_post_raw_edit(client, update, users, chats):
-    """
-    Channel caption edits arrive as UpdateEditChannelMessage.
-    Persist them directly because the regular edited-message handler may not
-    receive channel-post edit updates on every Pyrogram version.
-    """
-    try:
-        if not isinstance(update, raw.types.UpdateEditChannelMessage):
-            return
-
-        edited_message = getattr(update, "message", None)
-        if edited_message is None:
-            return
-
-        peer_id = getattr(edited_message, "peer_id", None)
-        message_id = getattr(edited_message, "id", None)
-        if peer_id is None or message_id is None:
-            return
-
-        chat_id = int(utils.get_peer_id(peer_id))
-        caption = getattr(edited_message, "message", None)
-
-        await db.markMessageManuallyEdited(
-            chat_id,
-            int(message_id),
-            caption=caption,
-        )
-
-        # Protect the paired backup post too, if this channel post has one.
-        try:
-            mapping = await db.get_backup_mapping(chat_id, int(message_id))
-            if mapping:
-                backup_chat = mapping.get("backup_chat")
-                backup_msg_id = mapping.get("backup_msg_id")
-                if backup_chat is not None and backup_msg_id is not None:
-                    await db.markMessageManuallyEdited(
-                        int(backup_chat),
-                        int(backup_msg_id),
-                        caption=caption,
-                    )
-        except Exception as mapping_error:
-            LOGS.warning(
-                f"Could not protect backup for raw-edited channel post "
-                f"{chat_id}/{message_id}: {mapping_error}"
-            )
-
-        LOGS.info(
-            f"Persisted raw channel-post edit protection for "
-            f"{chat_id}/{message_id}; caption_length={len(caption or '')}"
-        )
+            LOGS.info(f"Saved manual channel edit protection for {chat_id}/{message_id}")
     except Exception:
         LOGS.error(format_exc())
 
