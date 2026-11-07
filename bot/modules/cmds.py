@@ -3591,6 +3591,79 @@ async def stats_cmd(client, message: Message):
 # ------------------------------------------------------------
 ANIME_SEARCH_RESULTS = {}
 
+@bot.on_message(filters.command("searchresume") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def resume_manual_search_uploads(client, message: Message):
+    """Resume only episodes explicitly selected through /search."""
+    tasks = await db.getPendingManualSearchTasks()
+    if not tasks:
+        return await message.reply(
+            "<b>No interrupted /search uploads are waiting.</b>"
+        )
+
+    status = await message.reply(
+        f"<b>Resuming saved /search uploads...</b>\n"
+        f"Pending episodes: <code>{len(tasks)}</code>"
+    )
+    completed = skipped = failed = 0
+    for index, task in enumerate(tasks, start=1):
+        title = task.get("title")
+        torrent = task.get("torrent_url")
+        destination = task.get("destination_channel")
+        task_id = task.get("_id")
+        if not title or not torrent or destination is None:
+            failed += 1
+            await rep.report(
+                f"/searchresume skipped invalid saved task {task_id}",
+                "warning"
+            )
+            continue
+        try:
+            await status.edit_text(
+                f"<b>Resuming /search upload {index}/{len(tasks)}</b>\n"
+                f"<code>{title}</code>\n"
+                f"Destination: <code>{destination}</code>"
+            )
+            while True:
+                if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                    await asleep(1)
+                    continue
+                async with AUTO_UPLOAD_PRIORITY_LOCK:
+                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                        continue
+                    result = await get_animes(
+                        title, torrent, force=True, manual_search=True,
+                        destination_channel=int(destination)
+                    )
+                    break
+            if result in ("uploaded", "already_published"):
+                await db.markManualSearchTaskComplete(task_id)
+                if result == "uploaded":
+                    completed += 1
+                else:
+                    skipped += 1
+            else:
+                failed += 1
+                await rep.report(
+                    f"/searchresume left task pending: {title} (result={result!r})",
+                    "warning"
+                )
+                break
+        except Exception as error:
+            failed += 1
+            await rep.report(f"/searchresume failed for {title}: {error}", "error")
+            break
+
+    remaining = await db.getPendingManualSearchTasks()
+    await status.edit_text(
+        "<b>/searchresume finished.</b>\n"
+        f"Uploaded: <code>{completed}</code>\n"
+        f"Already posted: <code>{skipped}</code>\n"
+        f"Failed: <code>{failed}</code>\n"
+        f"Still pending: <code>{len(remaining)}</code>"
+    )
+
+
 @bot.on_message(filters.command("search") & filters.private & filters.user(Var.ADMINS))
 @new_task
 async def anime_search_cmd(client, message: Message):
@@ -4165,6 +4238,14 @@ async def anime_search_destination_callback(client, callback_query):
 
         queue = [state["episodes"][i] for i in sorted(state["selected"])]
         anime_name = state["anime"]
+        batch_id = secrets.token_hex(8)
+        # Save the complete selected queue before uploading the first episode.
+        # If Heroku restarts mid-batch, /searchresume can continue the remainder.
+        for position, (episode_title, episode_torrent) in enumerate(queue):
+            await db.saveManualSearchTask(
+                batch_id, anime_name, position, episode_title,
+                episode_torrent, destination
+            )
         ANIME_SEARCH_RESULTS.pop(message_id, None)
         await callback_query.answer(f"Uploading {len(queue)} episode(s).")
         await callback_query.message.edit_text(
@@ -4173,7 +4254,8 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Selected:</b> {len(queue)}"
         )
         completed = skipped = failed = 0
-        for title, torrent in queue:
+        for position, (title, torrent) in enumerate(queue):
+            task_id = f"{batch_id}:{position}"
             try:
                 while True:
                     if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
@@ -4189,9 +4271,11 @@ async def anime_search_destination_callback(client, callback_query):
                         )
                         break
                 if result == "already_published":
+                    await db.markManualSearchTaskComplete(task_id)
                     skipped += 1
                     await rep.report(f"/search skipped: already posted in selected channel {destination}: {title}", "warning")
                 elif result == "uploaded":
+                    await db.markManualSearchTaskComplete(task_id)
                     completed += 1
                     await rep.report(f"/search upload completed in {destination}: {title}", "info")
                 else:

@@ -190,6 +190,44 @@ class MongoDB:
         cursor = self.__db.anime_resume.find({"status": {"$ne": "complete"}}).sort("updated_at", 1)
         return await cursor.to_list(length=100)
 
+    async def saveManualSearchTask(self, batch_id, anime_name, position, title, torrent_url, destination_channel):
+        """Persist every selected /search episode before starting the batch."""
+        task_id = f"{str(batch_id)}:{int(position)}"
+        now = datetime.datetime.utcnow()
+        await self.__db.manual_search_queue.update_one(
+            {"_id": task_id},
+            {"$setOnInsert": {
+                "batch_id": str(batch_id),
+                "anime_name": str(anime_name),
+                "position": int(position),
+                "title": str(title),
+                "torrent_url": str(torrent_url),
+                "destination_channel": int(destination_channel),
+                "status": "pending",
+                "created_at": now,
+            }},
+            upsert=True,
+        )
+        return task_id
+
+    async def getPendingManualSearchTasks(self):
+        """Return only explicitly selected manual /search episodes, never scanner tasks."""
+        cursor = self.__db.manual_search_queue.find(
+            {"status": "pending"}
+        ).sort([("created_at", 1), ("position", 1)])
+        return await cursor.to_list(length=500)
+
+    async def markManualSearchTaskComplete(self, task_id):
+        if not task_id:
+            return
+        await self.__db.manual_search_queue.update_one(
+            {"_id": str(task_id), "status": "pending"},
+            {"$set": {
+                "status": "complete",
+                "completed_at": datetime.datetime.utcnow(),
+            }},
+        )
+
     async def markAnimeResumeComplete(self, ani_id, ep):
         if ani_id is None or ep is None:
             return
