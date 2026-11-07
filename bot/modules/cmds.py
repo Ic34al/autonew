@@ -2585,14 +2585,22 @@ async def start_msg(client, message):
                                     last_name=from_user.first_name,
                                     mention=from_user.mention, 
                                     user_id=from_user.id)
+        reply_markup = InlineKeyboardMarkup(btns) if len(btns) != 0 else None
         if Var.START_PHOTO:
-            await message.reply_photo(
-                photo=Var.START_PHOTO, 
-                caption=smsg,
-                reply_markup=InlineKeyboardMarkup(btns) if len(btns) != 0 else None
-            )
+            try:
+                await message.reply_photo(
+                    photo=Var.START_PHOTO,
+                    caption=smsg,
+                    reply_markup=reply_markup
+                )
+            except Exception as photo_error:
+                # A broken/expired start image must never make /start appear
+                # completely dead; always fall back to a normal text reply.
+                from bot import LOGS
+                LOGS.exception(f"Start photo failed; sending text fallback: {photo_error}")
+                await sendMessage(message, smsg, reply_markup)
         else:
-            await sendMessage(message, smsg, InlineKeyboardMarkup(btns) if len(btns) != 0 else None)
+            await sendMessage(message, smsg, reply_markup)
         return
     try:
         arg = (await decode(txtargs[1])).split('-')
