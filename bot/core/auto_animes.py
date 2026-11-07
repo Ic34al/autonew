@@ -8151,7 +8151,6 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
         gdrive_status = await db.get_gdrive_upload()
         if gdrive_status == "on":
             print(f"Checking GDrive mapping for: {normalized_name}")
-            await asleep(1.5)
             possible_names = await get_all_possible_anime_names(normalized_name)
             
             for check_name in possible_names:

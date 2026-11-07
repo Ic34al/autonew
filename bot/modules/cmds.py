@@ -50,6 +50,9 @@ awaiting_manual_dub: dict[int, dict] = {}
 # Manual /addtask jobs, keyed by a short ID shown in /canceltask.
 ADD_TASK_JOBS: dict[str, dict] = {}
 
+# Serialize complete anime batches from manual /search selections.
+MANUAL_SEARCH_UPLOAD_LOCK = asyncio.Lock()
+
 
 RANDOM_PIC = None
 
@@ -3594,73 +3597,89 @@ ANIME_SEARCH_RESULTS = {}
 @bot.on_message(filters.command("searchresume") & filters.private & filters.user(Var.ADMINS))
 @new_task
 async def resume_manual_search_uploads(client, message: Message):
-    """Resume only episodes explicitly selected through /search."""
-    tasks = await db.getPendingManualSearchTasks()
-    if not tasks:
-        return await message.reply(
-            "<b>No interrupted /search uploads are waiting.</b>"
-        )
-
-    status = await message.reply(
-        f"<b>Resuming saved /search uploads...</b>\n"
-        f"Pending episodes: <code>{len(tasks)}</code>"
-    )
+    """Resume saved /search work one complete anime batch at a time."""
+    status = await message.reply("<b>Checking interrupted /search batches...</b>")
     completed = skipped = failed = 0
-    for index, task in enumerate(tasks, start=1):
-        title = task.get("title")
-        torrent = task.get("torrent_url")
-        destination = task.get("destination_channel")
-        task_id = task.get("_id")
-        if not title or not torrent or destination is None:
-            failed += 1
-            await rep.report(
-                f"/searchresume skipped invalid saved task {task_id}",
-                "warning"
-            )
-            continue
-        try:
-            await status.edit_text(
-                f"<b>Resuming /search upload {index}/{len(tasks)}</b>\n"
-                f"<code>{title}</code>\n"
-                f"Destination: <code>{destination}</code>"
-            )
-            while True:
-                if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                    await asleep(1)
-                    continue
-                async with AUTO_UPLOAD_PRIORITY_LOCK:
-                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                        continue
-                    result = await get_animes(
-                        title, torrent, force=True, manual_search=True,
-                        destination_channel=int(destination)
-                    )
-                    break
-            if result in ("uploaded", "already_published"):
-                await db.markManualSearchTaskComplete(task_id)
-                if result == "uploaded":
-                    completed += 1
-                else:
-                    skipped += 1
-            else:
+    batches_done = 0
+    async with MANUAL_SEARCH_UPLOAD_LOCK:
+        batches = await db.getPendingManualSearchBatches()
+        if not batches:
+            return await status.edit_text("<b>No interrupted /search uploads are waiting.</b>")
+
+        for batch_index, batch in enumerate(batches, start=1):
+            anime_name = batch.get("anime_name") or "Unknown anime"
+            destination = batch.get("destination_channel")
+            batch_tasks = batch.get("tasks") or []
+            if destination is None or not batch_tasks:
                 failed += 1
                 await rep.report(
-                    f"/searchresume left task pending: {title} (result={result!r})",
-                    "warning"
+                    f"/searchresume found invalid batch {batch.get('batch_id')}; stopping queue.",
+                    "error"
                 )
                 break
-        except Exception as error:
-            failed += 1
-            await rep.report(f"/searchresume failed for {title}: {error}", "error")
-            break
 
-    remaining = await db.getPendingManualSearchTasks()
+            batch_failed = False
+            for episode_index, task in enumerate(batch_tasks, start=1):
+                title = task.get("title")
+                torrent = task.get("torrent_url")
+                task_id = task.get("_id")
+                if not title or not torrent:
+                    failed += 1
+                    batch_failed = True
+                    break
+                try:
+                    await status.edit_text(
+                        f"<b>Anime {batch_index}/{len(batches)}:</b> "
+                        f"<code>{anime_name}</code>\n"
+                        f"<b>Episode {episode_index}/{len(batch_tasks)}:</b> "
+                        f"<code>{title}</code>\n"
+                        f"Destination: <code>{destination}</code>"
+                    )
+                    while True:
+                        if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                            await asleep(1)
+                            continue
+                        async with AUTO_UPLOAD_PRIORITY_LOCK:
+                            if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                                continue
+                            result = await get_animes(
+                                title, torrent, force=True, manual_search=True,
+                                destination_channel=int(destination)
+                            )
+                            break
+                    if result in ("uploaded", "already_published"):
+                        await db.markManualSearchTaskComplete(task_id)
+                        if result == "uploaded":
+                            completed += 1
+                        else:
+                            skipped += 1
+                    else:
+                        failed += 1
+                        batch_failed = True
+                        await rep.report(
+                            f"/searchresume paused queue at {title}; result={result!r}",
+                            "warning"
+                        )
+                        break
+                except Exception as error:
+                    failed += 1
+                    batch_failed = True
+                    await rep.report(f"/searchresume failed for {title}: {error}", "error")
+                    break
+
+            if batch_failed:
+                break
+            batches_done += 1
+
+    remaining_batches = await db.getPendingManualSearchBatches()
+    remaining = sum(len(batch.get("tasks") or []) for batch in remaining_batches)
     await status.edit_text(
         "<b>/searchresume finished.</b>\n"
+        f"Anime batches completed: <code>{batches_done}</code>\n"
         f"Uploaded: <code>{completed}</code>\n"
         f"Already posted: <code>{skipped}</code>\n"
         f"Failed: <code>{failed}</code>\n"
-        f"Still pending: <code>{len(remaining)}</code>"
+        f"Still pending episodes: <code>{remaining}</code>"
     )
 
 
@@ -4253,181 +4272,191 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Destination:</b> {chat.title or destination}\n"
             f"<b>Selected:</b> {len(queue)}"
         )
-        completed = skipped = failed = 0
-        for position, (title, torrent) in enumerate(queue):
-            task_id = f"{batch_id}:{position}"
-            try:
-                while True:
-                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                        await asleep(1)
-                        continue
-                    async with AUTO_UPLOAD_PRIORITY_LOCK:
+        async with MANUAL_SEARCH_UPLOAD_LOCK:
+            pending_batches = await db.getPendingManualSearchBatches()
+            if pending_batches and pending_batches[0].get("batch_id") != batch_id:
+                return await callback_query.message.edit_text(
+                    "<b>This anime is queued behind an earlier search batch.</b>\n"
+                    "The earlier anime must finish first. Use <code>/searchresume</code> "
+                    "if its upload was interrupted."
+                )
+            completed = skipped = failed = 0
+            for position, (title, torrent) in enumerate(queue):
+                task_id = f"{batch_id}:{position}"
+                try:
+                    while True:
                         if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                            await asleep(1)
                             continue
-                        await rep.report(f"/search selected upload to {destination}: {title}", "info")
-                        result = await get_animes(
-                            title, torrent, force=True, manual_search=True,
-                            destination_channel=destination
-                        )
-                        break
-                if result == "already_published":
-                    await db.markManualSearchTaskComplete(task_id)
-                    skipped += 1
-                    await rep.report(f"/search skipped: already posted in selected channel {destination}: {title}", "warning")
-                elif result == "uploaded":
-                    await db.markManualSearchTaskComplete(task_id)
-                    completed += 1
-                    await rep.report(f"/search upload completed in {destination}: {title}", "info")
-                else:
-                    failed += 1
-                    await rep.report(f"/search did not confirm upload for {title} (result={result!r})", "warning")
-            except Exception as item_error:
-                failed += 1
-                await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
-        # After every selected episode has been processed, publish ONE
-        # Main Channel join-request announcement for the dedicated channel.
-        # No announcement is sent when nothing new was uploaded.
-        main_announcement = None
-        if destination != int(Var.MAIN_CHANNEL) and completed > 0:
-            try:
-                invite = await client.create_chat_invite_link(
-                    destination,
-                    creates_join_request=True
-                )
-                # Episode stickers are sent by get_animes after each upload.
-                # Keep only the single Main Channel sticker after the final batch announcement.
-                # Use the exact selected episode numbers; compress only a
-                # genuinely continuous sequence into a range on the artwork.
-                episode_numbers = []
-                for episode_title, _torrent in queue:
-                    try:
-                        number = TextEditor(episode_title).pdata.get("episode_number")
-                        if number is not None:
-                            episode_numbers.append(int(number))
-                    except (TypeError, ValueError):
-                        continue
-                episode_numbers = sorted(set(episode_numbers))
-                if episode_numbers and episode_numbers == list(range(episode_numbers[0], episode_numbers[-1] + 1)):
-                    episode_label = f"{episode_numbers[0]:02d}–{episode_numbers[-1]:02d}"
-                elif episode_numbers:
-                    episode_label = ", ".join(f"{number:02d}" for number in episode_numbers)
-                else:
-                    episode_label = f"{completed} uploaded"
-
-                metadata = TextEditor(anime_name)
-                await metadata.load_info()
-                anime_data = metadata.adata or {}
-                title_data = anime_data.get("title") or {}
-                display_title = title_data.get("english") or title_data.get("romaji") or anime_name
-                synopsis = re.sub(r"<[^>]+>", "", anime_data.get("description") or "")
-                synopsis = re.sub(r"\s+", " ", synopsis).strip()
-                if len(synopsis) > 240:
-                    synopsis = synopsis[:237].rsplit(" ", 1)[0] + "..."
-                genres = ", ".join(anime_data.get("genres") or []) or "Anime"
-                status = str(anime_data.get("status") or "RELEASING").replace("_", " ").title()
-                season_value = metadata.pdata.get("anime_season") or "01"
-                if isinstance(season_value, list):
-                    season_value = season_value[-1] if season_value else "01"
-                audio_value = metadata.pdata.get("audio_type") or "Japanese [English Sub]"
-                quality_value = metadata.pdata.get("quality_label") or "Multi Quality"
-                studios = anime_data.get("studios") or {}
-                studio_names = studios.get("nodes") or [] if isinstance(studios, dict) else []
-                studio_value = (studio_names[0].get("name") if studio_names else "ANIME SOUL")
-                year_value = anime_data.get("seasonYear") or "—"
-
-                # Match the established episode-post style: custom 16:9
-                # streaming thumbnail, followed by a clean caption (no quote-box
-                # blocks and no escaped newline sequences).
-                episode_word = "EPISODES" if len(episode_numbers) != 1 else "EPISODE"
-                episode_caption = (
-                    f"{episode_numbers[0]:02d}" if len(episode_numbers) == 1
-                    else episode_label
-                )
-                # Match the requested LINK CLICK caption exactly:
-                # bold title + bold metadata lines, small-cap synopsis,
-                # and Telegram's native expandable blockquote.
-                import html
-                small_caps = str.maketrans({
-                    "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ",
-                    "g":"ɢ","h":"ʜ","i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ",
-                    "m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ","q":"ǫ","r":"ʀ",
-                    "s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x",
-                    "y":"ʏ","z":"ᴢ"
-                })
-                synopsis_caption = html.escape(synopsis.translate(small_caps)) if synopsis else ""
-                announcement_text = (
-                    f"<b>{html.escape(display_title)}</b>\n"
-                    "──────────────────────\n"
-                    f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
-                    f"<b>➤ Quality: {html.escape(str(quality_value))}</b>\n"
-                    f"<b>➥ {episode_word.title()}: {html.escape(str(episode_caption))}</b>\n"
-                    "──────────────────────\n"
-                    + (f"<blockquote expandable>≡ {synopsis_caption}</blockquote>" if synopsis_caption else "")
-                )
-                watch_markup = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •", url=invite.invite_link)
-                ]])
-                import tempfile
-                poster_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        prefix="anime_soul_announcement_", suffix=".jpg", delete=False
-                    ) as temp_poster:
-                        poster_path = temp_poster.name
-                    generated_poster = await build_anime_soul_poster(
-                        metadata, anime_name, poster_path, episode_label=episode_caption
-                    )
-                    if generated_poster and os.path.exists(generated_poster):
-                        with open(generated_poster, "rb") as poster_file:
-                            main_announcement = await client.send_photo(
-                                chat_id=Var.MAIN_CHANNEL,
-                                photo=poster_file,
-                                caption=announcement_text,
-                                reply_markup=watch_markup
+                        async with AUTO_UPLOAD_PRIORITY_LOCK:
+                            if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                                continue
+                            await rep.report(f"/search selected upload to {destination}: {title}", "info")
+                            result = await get_animes(
+                                title, torrent, force=True, manual_search=True,
+                                destination_channel=destination
                             )
+                            break
+                    if result == "already_published":
+                        await db.markManualSearchTaskComplete(task_id)
+                        skipped += 1
+                        await rep.report(f"/search skipped: already posted in selected channel {destination}: {title}", "warning")
+                    elif result == "uploaded":
+                        await db.markManualSearchTaskComplete(task_id)
+                        completed += 1
+                        await rep.report(f"/search upload completed in {destination}: {title}", "info")
                     else:
-                        raise RuntimeError("Custom ANIME SOUL thumbnail was not generated")
-                finally:
-                    if poster_path and os.path.exists(poster_path):
-                        try:
-                            os.remove(poster_path)
-                        except OSError:
-                            pass
-
-                # Exactly one Main Channel sticker, immediately AFTER the post.
+                        failed += 1
+                        await rep.report(f"/search paused this anime batch at {title} (result={result!r}); later anime stay queued.", "warning")
+                    break
+                except Exception as item_error:
+                    failed += 1
+                    await rep.report(f"/search paused this anime batch at {title}: {item_error}", "error")
+                break
+            # After every selected episode has been processed, publish ONE
+            # Main Channel join-request announcement for the dedicated channel.
+            # No announcement is sent when nothing new was uploaded.
+            main_announcement = None
+            if destination != int(Var.MAIN_CHANNEL) and completed > 0 and failed == 0:
                 try:
-                    await asleep(Var.STICKER_INTERVAL)
-                    await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
-                except Exception as main_sticker_error:
-                    await rep.report(
-                        f"/search Main Channel post sent, but its following sticker failed: {main_sticker_error}",
-                        "warning"
+                    invite = await client.create_chat_invite_link(
+                        destination,
+                        creates_join_request=True
                     )
-                await rep.report(
-                    f"/search Main Channel join-request announcement sent for {anime_name} "
-                    f"(episodes={completed}, message_id={main_announcement.id})",
-                    "info"
+                    # Episode stickers are sent by get_animes after each upload.
+                    # Keep only the single Main Channel sticker after the final batch announcement.
+                    # Use the exact selected episode numbers; compress only a
+                    # genuinely continuous sequence into a range on the artwork.
+                    episode_numbers = []
+                    for episode_title, _torrent in queue:
+                        try:
+                            number = TextEditor(episode_title).pdata.get("episode_number")
+                            if number is not None:
+                                episode_numbers.append(int(number))
+                        except (TypeError, ValueError):
+                            continue
+                    episode_numbers = sorted(set(episode_numbers))
+                    if episode_numbers and episode_numbers == list(range(episode_numbers[0], episode_numbers[-1] + 1)):
+                        episode_label = f"{episode_numbers[0]:02d}–{episode_numbers[-1]:02d}"
+                    elif episode_numbers:
+                        episode_label = ", ".join(f"{number:02d}" for number in episode_numbers)
+                    else:
+                        episode_label = f"{completed} uploaded"
+    
+                    metadata = TextEditor(anime_name)
+                    await metadata.load_info()
+                    anime_data = metadata.adata or {}
+                    title_data = anime_data.get("title") or {}
+                    display_title = title_data.get("english") or title_data.get("romaji") or anime_name
+                    synopsis = re.sub(r"<[^>]+>", "", anime_data.get("description") or "")
+                    synopsis = re.sub(r"\s+", " ", synopsis).strip()
+                    if len(synopsis) > 240:
+                        synopsis = synopsis[:237].rsplit(" ", 1)[0] + "..."
+                    genres = ", ".join(anime_data.get("genres") or []) or "Anime"
+                    status = str(anime_data.get("status") or "RELEASING").replace("_", " ").title()
+                    season_value = metadata.pdata.get("anime_season") or "01"
+                    if isinstance(season_value, list):
+                        season_value = season_value[-1] if season_value else "01"
+                    audio_value = metadata.pdata.get("audio_type") or "Japanese [English Sub]"
+                    quality_value = metadata.pdata.get("quality_label") or "Multi Quality"
+                    studios = anime_data.get("studios") or {}
+                    studio_names = studios.get("nodes") or [] if isinstance(studios, dict) else []
+                    studio_value = (studio_names[0].get("name") if studio_names else "ANIME SOUL")
+                    year_value = anime_data.get("seasonYear") or "—"
+    
+                    # Match the established episode-post style: custom 16:9
+                    # streaming thumbnail, followed by a clean caption (no quote-box
+                    # blocks and no escaped newline sequences).
+                    episode_word = "EPISODES" if len(episode_numbers) != 1 else "EPISODE"
+                    episode_caption = (
+                        f"{episode_numbers[0]:02d}" if len(episode_numbers) == 1
+                        else episode_label
+                    )
+                    # Match the requested LINK CLICK caption exactly:
+                    # bold title + bold metadata lines, small-cap synopsis,
+                    # and Telegram's native expandable blockquote.
+                    import html
+                    small_caps = str.maketrans({
+                        "a":"ᴀ","b":"ʙ","c":"ᴄ","d":"ᴅ","e":"ᴇ","f":"ꜰ",
+                        "g":"ɢ","h":"ʜ","i":"ɪ","j":"ᴊ","k":"ᴋ","l":"ʟ",
+                        "m":"ᴍ","n":"ɴ","o":"ᴏ","p":"ᴘ","q":"ǫ","r":"ʀ",
+                        "s":"s","t":"ᴛ","u":"ᴜ","v":"ᴠ","w":"ᴡ","x":"x",
+                        "y":"ʏ","z":"ᴢ"
+                    })
+                    synopsis_caption = html.escape(synopsis.translate(small_caps)) if synopsis else ""
+                    announcement_text = (
+                        f"<b>{html.escape(display_title)}</b>\n"
+                        "──────────────────────\n"
+                        f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
+                        f"<b>➤ Quality: {html.escape(str(quality_value))}</b>\n"
+                        f"<b>➥ {episode_word.title()}: {html.escape(str(episode_caption))}</b>\n"
+                        "──────────────────────\n"
+                        + (f"<blockquote expandable>≡ {synopsis_caption}</blockquote>" if synopsis_caption else "")
+                    )
+                    watch_markup = InlineKeyboardMarkup([[
+                        InlineKeyboardButton("• ᴄʟɪᴄᴋ ʜᴇʀᴇ ᴛᴏ ᴡᴀᴛᴄʜ •", url=invite.invite_link)
+                    ]])
+                    import tempfile
+                    poster_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(
+                            prefix="anime_soul_announcement_", suffix=".jpg", delete=False
+                        ) as temp_poster:
+                            poster_path = temp_poster.name
+                        generated_poster = await build_anime_soul_poster(
+                            metadata, anime_name, poster_path, episode_label=episode_caption
+                        )
+                        if generated_poster and os.path.exists(generated_poster):
+                            with open(generated_poster, "rb") as poster_file:
+                                main_announcement = await client.send_photo(
+                                    chat_id=Var.MAIN_CHANNEL,
+                                    photo=poster_file,
+                                    caption=announcement_text,
+                                    reply_markup=watch_markup
+                                )
+                        else:
+                            raise RuntimeError("Custom ANIME SOUL thumbnail was not generated")
+                    finally:
+                        if poster_path and os.path.exists(poster_path):
+                            try:
+                                os.remove(poster_path)
+                            except OSError:
+                                pass
+    
+                    # Exactly one Main Channel sticker, immediately AFTER the post.
+                    try:
+                        await asleep(Var.STICKER_INTERVAL)
+                        await send_sticker_to_channel(Var.MAIN_CHANNEL, Var.STICKER_ID)
+                    except Exception as main_sticker_error:
+                        await rep.report(
+                            f"/search Main Channel post sent, but its following sticker failed: {main_sticker_error}",
+                            "warning"
+                        )
+                    await rep.report(
+                        f"/search Main Channel join-request announcement sent for {anime_name} "
+                        f"(episodes={completed}, message_id={main_announcement.id})",
+                        "info"
+                    )
+                except Exception as announce_error:
+                    await rep.report(
+                        f"/search episodes uploaded but Main Channel join announcement failed: {announce_error}",
+                        "error"
+                    )
+    
+            await callback_query.message.edit_text(
+                f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
+                f"<b>Destination:</b> {chat.title or destination}\n"
+                f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
+                f"<b>Failed / unconfirmed:</b> {failed}\n"
+                + (
+                    "<b>Main Channel:</b> Join-request post sent."
+                    if main_announcement else
+                    ("<b>Main Channel:</b> No new episodes uploaded; no join post sent."
+                     if destination != int(Var.MAIN_CHANNEL) else
+                     "<b>Main Channel:</b> Episodes were posted directly here.")
                 )
-            except Exception as announce_error:
-                await rep.report(
-                    f"/search episodes uploaded but Main Channel join announcement failed: {announce_error}",
-                    "error"
-                )
-
-        await callback_query.message.edit_text(
-            f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
-            f"<b>Destination:</b> {chat.title or destination}\n"
-            f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
-            f"<b>Failed / unconfirmed:</b> {failed}\n"
-            + (
-                "<b>Main Channel:</b> Join-request post sent."
-                if main_announcement else
-                ("<b>Main Channel:</b> No new episodes uploaded; no join post sent."
-                 if destination != int(Var.MAIN_CHANNEL) else
-                 "<b>Main Channel:</b> Episodes were posted directly here.")
             )
-        )
-    except Exception as error:
+        except Exception as error:
         await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
         await rep.report(f"/search destination upload error: {error}", "error")
 

@@ -217,6 +217,27 @@ class MongoDB:
         ).sort([("created_at", 1), ("position", 1)])
         return await cursor.to_list(length=500)
 
+    async def getPendingManualSearchBatches(self):
+        """Return pending manual search batches in the order they were selected."""
+        tasks = await self.getPendingManualSearchTasks()
+        grouped = {}
+        for task in tasks:
+            batch_id = str(task.get("batch_id") or task.get("_id", "").split(":")[0])
+            if batch_id not in grouped:
+                grouped[batch_id] = {
+                    "batch_id": batch_id,
+                    "anime_name": task.get("anime_name") or "Unknown anime",
+                    "destination_channel": task.get("destination_channel"),
+                    "created_at": task.get("created_at"),
+                    "tasks": [],
+                }
+            grouped[batch_id]["tasks"].append(task)
+        batches = list(grouped.values())
+        batches.sort(key=lambda batch: batch.get("created_at") or datetime.datetime.min)
+        for batch in batches:
+            batch["tasks"].sort(key=lambda task: int(task.get("position", 0)))
+        return batches
+
     async def markManualSearchTaskComplete(self, task_id):
         if not task_id:
             return
