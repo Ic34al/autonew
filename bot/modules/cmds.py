@@ -4457,8 +4457,8 @@ async def anime_search_destination_callback(client, callback_query):
                 )
             )
         except Exception as error:
-        await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
-        await rep.report(f"/search destination upload error: {error}", "error")
+            await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
+            await rep.report(f"/search destination upload error: {error}", "error")
 
 
 # Admin commands: dedicated anime channel routing
