@@ -12,18 +12,11 @@ from signal import SIGKILL
 from bot.core.auto_animes import fetch_animes
 from bot import bot, Var, bot_loop, sch, LOGS, ffQueue, ffLock, ffpids_cache, ff_queued
 from bot.core.func_utils import clean_up, clean_old_files, new_task, editMessage
-from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
-from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
+from pyrogram.handlers import MessageHandler
 
-# Import command handlers explicitly so every @bot.on_message handler is
-# registered before the client starts. This also makes import failures visible
-# in the worker startup log instead of leaving a silent, commandless bot.
-import bot.modules.cmds as _command_handlers
 
-@bot.on_message(command('restart') & user(Var.ADMINS))
-@new_task
 async def restart(client, message):
     rmessage = await message.reply('<i>Restarting...</i>')
     if sch.running:
@@ -160,24 +153,46 @@ async def main():
         LOGS.info("Starting Web Server...")
         await start_server()
         
-        LOGS.info("Starting bot and registering command handlers...")
+        # Load admin IDs BEFORE importing any command modules. Pyrogram's
+        # filters.user(Var.ADMINS) captures the IDs when each handler is
+        # registered; importing commands first leaves database admins locked
+        # out even after Var.ADMINS is updated later.
+        try:
+            LOGS.info("Loading settings before command registration...")
+            await asyncio.wait_for(load_settings(), timeout=25)
+        except Exception:
+            LOGS.exception("Full settings load failed; attempting admin-only recovery.")
+            try:
+                db_admins = await asyncio.wait_for(db.get_admins(), timeout=10)
+                Var.ADMINS = list({
+                    int(admin_id)
+                    for admin_id in (list(getattr(Var, "ADMINS", []) or []) + list(db_admins or []))
+                })
+                LOGS.info(f"Recovered admin list: {Var.ADMINS}")
+            except Exception:
+                LOGS.exception("Could not recover database admins; using environment admins.")
+
+        # Import handler modules only after Var.ADMINS has its final startup
+        # value, so all user filters are built with the correct admin IDs.
+        from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
+        from bot.modules.daily_schedule import upcoming_animes
+        import bot.modules.cmds as _command_handlers
+
+        # The restart handler lives in this entry point, so register it at the
+        # same point as the other commands, after admin IDs have been loaded.
+        bot.add_handler(
+            MessageHandler(restart, command("restart") & user(Var.ADMINS))
+        )
+
+        LOGS.info("Starting Telegram client...")
         # Mark before awaiting: Pyrogram can create recv/ping tasks and then
         # fail part-way through startup. The finally block must still stop it.
         bot_start_attempted = True
         await bot.start()
-        LOGS.info("Telegram client started; command handlers are active.")
-
-        # Load database-backed settings only after Telegram is online. A
-        # temporary MongoDB/settings error must not prevent the bot from
-        # connecting and receiving commands.
-        try:
-            LOGS.info("Loading settings...")
-            await load_settings()
-        except Exception:
-            LOGS.exception(
-                "Settings load failed after Telegram startup; continuing with "
-                "environment defaults so the bot can still receive commands."
-            )
+        LOGS.info(
+            f"Telegram client started. Registered handler groups: "
+            f"{sum(len(group_handlers) for group_handlers in bot.dispatcher.groups.values())}"
+        )
 
         LOGS.info("Starting scheduler...")
         sch.add_job(
