@@ -4308,11 +4308,11 @@ async def anime_search_destination_callback(client, callback_query):
                     else:
                         failed += 1
                         await rep.report(f"/search paused this anime batch at {title} (result={result!r}); later anime stay queued.", "warning")
-                    break
+                        break
                 except Exception as item_error:
                     failed += 1
                     await rep.report(f"/search paused this anime batch at {title}: {item_error}", "error")
-                break
+                    break
             # After every selected episode has been processed, publish ONE
             # Main Channel join-request announcement for the dedicated channel.
             # No announcement is sent when nothing new was uploaded.
