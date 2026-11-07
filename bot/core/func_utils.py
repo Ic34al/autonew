@@ -32,9 +32,18 @@ def handle_logs(func):
             await rep.report(format_exc(), "error")
     return wrapper
     
+# Reuse one small worker pool for the lifetime of the bot. Creating a new
+# executor for every RSS/network helper call leaked hundreds of threads and
+# pushed the Heroku worker over its memory quota (R14).
+_SYNC_EXECUTOR = ThreadPoolExecutor(
+    max_workers=max(2, min(4, cpu_count() * 2)),
+    thread_name_prefix="anime-sync",
+)
+
+
 async def sync_to_async(func, *args, wait=True, **kwargs):
     pfunc = partial(func, *args, **kwargs)
-    future = bot_loop.run_in_executor(ThreadPoolExecutor(max_workers=cpu_count() * 125), pfunc)
+    future = bot_loop.run_in_executor(_SYNC_EXECUTOR, pfunc)
     return await future if wait else future
     
 def new_task(func):
