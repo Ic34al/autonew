@@ -35,6 +35,8 @@ import hashlib
 # Scheduled releases take priority over manual /search queues.
 AUTO_UPLOAD_PRIORITY_LOCK = asyncio.Lock()
 AUTO_UPLOAD_PRIORITY_PENDING = asyncio.Event()
+# Set while an admin-selected /search batch is being uploaded.
+MANUAL_SEARCH_HOLD = asyncio.Event()
 
 MAX_ABOUT_LEN = 255
 
@@ -7652,6 +7654,8 @@ async def fetch_animes():
 
             for title, link, feed_url, scheduled_title, route_to_main, selected_channel, rss_episode in eligible:
                 try:
+                    while MANUAL_SEARCH_HOLD.is_set():
+                        await asleep(2)
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
                         result = await get_animes(
