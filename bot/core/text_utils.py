@@ -963,7 +963,7 @@ class TextEditor:
             if any(x in name_lower for x in ['multi-audio', 'multi audio']):
                 lang = "Multi Audio"
             elif any(x in name_lower for x in ['dual-audio', 'dual audio']):
-                lang = "Eng/Jap Dub"
+                lang = "Dual Jap/Eng Dub"
             elif any(x in name_lower for x in [
                 'english-audio', 'english audio',
                 'english dub', 'english-dub'
@@ -974,8 +974,8 @@ class TextEditor:
 
         # Keep audio language separate from video quality.
         lang_aliases = {
-            "dual": "Eng/Jap Dub",
-            "english & japanese": "Eng/Jap Dub",
+            "dual": "Dual Jap/Eng Dub",
+            "english & japanese": "Dual Jap/Eng Dub",
             "sub": "Japanese [English Sub]",
             "japanese": "Japanese [English Sub]",
             "dub": "English Dub",
@@ -983,7 +983,7 @@ class TextEditor:
         }
         lang = lang_aliases.get(lang.lower(), lang)
         if lang.lower() in ("eng/jap dub", "english/japanese dub"):
-            lang = "Eng/Jap Dub"
+            lang = "Dual Jap/Eng Dub"
 
         configured_qualities = getattr(Var, "QUALS", []) or []
         quality_label = self.pdata.get("quality_label")

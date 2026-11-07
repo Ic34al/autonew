@@ -15,6 +15,7 @@ from aiohttp import ClientSession
 from aiofiles import open as aiopen
 from aioshutil import rmtree as aiormtree
 from feedparser import parse as feedparse
+from pyrogram import filters
 from pyrogram.enums import ChatMemberStatus
 from pyrogram.types import InlineKeyboardButton
 from pyrogram.errors import MessageNotModified, FloodWait, UserNotParticipant, ReplyMarkupInvalid, MessageIdInvalid
@@ -193,6 +194,18 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                 return None
 
     try:
+        chat = getattr(msg, "chat", None)
+        chat_id = getattr(chat, "id", None) or getattr(msg, "chat_id", None)
+        msg_id = getattr(msg, "id", None) or getattr(msg, "message_id", None)
+        chat_type = str(getattr(chat, "type", "")).lower()
+        if chat_id is not None and msg_id is not None and "channel" in chat_type:
+            try:
+                if await db.isMessageManuallyEdited(int(chat_id), int(msg_id)):
+                    LOGS.info(f"Skipping automated edit of manually corrected channel post {chat_id}/{msg_id}")
+                    return None
+            except Exception as guard_error:
+                LOGS.warning(f"Manual-edit protection check failed: {guard_error}")
+
         is_caption = _is_caption_message(msg)
         edited = await _edit_target(
             msg,
@@ -241,6 +254,23 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
         if get_error:
             raise e
         return str(e)
+
+@bot.on_edited_message(filters.channel)
+async def remember_manual_channel_post_edit(client, message):
+    """Protect an admin's manually corrected channel caption/text from bot rewrites."""
+    try:
+        chat_id = getattr(getattr(message, "chat", None), "id", None)
+        message_id = getattr(message, "id", None)
+        if chat_id is not None and message_id is not None:
+            await db.markMessageManuallyEdited(
+                chat_id,
+                message_id,
+                caption=getattr(message, "caption", None) or getattr(message, "text", None),
+            )
+            LOGS.info(f"Saved manual channel edit protection for {chat_id}/{message_id}")
+    except Exception:
+        LOGS.error(format_exc())
+
 
 async def encode(string):
     return (urlsafe_b64encode(string.encode("ascii")).decode("ascii")).strip("=")

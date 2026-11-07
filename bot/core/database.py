@@ -164,21 +164,24 @@ class MongoDB:
         file_ids = episode_data.get("file_ids", {})
         return file_ids if isinstance(file_ids, dict) else {}
 
-    async def saveAnimeResume(self, ani_id, ep, name, torrent_url):
-        """Persist the source needed to resume an unfinished episode after dyno restart."""
+    async def saveAnimeResume(self, ani_id, ep, name, torrent_url, destination_channel=None):
+        """Persist an unfinished episode and its resolved destination for restart recovery."""
         if ani_id is None or ep is None or not torrent_url:
             return
         key = f"{ani_id}:{str(ep)}"
+        update = {
+            "ani_id": ani_id,
+            "episode": str(ep),
+            "name": str(name),
+            "torrent_url": str(torrent_url),
+            "status": "pending",
+            "updated_at": datetime.datetime.utcnow(),
+        }
+        if destination_channel is not None:
+            update["destination_channel"] = int(destination_channel)
         await self.__db.anime_resume.update_one(
             {"_id": key},
-            {"$set": {
-                "ani_id": ani_id,
-                "episode": str(ep),
-                "name": str(name),
-                "torrent_url": str(torrent_url),
-                "status": "pending",
-                "updated_at": datetime.datetime.utcnow(),
-            }},
+            {"$set": update},
             upsert=True,
         )
 
@@ -194,6 +197,32 @@ class MongoDB:
             {"_id": f"{ani_id}:{str(ep)}"},
             {"$set": {"status": "complete", "completed_at": datetime.datetime.utcnow()}},
         )
+    async def markMessageManuallyEdited(self, chat_id, message_id, caption=None):
+        """Remember channel posts edited by an admin so automated edits never overwrite them."""
+        if chat_id is None or message_id is None:
+            return
+        update = {
+            "chat_id": int(chat_id),
+            "message_id": int(message_id),
+            "edited_at": datetime.datetime.utcnow(),
+        }
+        if caption is not None:
+            update["caption"] = str(caption)
+        await self.__db.manual_channel_edits.update_one(
+            {"_id": f"{int(chat_id)}:{int(message_id)}"},
+            {"$set": update},
+            upsert=True,
+        )
+
+    async def isMessageManuallyEdited(self, chat_id, message_id):
+        if chat_id is None or message_id is None:
+            return False
+        record = await self.__db.manual_channel_edits.find_one(
+            {"_id": f"{int(chat_id)}:{int(message_id)}"},
+            {"_id": 1},
+        )
+        return bool(record)
+
     async def saveAnimeStatus(self, ani_id, ep, status_msg_id):
         if ani_id is None or ep is None or status_msg_id is None:
             return

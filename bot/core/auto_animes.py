@@ -7445,6 +7445,46 @@ async def fetch_animes():
             continue
 
         try:
+            # Finish saved work first after a dyno restart. Each checkpoint
+            # retains the channel selected when the episode was first queued.
+            pending_resume = await db.getAnimeResumeTasks()
+            resume_blocked = False
+            for resume_task in pending_resume:
+                resume_name = resume_task.get("name")
+                resume_link = resume_task.get("torrent_url")
+                if not resume_name or not resume_link:
+                    continue
+                saved_destination = resume_task.get("destination_channel")
+                try:
+                    await rep.report(
+                        f"Resuming interrupted anime upload: {resume_name}"
+                        + (f" -> channel {saved_destination}" if saved_destination else ""),
+                        "info"
+                    )
+                    result = await get_animes(
+                        resume_name,
+                        resume_link,
+                        destination_channel=int(saved_destination) if saved_destination is not None else None,
+                    )
+                    if result not in ("uploaded", "already_published"):
+                        resume_blocked = True
+                        await rep.report(
+                            f"Interrupted upload remains pending; scheduled search will wait: {resume_name} (result={result!r})",
+                            "warning"
+                        )
+                        break
+                except asyncio.CancelledError:
+                    raise
+                except Exception as resume_error:
+                    resume_blocked = True
+                    await rep.report(
+                        f"Interrupted upload failed and will retry before new searches: {resume_name}: {resume_error}",
+                        "error"
+                    )
+                    break
+            if resume_blocked:
+                continue
+
             today = datetime.now(ist).date()
             schedule = await fetch_today_schedule()
             if not schedule:
@@ -8203,7 +8243,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
         # episode even after it falls out of the RSS feed window.
-        await db.saveAnimeResume(ani_id, ep_no, name, torrent)
+        await db.saveAnimeResume(ani_id, ep_no, name, torrent, destination_channel=target_channel)
         
         if force or not existing_target_post:
             
