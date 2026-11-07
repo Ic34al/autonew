@@ -7413,19 +7413,18 @@ async def fetch_animes():
     def extract_episode_number(title):
         """Return one explicit episode number; reject ranges and batch packs."""
         value = str(title or "")
-        if re.search(r"(?i)\\b(?:batch|complete\\s+series|full\\s+season)\\b", value):
+        if re.search(r"(?i)\b(?:batch|complete\s+series|full\s+season)\b", value):
             return None
-        if re.search(r"(?i)\\b0*\\d{1,3}\\s*[-–~]\\s*0*\\d{1,3}\\b", value):
+        if re.search(r"(?i)\b0*\d{1,3}\s*[-–~]\s*0*\d{1,3}\b", value):
             return None
         patterns = (
-            r"(?i)\\b(?:episode|ep)\\s*[-._ ]*0*(\\d{1,3})\\b",
-            r"(?i)\\bS\\s*\\d{1,2}\\s*[-._ ]*E\\s*0*(\\d{1,3})\\b",
-            r"(?:^|[\\s._-])0*(\\d{1,3})(?=\\s*(?:\\([^)]*\\)|\\[[^]]*\\]|$))",
+            r"(?i)\b(?:episode|ep)\s*[-._ ]*0*(\d{1,3})\b",
+            r"(?i)\bS\s*\d{1,2}\s*[-._ ]*E\s*0*(\d{1,3})\b",
+            r"(?:^|[\s._-])0*(\d{1,3})(?=\s*(?:\([^)]*\)|\[[^]]*\]|$))",
         )
         numbers = []
         for pattern in patterns:
             numbers.extend(int(match.group(1)) for match in re.finditer(pattern, value))
-        # Resolution / year / source tags are not episode numbers.
         numbers = [number for number in numbers if 1 <= number <= 999]
         return numbers[-1] if numbers else None
 
@@ -7435,7 +7434,7 @@ async def fetch_animes():
             or item.get("episodeNumber")
             or item.get("episode_number")
         )
-        match = re.search(r"\\d{1,3}", str(raw or ""))
+        match = re.search(r"\d{1,3}", str(raw or ""))
         return int(match.group()) if match else None
 
     def published_today(entry, today):
