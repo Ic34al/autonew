@@ -218,7 +218,32 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                     return None
                 LOGS.warning(f"Manual-edit protection check failed: {guard_error}")
 
+        # Refresh the channel message immediately before editing. A stale
+        # Pyrogram object can omit its media fields; treating a photo post as
+        # plain text risks replacing its caption incorrectly.
+        if chat_id is not None and msg_id is not None:
+            try:
+                latest_msg = await bot.get_messages(
+                    chat_id=int(chat_id),
+                    message_ids=int(msg_id),
+                )
+                if latest_msg and not getattr(latest_msg, "empty", False):
+                    msg = latest_msg
+            except Exception as refresh_error:
+                LOGS.warning(
+                    f"Could not refresh message {chat_id}/{msg_id} before edit: "
+                    f"{refresh_error}"
+                )
+
         is_caption = _is_caption_message(msg)
+        if is_caption and (text is None or not str(text).strip()):
+            # Never blank a media caption because a progress/update caller
+            # supplied an empty value accidentally.
+            LOGS.warning(
+                f"Blocked empty caption edit for media post {chat_id}/{msg_id}"
+            )
+            return None
+
         edited = await _edit_target(
             msg,
             is_caption=is_caption
@@ -281,10 +306,25 @@ async def remember_manual_channel_post_edit(client, message):
         if chat_id is None or message_id is None:
             return
 
-        # Preserve an intentionally empty caption too; do not use truthy fallback.
-        caption = getattr(message, "caption", None)
+        # Read the committed Telegram version, not a potentially stale event
+        # object, so the manually corrected caption is the one protected.
+        latest_message = message
+        try:
+            fetched = await client.get_messages(
+                chat_id=int(chat_id),
+                message_ids=int(message_id),
+            )
+            if fetched and not getattr(fetched, "empty", False):
+                latest_message = fetched
+        except Exception as refresh_error:
+            LOGS.warning(
+                f"Could not refresh manually edited post {chat_id}/{message_id}: "
+                f"{refresh_error}"
+            )
+
+        caption = getattr(latest_message, "caption", None)
         if caption is None:
-            caption = getattr(message, "text", None)
+            caption = getattr(latest_message, "text", None)
 
         await db.markMessageManuallyEdited(
             int(chat_id),
@@ -340,6 +380,8 @@ async def remember_manual_channel_post_raw_edit(client, update, users, chats):
 
         chat_id = int(utils.get_peer_id(peer_id))
         caption = getattr(edited_message, "message", None)
+        if caption is None:
+            caption = ""
 
         await db.markMessageManuallyEdited(
             chat_id,
