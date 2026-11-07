@@ -8142,6 +8142,12 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
 
 
 async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False, mapped_channel=None):
+    # Global safety gate: every automatic RSS/schedule/resume path reaches this
+    # final get_animes implementation. Manual selected-channel search bypasses it.
+    if not manual_search:
+        while MANUAL_SEARCH_HOLD.is_set():
+            await asleep(2)
+
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
