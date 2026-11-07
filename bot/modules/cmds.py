@@ -4210,21 +4210,8 @@ async def anime_search_destination_callback(client, callback_query):
                     destination,
                     creates_join_request=True
                 )
-                # Send the destination sticker first, then the Main Channel
-                # sticker, followed immediately by the custom episode update.
-                # The selected-channel sticker is only for a separate
-                # destination. If the selected destination IS Main Channel,
-                # do not send a pre-post sticker; the single Main Channel
-                # sticker is sent after the announcement below.
-                if destination != Var.MAIN_CHANNEL:
-                    try:
-                        await asleep(Var.STICKER_INTERVAL)
-                        await send_sticker_to_channel(destination, Var.STICKER_ID)
-                    except Exception as destination_sticker_error:
-                        await rep.report(
-                            f"/search destination sticker failed for {destination}: {destination_sticker_error}",
-                            "warning"
-                        )
+                # Episode stickers are sent by get_animes after each upload.
+                # Keep only the single Main Channel sticker after the final batch announcement.
                 # Use the exact selected episode numbers; compress only a
                 # genuinely continuous sequence into a range on the artwork.
                 episode_numbers = []
