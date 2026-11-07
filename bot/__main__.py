@@ -1,3 +1,4 @@
+import asyncio
 from asyncio import (
     create_task, create_subprocess_exec, create_subprocess_shell,
     run as asyrun, gather, sleep as asleep, get_event_loop
