@@ -7410,6 +7410,34 @@ async def fetch_animes():
                 return True
         return False
 
+    def extract_episode_number(title):
+        """Return one explicit episode number; reject ranges and batch packs."""
+        value = str(title or "")
+        if re.search(r"(?i)\\b(?:batch|complete\\s+series|full\\s+season)\\b", value):
+            return None
+        if re.search(r"(?i)\\b0*\\d{1,3}\\s*[-–~]\\s*0*\\d{1,3}\\b", value):
+            return None
+        patterns = (
+            r"(?i)\\b(?:episode|ep)\\s*[-._ ]*0*(\\d{1,3})\\b",
+            r"(?i)\\bS\\s*\\d{1,2}\\s*[-._ ]*E\\s*0*(\\d{1,3})\\b",
+            r"(?:^|[\\s._-])0*(\\d{1,3})(?=\\s*(?:\\([^)]*\\)|\\[[^]]*\\]|$))",
+        )
+        numbers = []
+        for pattern in patterns:
+            numbers.extend(int(match.group(1)) for match in re.finditer(pattern, value))
+        # Resolution / year / source tags are not episode numbers.
+        numbers = [number for number in numbers if 1 <= number <= 999]
+        return numbers[-1] if numbers else None
+
+    def schedule_episode_number(item):
+        raw = (
+            item.get("episode")
+            or item.get("episodeNumber")
+            or item.get("episode_number")
+        )
+        match = re.search(r"\\d{1,3}", str(raw or ""))
+        return int(match.group()) if match else None
+
     def published_today(entry, today):
         stamp = getattr(entry, "published_parsed", None) or getattr(entry, "updated_parsed", None)
         # No timestamp means we cannot prove this is a release from today.
@@ -7445,46 +7473,6 @@ async def fetch_animes():
             continue
 
         try:
-            # Finish saved work first after a dyno restart. Each checkpoint
-            # retains the channel selected when the episode was first queued.
-            pending_resume = await db.getAnimeResumeTasks()
-            resume_blocked = False
-            for resume_task in pending_resume:
-                resume_name = resume_task.get("name")
-                resume_link = resume_task.get("torrent_url")
-                if not resume_name or not resume_link:
-                    continue
-                saved_destination = resume_task.get("destination_channel")
-                try:
-                    await rep.report(
-                        f"Resuming interrupted anime upload: {resume_name}"
-                        + (f" -> channel {saved_destination}" if saved_destination else ""),
-                        "info"
-                    )
-                    result = await get_animes(
-                        resume_name,
-                        resume_link,
-                        destination_channel=int(saved_destination) if saved_destination is not None else None,
-                    )
-                    if result not in ("uploaded", "already_published"):
-                        resume_blocked = True
-                        await rep.report(
-                            f"Interrupted upload remains pending; scheduled search will wait: {resume_name} (result={result!r})",
-                            "warning"
-                        )
-                        break
-                except asyncio.CancelledError:
-                    raise
-                except Exception as resume_error:
-                    resume_blocked = True
-                    await rep.report(
-                        f"Interrupted upload failed and will retry before new searches: {resume_name}: {resume_error}",
-                        "error"
-                    )
-                    break
-            if resume_blocked:
-                continue
-
             today = datetime.now(ist).date()
             schedule = await fetch_today_schedule()
             if not schedule:
@@ -7494,7 +7482,6 @@ async def fetch_animes():
             timeout = aiohttp.ClientTimeout(total=18)
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 scheduled = []
-                unselected_titles = []
                 alias_errors = []
                 for item in schedule:
                     if not isinstance(item, dict) or not item.get("title"):
@@ -7519,9 +7506,8 @@ async def fetch_animes():
                         except Exception as alias_error:
                             alias_errors.append(f"{original}: {alias_error}")
                         alias_cache[cache_key] = aliases
-                    # Only scan anime explicitly selected with /addanime.
-                    # A matching RSS release without a configured anime channel
-                    # must be ignored; it must never fall back to Main Channel.
+                    # Today's schedule is the allow-list. A dedicated channel
+                    # mapping is optional; unmapped scheduled shows go to Main Channel.
                     selected_channel = None
                     for alias in alias_cache[cache_key]:
                         alias_value = re.sub(r"\s+", " ", str(alias or "")).strip()
@@ -7554,10 +7540,12 @@ async def fetch_animes():
                                 )
                                 selected_channel = None
 
-                    if not selected_channel:
-                        unselected_titles.append(original)
-                        continue
-                    scheduled.append((original, alias_cache[cache_key], int(selected_channel)))
+                    scheduled.append((
+                        original,
+                        alias_cache[cache_key],
+                        int(selected_channel) if selected_channel else None,
+                        schedule_episode_number(item),
+                    ))
 
                 if alias_errors:
                     await report_schedule_status_once(
@@ -7566,28 +7554,6 @@ async def fetch_animes():
                         + "; ".join(alias_errors[:5]),
                         "warning"
                     )
-
-            if not scheduled:
-                status_key = ("no_selected", tuple(sorted(unselected_titles)))
-                await report_schedule_status_once(
-                    status_key,
-                    "No selected anime found in today's schedule. "
-                    f"Ignored {len(unselected_titles)} unselected scheduled title(s); "
-                    "add the exact anime with /addanime to enable uploads.",
-                    "info"
-                )
-                continue
-
-            if unselected_titles:
-                await report_schedule_status_once(
-                    ("selected_and_ignored", tuple(sorted(x[0] for x in scheduled)), tuple(sorted(unselected_titles))),
-                    f"Schedule selection: {len(scheduled)} selected, "
-                    f"{len(unselected_titles)} unselected title(s) ignored. "
-                    "Only selected anime will be processed.",
-                    "info"
-                )
-            else:
-                last_schedule_status = None
 
             feed_urls = list(dict.fromkeys(
                 url for url in (
@@ -7636,15 +7602,27 @@ async def fetch_animes():
                     subsplease_feed = "subsplease" in str(feed_url).casefold()
                     if not (dual_multi_audio or japanese_english_sub or subsplease_feed):
                         continue
-                    for scheduled_title, aliases, selected_channel in scheduled:
-                        if title_matches(title, aliases):
-                            # Japanese + English-sub releases are the explicit
-                            # exception: publish them to Main Channel, even when
-                            # this anime has a dedicated /addanime channel.
-                            # Dual/Multi Audio continues to use its selected channel.
-                            route_to_main = bool(japanese_english_sub or subsplease_feed) and not dual_multi_audio
-                            eligible.append((title, link, feed_url, scheduled_title, route_to_main, selected_channel))
-                            break
+                    rss_episode = extract_episode_number(release_title)
+                    if rss_episode is None:
+                        # Never accept season packs, episode ranges, or an RSS
+                        # title whose single episode number cannot be verified.
+                        continue
+                    for scheduled_title, aliases, selected_channel, expected_episode in scheduled:
+                        if not title_matches(title, aliases):
+                            continue
+                        if expected_episode is not None and rss_episode != expected_episode:
+                            continue
+                        # If schedule has no episode number, a single numbered
+                        # release is still safe; batch/range releases were rejected above.
+                        route_to_main = (
+                            bool(japanese_english_sub or subsplease_feed)
+                            and not dual_multi_audio
+                        ) or not selected_channel
+                        eligible.append((
+                            title, link, feed_url, scheduled_title,
+                            route_to_main, selected_channel, rss_episode
+                        ))
+                        break
 
             # Different quality feeds can expose the same torrent link. Process
             # each link once, and do not mark it seen until the upload succeeds.
@@ -7667,13 +7645,13 @@ async def fetch_animes():
             await rep.report(
                 f"Matched {len(eligible)} selected scheduled release(s): "
                 + "; ".join(
-                    f"{row[3]} -> {row[0]} ({'Main Channel: Japanese + English Sub' if row[4] else 'selected channel ' + str(row[5]) + ': Dual/Multi Audio'})"
+                    f"{row[3]} episode {row[6]:02d} -> {row[0]} ({'Main Channel' if row[4] else 'dedicated channel ' + str(row[5])})"
                     for row in eligible
                 ),
                 "success"
             )
 
-            for title, link, feed_url, scheduled_title, route_to_main, selected_channel in eligible:
+            for title, link, feed_url, scheduled_title, route_to_main, selected_channel, rss_episode in eligible:
                 try:
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
