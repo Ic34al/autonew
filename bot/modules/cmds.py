@@ -3275,7 +3275,7 @@ async def addtask_destination_callback(client, callback_query):
             )
 
         task = bot_loop.create_task(
-            get_animes(taskInfo.title, taskInfo.link, force=True, destination_channel=destination)
+            get_animes(taskInfo.title, taskInfo.link, force=True, manual_search=True, destination_channel=destination)
         )
         job_id = secrets.token_hex(3)
         ADD_TASK_JOBS[job_id] = {
