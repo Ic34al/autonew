@@ -4293,16 +4293,10 @@ async def anime_search_destination_callback(client, callback_query):
             MANUAL_SEARCH_HOLD.clear()
         await callback_query.message.edit_text(
             f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
-            f"<b>Destination:</b> {chat.title or destination}\n"
+            f"<b>Selected destination:</b> {chat.title or destination}\n"
             f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
             f"<b>Failed / unconfirmed:</b> {failed}\n"
-            + (
-                "<b>Main Channel:</b> Join-request post sent."
-                if main_announcement else
-                ("<b>Main Channel:</b> No new episodes uploaded; no join post sent."
-                 if destination != int(Var.MAIN_CHANNEL) else
-                 "<b>Main Channel:</b> Episodes were posted directly here.")
-            )
+            "<b>Main Channel:</b> No join-request announcement was sent."
         )
     except Exception as error:
         await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
