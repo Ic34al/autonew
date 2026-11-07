@@ -7096,7 +7096,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
-        await db.saveAnimeResume(ani_id, ep_no, name, torrent_url)
+        await db.saveAnimeResume(ani_id, ep_no, name, torrent_url, destination_channel=target_channel)
 
         if force or not existing_target_post:
 
