@@ -17,6 +17,11 @@ from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
 
+# Import command handlers explicitly so every @bot.on_message handler is
+# registered before the client starts. This also makes import failures visible
+# in the worker startup log instead of leaving a silent, commandless bot.
+import bot.modules.cmds as _command_handlers
+
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
 async def restart(client, message):
@@ -155,9 +160,25 @@ async def main():
         LOGS.info("Starting Web Server...")
         await start_server()
         
-        LOGS.info("Loading settings...")
-        await load_settings()
-        
+        LOGS.info("Starting bot and registering command handlers...")
+        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
+        # fail part-way through startup. The finally block must still stop it.
+        bot_start_attempted = True
+        await bot.start()
+        LOGS.info("Telegram client started; command handlers are active.")
+
+        # Load database-backed settings only after Telegram is online. A
+        # temporary MongoDB/settings error must not prevent the bot from
+        # connecting and receiving commands.
+        try:
+            LOGS.info("Loading settings...")
+            await load_settings()
+        except Exception:
+            LOGS.exception(
+                "Settings load failed after Telegram startup; continuing with "
+                "environment defaults so the bot can still receive commands."
+            )
+
         LOGS.info("Starting scheduler...")
         sch.add_job(
             upcoming_animes,
@@ -168,12 +189,7 @@ async def main():
         )
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
-        
-        LOGS.info("Starting bot...")
-        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
-        # fail part-way through startup. The finally block must still stop it.
-        bot_start_attempted = True
-        await bot.start()
+
         await restart()
         
         LOGS.info("Starting tasks...")
