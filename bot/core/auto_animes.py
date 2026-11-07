@@ -8469,7 +8469,9 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 # Send stickers only after the episode post is confirmed.
                 sticker_targets = []
                 if destination_channel is not None:
-                    sticker_targets = [int(destination_channel)]
+                    # Manual /search batch sends one destination sticker after
+                    # the whole selected episode queue finishes.
+                    sticker_targets = [] if manual_search else [int(destination_channel)]
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
