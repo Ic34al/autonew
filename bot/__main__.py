@@ -47,14 +47,34 @@ async def restart():
 async def queue_loop():
     LOGS.info("Queue Loop Started !!")
     while True:
-        if not ffQueue.empty():
-            post_id = await ffQueue.get()
-            await asleep(1.5)
-            ff_queued[post_id].set()
-            await asleep(1.5)
-            async with ffLock:
-                ffQueue.task_done()
-        await asleep(10)
+        try:
+            if not ffQueue.empty():
+                post_id = await ffQueue.get()
+                try:
+                    event = ff_queued.get(post_id)
+                    if event is None:
+                        LOGS.error(
+                            f"Encoder queue entry {post_id} has no waiting event; "
+                            "discarding the stale queue item safely."
+                        )
+                        continue
+                    await asleep(1.5)
+                    event.set()
+                    await asleep(1.5)
+                    # Preserve the existing single-encoder order.
+                    async with ffLock:
+                        pass
+                finally:
+                    ffQueue.task_done()
+            await asleep(2)
+        except asyncio.CancelledError:
+            raise
+        except Exception as queue_error:
+            # A transient/stale queue item must not permanently kill this worker.
+            LOGS.exception(
+                f"Encoder queue loop recovered from an unexpected error: {queue_error}"
+            )
+            await asleep(3)
 
 async def load_settings():
     LOGS.info("Loading settings...")
