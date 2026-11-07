@@ -432,84 +432,12 @@ class FFEncoder:
                 await progress_task
             except asyncio.CancelledError:
                 pass
-            except Exception as progress_error:
-                # A status-message/progress update must never abort FFmpeg cleanup.
-                LOGS.warning(f"FFmpeg progress monitor stopped with an error: {progress_error}")
 
         return_code = self.__proc.returncode
         if isinstance(stderr_output, bytes):
             stderr_text = stderr_output.decode("utf-8", errors="replace")
         else:
             stderr_text = str(stderr_output or "")
-
-        # If a custom anime/global FFmpeg command fails, retry this quality once
-        # with the repository's known-good default command. This is sequential,
-        # so it does not add another simultaneous encoder or increase dyno RAM.
-        if return_code != 0 and not self.is_cancelled and not ani_cache.get('global_pause'):
-            try:
-                fallback_template = ffargs.get(self.__qual)
-                fallback_code = (
-                    fallback_template.format(dl_npath, self.__prog_file, out_npath)
-                    if fallback_template else None
-                )
-                if fallback_code and fallback_code != ffcode:
-                    if ospath.exists(out_npath):
-                        await aioremove(out_npath)
-                    fallback_code = fallback_code.replace(
-                        "ffmpeg ",
-                        "ffmpeg -filter_threads 1 -filter_complex_threads 1 ",
-                        1,
-                    )
-                    fallback_output = f"'{out_npath}'"
-                    if fallback_output in fallback_code:
-                        fallback_code = fallback_code.replace(
-                            fallback_output, f"-threads 1 {fallback_output}", 1
-                        )
-                    LOGS.warning(
-                        f"Custom FFmpeg command failed for {self.__qual}p; "
-                        "retrying once with the default encoder command."
-                    )
-                    await rep.report(
-                        f"{self.__qual}p custom encode failed; retrying once with the default FFmpeg profile.",
-                        "warning",
-                    )
-                    self.__proc = await create_subprocess_shell(
-                        fallback_code,
-                        stdout=asyncio.subprocess.DEVNULL,
-                        stderr=PIPE,
-                    )
-                    fallback_pid = self.__proc.pid
-                    ffpids_cache.append(fallback_pid)
-                    fallback_progress = create_task(self.progress())
-                    fallback_stderr = b""
-                    try:
-                        _, fallback_stderr = await self.__proc.communicate()
-                    finally:
-                        try:
-                            fallback_progress.cancel()
-                            await fallback_progress
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception as progress_error:
-                            LOGS.warning(
-                                f"Fallback FFmpeg progress monitor stopped: {progress_error}"
-                            )
-                        try:
-                            ffpids_cache.remove(fallback_pid)
-                        except ValueError:
-                            pass
-                    return_code = self.__proc.returncode
-                    if isinstance(fallback_stderr, bytes):
-                        fallback_text = fallback_stderr.decode("utf-8", errors="replace")
-                    else:
-                        fallback_text = str(fallback_stderr or "")
-                    stderr_text = (
-                        stderr_text + "\\n--- DEFAULT FFmpeg RETRY ---\\n" + fallback_text
-                    )
-            except Exception as fallback_error:
-                LOGS.exception(f"Default FFmpeg retry failed for {self.__name} ({self.__qual}p)")
-                stderr_text += f"\\nDefault FFmpeg retry error: {fallback_error}"
-
         stderr_tail = "\\n".join(stderr_text.splitlines()[-35:]).strip()
 
         try:
@@ -530,11 +458,6 @@ class FFEncoder:
             LOGS.info(f"Encoding successful! Output file: {self.out_path}")
             return self.out_path
         else:
-            if ospath.exists(out_npath):
-                try:
-                    await aioremove(out_npath)
-                except Exception as cleanup_error:
-                    LOGS.warning(f"Could not remove failed FFmpeg output {out_npath}: {cleanup_error}")
             error_message = f"FFmpeg exited with return code {return_code}"
             if stderr_tail:
                 # Keep reports readable while preserving the useful final diagnostics.

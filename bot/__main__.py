@@ -1,4 +1,3 @@
-import asyncio
 from asyncio import (
     create_task, create_subprocess_exec, create_subprocess_shell,
     run as asyrun, gather, sleep as asleep, get_event_loop
@@ -12,11 +11,13 @@ from signal import SIGKILL
 from bot.core.auto_animes import fetch_animes
 from bot import bot, Var, bot_loop, sch, LOGS, ffQueue, ffLock, ffpids_cache, ff_queued
 from bot.core.func_utils import clean_up, clean_old_files, new_task, editMessage
+from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
+from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
-from pyrogram.handlers import MessageHandler
 
-
+@bot.on_message(command('restart') & user(Var.ADMINS))
+@new_task
 async def restart(client, message):
     rmessage = await message.reply('<i>Restarting...</i>')
     if sch.running:
@@ -46,34 +47,14 @@ async def restart():
 async def queue_loop():
     LOGS.info("Queue Loop Started !!")
     while True:
-        try:
-            if not ffQueue.empty():
-                post_id = await ffQueue.get()
-                try:
-                    event = ff_queued.get(post_id)
-                    if event is None:
-                        LOGS.error(
-                            f"Encoder queue entry {post_id} has no waiting event; "
-                            "discarding the stale queue item safely."
-                        )
-                        continue
-                    await asleep(1.5)
-                    event.set()
-                    await asleep(1.5)
-                    # Preserve the existing single-encoder order.
-                    async with ffLock:
-                        pass
-                finally:
-                    ffQueue.task_done()
-            await asleep(2)
-        except asyncio.CancelledError:
-            raise
-        except Exception as queue_error:
-            # A transient/stale queue item must not permanently kill this worker.
-            LOGS.exception(
-                f"Encoder queue loop recovered from an unexpected error: {queue_error}"
-            )
-            await asleep(3)
+        if not ffQueue.empty():
+            post_id = await ffQueue.get()
+            await asleep(1.5)
+            ff_queued[post_id].set()
+            await asleep(1.5)
+            async with ffLock:
+                ffQueue.task_done()
+        await asleep(10)
 
 async def load_settings():
     LOGS.info("Loading settings...")
@@ -153,47 +134,9 @@ async def main():
         LOGS.info("Starting Web Server...")
         await start_server()
         
-        # Load admin IDs BEFORE importing any command modules. Pyrogram's
-        # filters.user(Var.ADMINS) captures the IDs when each handler is
-        # registered; importing commands first leaves database admins locked
-        # out even after Var.ADMINS is updated later.
-        try:
-            LOGS.info("Loading settings before command registration...")
-            await asyncio.wait_for(load_settings(), timeout=25)
-        except Exception:
-            LOGS.exception("Full settings load failed; attempting admin-only recovery.")
-            try:
-                db_admins = await asyncio.wait_for(db.get_admins(), timeout=10)
-                Var.ADMINS = list({
-                    int(admin_id)
-                    for admin_id in (list(getattr(Var, "ADMINS", []) or []) + list(db_admins or []))
-                })
-                LOGS.info(f"Recovered admin list: {Var.ADMINS}")
-            except Exception:
-                LOGS.exception("Could not recover database admins; using environment admins.")
-
-        # Import handler modules only after Var.ADMINS has its final startup
-        # value, so all user filters are built with the correct admin IDs.
-        from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
-        from bot.modules.daily_schedule import upcoming_animes
-        import bot.modules.cmds as _command_handlers
-
-        # The restart handler lives in this entry point, so register it at the
-        # same point as the other commands, after admin IDs have been loaded.
-        bot.add_handler(
-            MessageHandler(restart, command("restart") & user(Var.ADMINS))
-        )
-
-        LOGS.info("Starting Telegram client...")
-        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
-        # fail part-way through startup. The finally block must still stop it.
-        bot_start_attempted = True
-        await bot.start()
-        LOGS.info(
-            f"Telegram client started. Registered handler groups: "
-            f"{sum(len(group_handlers) for group_handlers in bot.dispatcher.groups.values())}"
-        )
-
+        LOGS.info("Loading settings...")
+        await load_settings()
+        
         LOGS.info("Starting scheduler...")
         sch.add_job(
             upcoming_animes,
@@ -204,7 +147,12 @@ async def main():
         )
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
-
+        
+        LOGS.info("Starting bot...")
+        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
+        # fail part-way through startup. The finally block must still stop it.
+        bot_start_attempted = True
+        await bot.start()
         await restart()
         
         LOGS.info("Starting tasks...")
