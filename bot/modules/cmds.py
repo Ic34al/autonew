@@ -66,10 +66,10 @@ async def publish_manual_search_batch_announcement(anime_name, queue, destinatio
 
     selected_episode_numbers = []
     episode_patterns = (
-        r"\\bS\\s*\\d{1,2}\\s*[-._ ]+\\s*0*(\\d{1,3})\\b",
-        r"\\bS\\s*\\d{1,2}\\s*E\\s*0*(\\d{1,3})\\b",
-        r"\\b(?:EP|EPISODE)\\s*[-._ ]*0*(\\d{1,3})\\b",
-        r"(?:^|[-._])\\s*0*(\\d{1,3})(?=\\s*(?:\\(|\\[|$))",
+        r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b",
+        r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b",
+        r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b",
+        r"(?:^|[-._])\s*0*(\d{1,3})(?=\s*(?:\(|\[|$))",
     )
     for selected_title, _ in queue:
         normalized_title = str(selected_title or "").replace("—", "-").replace("–", "-").replace("−", "-")
