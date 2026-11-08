@@ -4296,7 +4296,7 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Selected destination:</b> {chat.title or destination}\n"
             f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
             f"<b>Failed / unconfirmed:</b> {failed}\n"
-            "<b>Main Channel:</b> No join-request announcement was sent."
+            f"<b>Main Channel:</b> {'Join-request announcements sent.' if failed == 0 and completed > 0 else 'Check failed episodes in the bot log.'}"
         )
     except Exception as error:
         await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
