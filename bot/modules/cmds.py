@@ -4324,7 +4324,7 @@ async def anime_search_destination_callback(client, callback_query):
                 # selected range (e.g. EPISODE 01-05), not a copy of the last
                 # individual episode post. Preserve the established caption and
                 # the exact gold • CLICK HERE TO WATCH • join-request button.
-                episode_info = TextEditor(last_uploaded_title)
+                episode_info = TextEditor(queue[-1][0])
                 await episode_info.load_info()
                 first_episode_info = TextEditor(queue[0][0])
                 await first_episode_info.load_info()
