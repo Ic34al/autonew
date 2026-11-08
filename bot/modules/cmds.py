@@ -50,6 +50,9 @@ awaiting_manual_dub: dict[int, dict] = {}
 # Manual /addtask jobs, keyed by a short ID shown in /canceltask.
 ADD_TASK_JOBS: dict[str, dict] = {}
 
+# Serialize complete manual /search batches across selected anime channels.
+MANUAL_SEARCH_BATCH_LOCK = asyncio.Lock()
+
 
 RANDOM_PIC = None
 
@@ -4254,43 +4257,60 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Selected:</b> {len(queue)}"
         )
         completed = skipped = failed = 0
-        # Pause scheduled ongoing-anime uploads for the entire selected-channel batch.
-        async with AUTO_UPLOAD_PRIORITY_LOCK:
-            MANUAL_SEARCH_HOLD.set()
-        try:
-            for position, (title, torrent) in enumerate(queue):
-                task_id = f"{batch_id}:{position}"
-                try:
-                    while True:
-                        if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                            await asleep(1)
-                            continue
-                        async with AUTO_UPLOAD_PRIORITY_LOCK:
+        # Hold the upload pipeline for this entire anime/channel batch.
+        # Concurrent /search selections wait until this batch is complete.
+        async with MANUAL_SEARCH_BATCH_LOCK:
+            async with AUTO_UPLOAD_PRIORITY_LOCK:
+                MANUAL_SEARCH_HOLD.set()
+            try:
+                for position, (title, torrent) in enumerate(queue):
+                    task_id = f"{batch_id}:{position}"
+                    try:
+                        while True:
                             if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                                await asleep(1)
                                 continue
-                            await rep.report(f"/search selected upload to {destination}: {title}", "info")
-                            result = await get_animes(
-                                title, torrent, force=True, manual_search=True,
-                                destination_channel=destination
+                            async with AUTO_UPLOAD_PRIORITY_LOCK:
+                                if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                                    continue
+                                await rep.report(
+                                    f"/search batch {batch_id} destination {destination}: "
+                                    f"episode {position + 1}/{len(queue)} — {title}", "info"
+                                )
+                                result = await get_animes(
+                                    title, torrent, force=True, manual_search=True,
+                                    destination_channel=destination
+                                )
+                                break
+                        if result == "already_published":
+                            await db.markManualSearchTaskComplete(task_id)
+                            skipped += 1
+                            await rep.report(
+                                f"/search skipped: already posted in selected channel {destination}: {title}",
+                                "warning"
                             )
+                        elif result == "uploaded":
+                            await db.markManualSearchTaskComplete(task_id)
+                            completed += 1
+                            await rep.report(
+                                f"/search upload completed in {destination}: {title}", "info"
+                            )
+                        else:
+                            failed += 1
+                            await rep.report(
+                                f"/search did not confirm upload for {title} (result={result!r})",
+                                "warning"
+                            )
+                            # Keep later anime batches behind this unconfirmed task.
                             break
-                    if result == "already_published":
-                        await db.markManualSearchTaskComplete(task_id)
-                        skipped += 1
-                        await rep.report(f"/search skipped: already posted in selected channel {destination}: {title}", "warning")
-                    elif result == "uploaded":
-                        await db.markManualSearchTaskComplete(task_id)
-                        completed += 1
-                        await rep.report(f"/search upload completed in {destination}: {title}", "info")
-                    else:
+                    except Exception as item_error:
                         failed += 1
-                        await rep.report(f"/search did not confirm upload for {title} (result={result!r})", "warning")
-                except Exception as item_error:
-                    failed += 1
-                    await rep.report(f"/search selected episode failed ({title}): {item_error}", "error")
-
-        finally:
-            MANUAL_SEARCH_HOLD.clear()
+                        await rep.report(
+                            f"/search selected episode failed ({title}): {item_error}", "error"
+                        )
+                        break
+            finally:
+                MANUAL_SEARCH_HOLD.clear()
         await callback_query.message.edit_text(
             f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
             f"<b>Selected destination:</b> {chat.title or destination}\n"
