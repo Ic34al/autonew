@@ -3609,53 +3609,55 @@ async def resume_manual_search_uploads(client, message: Message):
         f"Pending episodes: <code>{len(tasks)}</code>"
     )
     completed = skipped = failed = 0
-    for index, task in enumerate(tasks, start=1):
-        title = task.get("title")
-        torrent = task.get("torrent_url")
-        destination = task.get("destination_channel")
-        task_id = task.get("_id")
-        if not title or not torrent or destination is None:
-            failed += 1
-            await rep.report(
-                f"/searchresume skipped invalid saved task {task_id}",
-                "warning"
-            )
-            continue
-        try:
-            await status.edit_text(
-                f"<b>Resuming /search upload {index}/{len(tasks)}</b>\n"
-                f"<code>{title}</code>\n"
-                f"Destination: <code>{destination}</code>"
-            )
-            while True:
-                if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                    await asleep(1)
-                    continue
-                async with AUTO_UPLOAD_PRIORITY_LOCK:
-                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                        continue
-                    result = await get_animes(
-                        title, torrent, force=True, manual_search=True,
-                        destination_channel=int(destination)
-                    )
-                    break
-            if result in ("uploaded", "already_published"):
-                await db.markManualSearchTaskComplete(task_id)
-                if result == "uploaded":
-                    completed += 1
-                else:
-                    skipped += 1
-            else:
+    async with MANUAL_SEARCH_BATCH_LOCK:
+        for index, task in enumerate(tasks, start=1):
+            title = task.get("title")
+            torrent = task.get("torrent_url")
+            destination = task.get("destination_channel")
+            task_id = task.get("_id")
+            if not title or not torrent or destination is None:
                 failed += 1
                 await rep.report(
-                    f"/searchresume left task pending: {title} (result={result!r})",
+                    f"/searchresume skipped invalid saved task {task_id}",
                     "warning"
                 )
+                continue
+            try:
+                await status.edit_text(
+                    f"<b>Resuming /search upload {index}/{len(tasks)}</b>\n"
+                    f"<code>{title}</code>\n"
+                    f"Destination: <code>{destination}</code>"
+                )
+                while True:
+                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                        await asleep(1)
+                        continue
+                    async with AUTO_UPLOAD_PRIORITY_LOCK:
+                        if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                            continue
+                        result = await get_animes(
+                            title, torrent, force=True, manual_search=True,
+                            destination_channel=int(destination)
+                        )
+                        break
+                if result in ("uploaded", "already_published"):
+                    await db.markManualSearchTaskComplete(task_id)
+                    if result == "uploaded":
+                        completed += 1
+                    else:
+                        skipped += 1
+                else:
+                    failed += 1
+                    await rep.report(
+                        f"/searchresume left task pending: {title} (result={result!r})",
+                        "warning"
+                    )
+                    break
+            except Exception as error:
+                failed += 1
+                await rep.report(f"/searchresume failed for {title}: {error}", "error")
                 break
-        except Exception as error:
-            failed += 1
-            await rep.report(f"/searchresume failed for {title}: {error}", "error")
-            break
+
 
     remaining = await db.getPendingManualSearchTasks()
     await status.edit_text(
