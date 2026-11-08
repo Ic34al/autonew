@@ -3367,6 +3367,7 @@ async def addtask_destination_callback(client, callback_query):
         return await callback_query.answer("Admin access required.", show_alert=True)
     try:
         destination = int(callback_query.data.split(":", 1)[1])
+        await callback_query.answer("Checking destination channel...")
         chat = await get_chat_cached(client, destination)
         me = await client.get_me()
         member = await client.get_chat_member(destination, me.id)
@@ -4411,7 +4412,7 @@ async def anime_search_upload_callback(client, callback_query):
             channel_id = int(raw_id)
             if channel_id in seen:
                 continue
-            chat = await client.get_chat(channel_id)
+            chat = await get_chat_cached(client, channel_id)
             member = await client.get_chat_member(channel_id, me.id)
             status = str(getattr(member, "status", "")).lower()
             is_admin = (
@@ -4467,7 +4468,7 @@ async def anime_search_destination_callback(client, callback_query):
     if not state or state["user_id"] != callback_query.from_user.id:
         return await callback_query.message.edit_text("<b>Search results expired. Run /search again.</b>")
     try:
-        chat = await client.get_chat(destination)
+        chat = await get_chat_cached(client, destination)
         me = await client.get_me()
         member = await client.get_chat_member(destination, me.id)
         status = str(getattr(member, "status", "")).lower()
