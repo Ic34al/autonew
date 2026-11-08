@@ -18,7 +18,11 @@ class Reporter:
             self.__logger.critical(txt[0])
         else:
             self.__logger.info(txt[0])
-        if log and self.__cid != 0:
+        # Keep the Telegram Anime Logs channel actionable: routine INFO and
+        # SUCCESS events stay in the Heroku/process logger. Only warnings and
+        # failures are forwarded to Telegram, avoiding hundreds of messages
+        # during a multi-release scan or a multi-quality upload.
+        if log and self.__cid != 0 and txt[1] in ("warning", "error", "critical"):
             # Reporter is best-effort: logging must never freeze the asyncio
             # worker or interrupt encoding/uploading.
             for attempt in range(2):
