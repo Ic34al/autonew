@@ -4282,7 +4282,8 @@ async def anime_search_destination_callback(client, callback_query):
                                 )
                                 result = await get_animes(
                                     title, torrent, force=True, manual_search=True,
-                                    destination_channel=destination
+                                    destination_channel=destination,
+                                    defer_main_announcement=True
                                 )
                                 break
                         if result == "already_published":
