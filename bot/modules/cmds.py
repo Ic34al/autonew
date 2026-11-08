@@ -4392,23 +4392,21 @@ async def anime_search_destination_callback(client, callback_query):
                 for position, (title, torrent) in enumerate(queue):
                     task_id = f"{batch_id}:{position}"
                     try:
-                        while True:
-                            if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                                await asleep(1)
-                                continue
-                            async with AUTO_UPLOAD_PRIORITY_LOCK:
-                                if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                                    continue
-                                await rep.report(
-                                    f"/search batch {batch_id} destination {destination}: "
-                                    f"episode {position + 1}/{len(queue)} — {title}", "info"
-                                )
-                                result = await get_animes(
-                                    title, torrent, force=True, manual_search=True,
-                                    destination_channel=destination,
-                                    defer_main_announcement=True
-                                )
-                                break
+                        # Serialize against any scanner task already in flight,
+                        # but never wait on AUTO_UPLOAD_PRIORITY_PENDING itself.
+                        # A cancelled/stale scanner can leave that Event set forever,
+                        # which previously made Upload Selected appear to do nothing.
+                        async with AUTO_UPLOAD_PRIORITY_LOCK:
+                            await rep.report(
+                                f"/search batch {batch_id} destination {destination}: "
+                                f"episode {position + 1}/{len(queue)} — {title}", "info",
+                                log=False
+                            )
+                            result = await get_animes(
+                                title, torrent, force=True, manual_search=True,
+                                destination_channel=destination,
+                                defer_main_announcement=True
+                            )
                         if result == "already_published":
                             skipped += 1
                             await rep.report(
