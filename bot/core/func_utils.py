@@ -138,6 +138,8 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
 
     async def _edit_target(target, chat_id=None, message_id=None, is_caption=False):
         reply_markup = buttons
+        transient_failures = 0
+        max_transient_retries = 3
         while True:
             try:
                 if chat_id is None:
@@ -192,6 +194,19 @@ async def editMessage(msg, text, buttons=None, get_error=False, **kwargs):
                 reply_markup = None
             except MessageNotModified:
                 return None
+            except (TimeoutError, OSError) as transient_error:
+                # Telegram/network requests can time out transiently. Retry a few
+                # times with backoff, then let the caller handle the failure.
+                transient_failures += 1
+                if transient_failures > max_transient_retries:
+                    raise
+                delay = min(2 ** transient_failures, 8)
+                LOGS.warning(
+                    f"Telegram message edit timed out or lost connection "
+                    f"(attempt {transient_failures}/{max_transient_retries}); "
+                    f"retrying in {delay}s: {transient_error}"
+                )
+                await asleep(delay)
 
     try:
         chat = getattr(msg, "chat", None)
