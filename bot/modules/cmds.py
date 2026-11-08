@@ -4403,22 +4403,28 @@ async def anime_search_upload_callback(client, callback_query):
 
 @bot.on_callback_query(filters.regex(r"^searchdest:(\d+):(-?\d+)$"))
 async def anime_search_destination_callback(client, callback_query):
+    # Acknowledge before channel permission checks or MongoDB writes so the
+    # Telegram callback query cannot expire while this handler is working.
+    try:
+        await callback_query.answer()
+    except Exception:
+        pass
     if callback_query.from_user.id not in Var.ADMINS:
-        return await callback_query.answer("Not authorized.", show_alert=True)
+        return
     _, raw_message_id, raw_destination = callback_query.data.split(":")
     message_id, destination = int(raw_message_id), int(raw_destination)
     state = ANIME_SEARCH_RESULTS.get(message_id)
     if not state or state["user_id"] != callback_query.from_user.id:
-        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+        return await callback_query.message.edit_text("<b>Search results expired. Run /search again.</b>")
     try:
         chat = await client.get_chat(destination)
         me = await client.get_me()
         member = await client.get_chat_member(destination, me.id)
         status = str(getattr(member, "status", "")).lower()
         if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
-            return await callback_query.answer("Bot is not an administrator in this channel.", show_alert=True)
+            return await callback_query.message.edit_text("<b>Bot is not an administrator in this channel.</b>")
         if getattr(member, "can_post_messages", True) is False:
-            return await callback_query.answer("Bot cannot post in this channel.", show_alert=True)
+            return await callback_query.message.edit_text("<b>Bot cannot post in this channel.</b>")
 
         queue = [state["episodes"][i] for i in sorted(state["selected"])]
         anime_name = state["anime"]
@@ -4431,7 +4437,6 @@ async def anime_search_destination_callback(client, callback_query):
                 episode_torrent, destination
             )
         ANIME_SEARCH_RESULTS.pop(message_id, None)
-        await callback_query.answer(f"Uploading {len(queue)} episode(s).")
         await callback_query.message.edit_text(
             f"<b>Uploading selected episodes:</b> <code>{anime_name}</code>\n"
             f"<b>Destination:</b> {chat.title or destination}\n"
@@ -4518,7 +4523,7 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Main Channel:</b> {'One join-request announcement sent after the full batch.' if main_announcement_sent else 'No announcement sent; check failed/unconfirmed uploads.'}"
         )
     except Exception as error:
-        await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
+        await callback_query.message.edit_text(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
         await rep.report(f"/search destination upload error: {error}", "error")
 
 
