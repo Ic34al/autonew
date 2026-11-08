@@ -56,6 +56,87 @@ MANUAL_SEARCH_BATCH_LOCK = asyncio.Lock()
 
 RANDOM_PIC = None
 
+async def publish_manual_search_batch_announcement(anime_name, queue, destination):
+    """Publish one combined Main Channel card and its completion sticker per batch."""
+    if not queue:
+        raise RuntimeError("Cannot announce an empty selected-episode batch.")
+
+    episode_info = TextEditor(queue[-1][0])
+    await episode_info.load_info()
+
+    selected_episode_numbers = []
+    episode_patterns = (
+        r"\\bS\\s*\\d{1,2}\\s*[-._ ]+\\s*0*(\\d{1,3})\\b",
+        r"\\bS\\s*\\d{1,2}\\s*E\\s*0*(\\d{1,3})\\b",
+        r"\\b(?:EP|EPISODE)\\s*[-._ ]*0*(\\d{1,3})\\b",
+        r"(?:^|[-._])\\s*0*(\\d{1,3})(?=\\s*(?:\\(|\\[|$))",
+    )
+    for selected_title, _ in queue:
+        normalized_title = str(selected_title or "").replace("—", "-").replace("–", "-").replace("−", "-")
+        for pattern in episode_patterns:
+            match = re.search(pattern, normalized_title, re.IGNORECASE)
+            if match:
+                selected_episode_numbers.append(int(match.group(1)))
+                break
+
+    selected_episode_numbers = sorted(set(selected_episode_numbers))
+    if selected_episode_numbers:
+        contiguous = all(
+            right == left + 1
+            for left, right in zip(selected_episode_numbers, selected_episode_numbers[1:])
+        )
+        if len(selected_episode_numbers) == 1:
+            episode_label = f"{selected_episode_numbers[0]:02d}"
+        elif contiguous:
+            episode_label = f"{selected_episode_numbers[0]:02d}-{selected_episode_numbers[-1]:02d}"
+        else:
+            episode_label = ", ".join(f"{number:02d}" for number in selected_episode_numbers)
+    else:
+        episode_label = f"01-{len(queue):02d}" if len(queue) > 1 else "01"
+
+    announcement_caption = await build_main_channel_announcement_caption(
+        episode_info, anime_name, episode_label, {}
+    )
+    watch_markup = await build_anime_watch_markup(destination)
+
+    import tempfile
+    poster_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="anime_soul_batch_", suffix=".jpg", delete=False
+        ) as poster_file:
+            poster_path = poster_file.name
+        generated_poster = await build_anime_soul_poster(
+            episode_info, anime_name, poster_path, episode_label=episode_label
+        )
+        if not generated_poster or not os.path.exists(generated_poster):
+            raise RuntimeError("ANIME SOUL batch poster could not be generated.")
+        with open(generated_poster, "rb") as poster_file:
+            main_post = await bot.send_photo(
+                int(Var.MAIN_CHANNEL), photo=poster_file,
+                caption=announcement_caption, reply_markup=watch_markup
+            )
+    finally:
+        if poster_path and os.path.exists(poster_path):
+            try:
+                os.remove(poster_path)
+            except OSError:
+                pass
+
+    if not main_post or not getattr(main_post, "id", None):
+        raise RuntimeError("Telegram did not confirm the combined Main Channel announcement.")
+
+    # Sticker is sent only after the combined Main Channel post is confirmed.
+    sticker_sent = await send_sticker_to_channel(
+        int(Var.MAIN_CHANNEL), getattr(Var, "STICKER_ID", None)
+    )
+    if not sticker_sent:
+        await rep.report(
+            f"Combined Main Channel post sent for {anime_name}, but its completion sticker failed.",
+            "warning"
+        )
+    return True
+
 
 async def build_episode_announcement_thumbnail(
     poster_url, title, season, episodes, quality, audio, genres, status, year, studio
