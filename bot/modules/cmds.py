@@ -4410,14 +4410,12 @@ async def anime_search_destination_callback(client, callback_query):
                                 )
                                 break
                         if result == "already_published":
-                            await db.markManualSearchTaskComplete(task_id)
                             skipped += 1
                             await rep.report(
                                 f"/search skipped: already posted in selected channel {destination}: {title}",
                                 "warning"
                             )
                         elif result == "uploaded":
-                            await db.markManualSearchTaskComplete(task_id)
                             completed += 1
                             last_uploaded_title = title
                             await rep.report(
@@ -4447,6 +4445,10 @@ async def anime_search_destination_callback(client, callback_query):
                     anime_name, queue, destination
                 )
                 main_announcement_sent = True
+                # Keep the selected batch resumable until its single Main post
+                # has been sent; only then mark every episode task complete.
+                for position in range(len(queue)):
+                    await db.markManualSearchTaskComplete(f"{batch_id}:{position}")
             except Exception as announcement_error:
                 failed += 1
                 await rep.report(
