@@ -4307,40 +4307,96 @@ async def anime_search_clear_callback(client, callback_query):
 
 @bot.on_callback_query(filters.regex(r"^aupload:(\d+)$"))
 async def anime_search_upload_callback(client, callback_query):
+    # Telegram callback queries expire quickly. Acknowledge immediately,
+    # before MongoDB reads or per-channel permission checks.
+    try:
+        await callback_query.answer()
+    except Exception:
+        pass
+
     if callback_query.from_user.id not in Var.ADMINS:
-        return await callback_query.answer("Not authorized.", show_alert=True)
+        return
     message_id = int(callback_query.data.split(":")[1])
     state = ANIME_SEARCH_RESULTS.get(message_id)
     if not state or state["user_id"] != callback_query.from_user.id:
-        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+        return await callback_query.message.edit_text(
+            "<b>Search results expired. Run /search again.</b>"
+        )
     chosen = sorted(state["selected"])
     if not chosen:
-        return await callback_query.answer("Select at least one episode first.", show_alert=True)
+        return await callback_query.message.edit_text(
+            "<b>Select at least one episode first, then tap Upload Selected.</b>",
+            reply_markup=build_anime_search_keyboard(message_id, state)
+        )
+
+    # Channels are stored in two collections:
+    # legacy /addanime mappings (anime_channels) and the newer /channeladd
+    # dedicated-channel registry (selected_anime_channels). Include BOTH.
+    channel_candidates = []
+    try:
+        known = await db.get_all_anime_channels()
+        channel_candidates.extend(
+            (anime_name, raw_id) for anime_name, raw_id in (known or {}).items()
+        )
+    except Exception as channel_error:
+        print(f"Could not read legacy anime channel mappings: {channel_error}")
+
+    try:
+        selected_channels = await db.list_selected_anime_channels()
+        channel_candidates.extend(
+            (item.get("anime_name", "Anime Channel"), item.get("channel_id"))
+            for item in (selected_channels or [])
+            if isinstance(item, dict)
+        )
+    except Exception as channel_error:
+        print(f"Could not read selected anime channel registry: {channel_error}")
 
     channels = [{"id": int(Var.MAIN_CHANNEL), "name": "Main Channel"}]
-    known = await db.get_all_anime_channels()
     me = await client.get_me()
     seen = {int(Var.MAIN_CHANNEL)}
-    for anime_name, raw_id in known.items():
+    for anime_name, raw_id in channel_candidates:
         try:
+            if raw_id is None:
+                continue
             channel_id = int(raw_id)
             if channel_id in seen:
                 continue
             chat = await client.get_chat(channel_id)
             member = await client.get_chat_member(channel_id, me.id)
             status = str(getattr(member, "status", "")).lower()
-            if (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")) and getattr(member, "can_post_messages", True) is not False:
-                channels.append({"id": channel_id, "name": (chat.title or anime_name)[:45]})
-                seen.add(channel_id)
-        except Exception:
+            is_admin = (
+                "administrator" in status
+                or "creator" in status
+                or "owner" in status
+            )
+            if not is_admin or getattr(member, "can_post_messages", True) is False:
+                continue
+            channels.append({
+                "id": channel_id,
+                "name": str(chat.title or anime_name or f"Channel {channel_id}")[:45]
+            })
+            seen.add(channel_id)
+        except Exception as channel_error:
+            print(f"Skipping inaccessible upload channel {anime_name} ({raw_id}): {channel_error}")
             continue
 
-    rows = [[InlineKeyboardButton(ch["name"], callback_data=f"searchdest:{message_id}:{ch['id']}")] for ch in channels]
-    await callback_query.answer()
+    rows = [
+        [InlineKeyboardButton(ch["name"], callback_data=f"searchdest:{message_id}:{ch['id']}")]
+        for ch in channels
+    ]
+    if len(channels) == 1:
+        notice = (
+            "<b>No connected dedicated anime channels were found.</b>\n"
+            "Only Main Channel is currently available. Add channels with /channeladd "
+            "or /addanime, and make sure the bot is an administrator with posting permission."
+        )
+    else:
+        notice = "<b>Choose the channel where these episodes should be posted:</b>"
+
     await callback_query.message.edit_text(
         f"<b>Selected episodes:</b> {len(chosen)}\n"
         f"<b>Anime:</b> <code>{state['anime']}</code>\n"
-        "<b>Choose the channel where these episodes should be posted:</b>",
+        f"{notice}",
         reply_markup=InlineKeyboardMarkup(rows)
     )
 
