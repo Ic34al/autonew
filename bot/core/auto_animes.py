@@ -7643,12 +7643,14 @@ async def fetch_animes():
                 continue
             last_schedule_status.pop("no_match", None)
 
-            await rep.report(
-                f"Matched {len(eligible)} selected scheduled release(s): "
-                + "; ".join(
-                    f"{row[3]} episode {row[6]:02d} -> {row[0]} ({'Main Channel' if row[4] else 'dedicated channel ' + str(row[5])})"
-                    for row in eligible
-                ),
+            # Announce only when the set of matched release links changes.
+            # The scanner runs repeatedly; reporting the full list every pass
+            # floods Anime Logs and obscures real failures.
+            matched_signature = tuple(sorted(row[1] for row in eligible))
+            await report_schedule_status_once(
+                ("matched", matched_signature),
+                f"Schedule scan matched {len(eligible)} eligible release(s) for today. "
+                "Uploads are handled by the manual-only gate.",
                 "success"
             )
 
@@ -7666,7 +7668,11 @@ async def fetch_animes():
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
                         retry_after.pop(link, None)
-                        await rep.report(f"Scheduled anime processed: {scheduled_title} | {title}", "success")
+                        await rep.report(
+                            f"Scheduled anime processed: {scheduled_title} | {title}",
+                            "success",
+                            log=False
+                        )
                     elif result == "in_progress":
                         retry_after[link] = asyncio.get_running_loop().time() + 90
                     else:
