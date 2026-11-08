@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_anime_watch_markup, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_main_channel_announcement_caption, build_anime_watch_markup, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -4320,29 +4320,65 @@ async def anime_search_destination_callback(client, callback_query):
         main_announcement_sent = False
         if failed == 0 and completed > 0 and last_uploaded_title:
             try:
-                # Resolve the exact final uploaded episode message from the
-                # selected anime channel, then copy its original media/caption
-                # once to Main with the unchanged gold watch button.
+                # Build ONE combined ANIME SOUL announcement for the whole
+                # selected range (e.g. EPISODE 01-05), not a copy of the last
+                # individual episode post. Preserve the established caption and
+                # the exact gold • CLICK HERE TO WATCH • join-request button.
                 episode_info = TextEditor(last_uploaded_title)
                 await episode_info.load_info()
-                ani_id = episode_info.adata.get("id")
-                ep_no = episode_info.pdata.get("episode_number")
-                if isinstance(ep_no, list):
-                    ep_no = ep_no[0] if ep_no else None
-                source_post_id = await db.getAnimeDestinationPost(
-                    ani_id, str(ep_no) if ep_no is not None else None, destination
+                first_episode_info = TextEditor(queue[0][0])
+                await first_episode_info.load_info()
+
+                def _episode_number(info):
+                    value = (getattr(info, "pdata", {}) or {}).get("episode_number")
+                    if isinstance(value, list):
+                        value = value[0] if value else None
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
+
+                first_ep = _episode_number(first_episode_info)
+                last_ep = _episode_number(episode_info)
+                if first_ep is not None and last_ep is not None:
+                    episode_label = (
+                        f"{min(first_ep, last_ep):02d}-{max(first_ep, last_ep):02d}"
+                        if first_ep != last_ep else f"{last_ep:02d}"
+                    )
+                else:
+                    episode_label = f"01-{len(queue):02d}" if len(queue) > 1 else "01"
+
+                announcement_caption = await build_main_channel_announcement_caption(
+                    episode_info, anime_name, episode_label, {}
                 )
-                if not source_post_id:
-                    raise RuntimeError("Could not find the final selected-channel episode post.")
                 watch_markup = await build_anime_watch_markup(destination)
-                main_post = await client.copy_message(
-                    chat_id=int(Var.MAIN_CHANNEL),
-                    from_chat_id=destination,
-                    message_id=int(source_post_id),
-                    reply_markup=watch_markup
-                )
+                import tempfile
+                poster_path = None
+                try:
+                    with tempfile.NamedTemporaryFile(
+                        prefix="anime_soul_batch_", suffix=".jpg", delete=False
+                    ) as poster_file:
+                        poster_path = poster_file.name
+                    generated_poster = await build_anime_soul_poster(
+                        episode_info, anime_name, poster_path,
+                        episode_label=episode_label
+                    )
+                    if generated_poster and os.path.exists(generated_poster):
+                        with open(generated_poster, "rb") as poster_file:
+                            main_post = await bot.send_photo(
+                                int(Var.MAIN_CHANNEL), photo=poster_file,
+                                caption=announcement_caption, reply_markup=watch_markup
+                            )
+                    else:
+                        raise RuntimeError("ANIME SOUL batch poster could not be generated.")
+                finally:
+                    if poster_path and os.path.exists(poster_path):
+                        try:
+                            os.remove(poster_path)
+                        except OSError:
+                            pass
                 if not main_post or not getattr(main_post, "id", None):
-                    raise RuntimeError("Telegram did not confirm the Main Channel announcement.")
+                    raise RuntimeError("Telegram did not confirm the combined Main Channel announcement.")
                 main_announcement_sent = True
             except Exception as announcement_error:
                 failed += 1
