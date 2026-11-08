@@ -8403,11 +8403,32 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 for publish_attempt in range(5):
                     try:
                         if destination_channel is not None:
-                            if photo_path and ospath.exists(photo_path):
-                                with open(photo_path, 'rb') as photo_file:
-                                    post_msg = await bot.send_photo(destination_channel, photo=photo_file, caption=caption, reply_markup=markup)
+                            # Manual /search and /addtask must publish to the
+                            # selected anime channel AND announce it in Main.
+                            if int(destination_channel) == int(Var.MAIN_CHANNEL):
+                                if photo_path and ospath.exists(photo_path):
+                                    with open(photo_path, 'rb') as photo_file:
+                                        post_msg = await bot.send_photo(destination_channel, photo=photo_file, caption=caption, reply_markup=markup)
+                                else:
+                                    post_msg = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
                             else:
-                                post_msg = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
+                                if photo_path and ospath.exists(photo_path):
+                                    with open(photo_path, 'rb') as photo_file:
+                                        episode_post = await bot.send_photo(destination_channel, photo=photo_file, caption=caption, reply_markup=markup)
+                                else:
+                                    episode_post = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
+                                if not episode_post or not getattr(episode_post, "id", None):
+                                    raise RuntimeError(f"Selected anime channel did not confirm post for {name}.")
+                                announcement_markup = await build_anime_watch_markup(destination_channel)
+                                if photo_path and ospath.exists(photo_path):
+                                    with open(photo_path, 'rb') as photo_file:
+                                        post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
+                                else:
+                                    post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
+                                if not post_msg or not getattr(post_msg, "id", None):
+                                    raise RuntimeError(f"Main Channel join-request announcement failed for {name}.")
+                                await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
+                                await db.saveAnimeDestinationPost(ani_id, ep_no, destination_channel, episode_post.id)
                         elif channel_to_use != Var.MAIN_CHANNEL:
                             if photo_path and ospath.exists(photo_path):
                                 with open(photo_path, 'rb') as photo_file:
@@ -8457,9 +8478,13 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 # Send stickers only after the episode post is confirmed.
                 sticker_targets = []
                 if destination_channel is not None:
-                    # Send exactly one sticker after each uploaded episode
-                    # to its selected destination, including the final episode.
-                    sticker_targets = [int(destination_channel)]
+                    # Both the selected anime channel and its Main Channel
+                    # join-request announcement receive one completion sticker.
+                    sticker_targets = (
+                        [int(destination_channel), int(Var.MAIN_CHANNEL)]
+                        if int(destination_channel) != int(Var.MAIN_CHANNEL)
+                        else [int(Var.MAIN_CHANNEL)]
+                    )
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
