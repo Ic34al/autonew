@@ -4399,105 +4399,11 @@ async def anime_search_destination_callback(client, callback_query):
                 MANUAL_SEARCH_HOLD.clear()
 
         main_announcement_sent = False
-        if failed == 0 and completed > 0 and last_uploaded_title:
+        if failed == 0 and completed + skipped > 0:
             try:
-                # Build ONE combined ANIME SOUL announcement for the whole
-                # selected range (e.g. EPISODE 01-05), not a copy of the last
-                # individual episode post. Preserve the established caption and
-                # the exact gold • CLICK HERE TO WATCH • join-request button.
-                episode_info = TextEditor(queue[-1][0])
-                await episode_info.load_info()
-                first_episode_info = TextEditor(queue[0][0])
-                await first_episode_info.load_info()
-
-                # Read episode numbers from the actual selected RSS release
-                # titles. TextEditor may resolve every release to the same anime
-                # metadata episode, which incorrectly produced "Episode: 05".
-                selected_episode_numbers = []
-                episode_patterns = (
-                    r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b",
-                    r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b",
-                    r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b",
-                    r"(?:^|[-._])\s*0*(\d{1,3})(?=\s*(?:\(|\[|$))",
+                await publish_manual_search_batch_announcement(
+                    anime_name, queue, destination
                 )
-                for selected_title, _ in queue:
-                    normalized_title = str(selected_title or "").replace(
-                        "—", "-"
-                    ).replace("–", "-").replace("−", "-")
-                    found_number = None
-                    for pattern in episode_patterns:
-                        match = re.search(pattern, normalized_title, re.IGNORECASE)
-                        if match:
-                            found_number = int(match.group(1))
-                            break
-                    if found_number is not None:
-                        selected_episode_numbers.append(found_number)
-
-                selected_episode_numbers = sorted(set(selected_episode_numbers))
-                if selected_episode_numbers:
-                    is_contiguous = all(
-                        right == left + 1
-                        for left, right in zip(
-                            selected_episode_numbers, selected_episode_numbers[1:]
-                        )
-                    )
-                    if len(selected_episode_numbers) == 1:
-                        episode_label = f"{selected_episode_numbers[0]:02d}"
-                    elif is_contiguous:
-                        episode_label = (
-                            f"{selected_episode_numbers[0]:02d}-"
-                            f"{selected_episode_numbers[-1]:02d}"
-                        )
-                    else:
-                        episode_label = ", ".join(
-                            f"{number:02d}" for number in selected_episode_numbers
-                        )
-                else:
-                    episode_label = f"01-{len(queue):02d}" if len(queue) > 1 else "01"
-
-                announcement_caption = await build_main_channel_announcement_caption(
-                    episode_info, anime_name, episode_label, {}
-                )
-                watch_markup = await build_anime_watch_markup(destination)
-                import tempfile
-                poster_path = None
-                try:
-                    with tempfile.NamedTemporaryFile(
-                        prefix="anime_soul_batch_", suffix=".jpg", delete=False
-                    ) as poster_file:
-                        poster_path = poster_file.name
-                    generated_poster = await build_anime_soul_poster(
-                        episode_info, anime_name, poster_path,
-                        episode_label=episode_label
-                    )
-                    if generated_poster and os.path.exists(generated_poster):
-                        with open(generated_poster, "rb") as poster_file:
-                            main_post = await bot.send_photo(
-                                int(Var.MAIN_CHANNEL), photo=poster_file,
-                                caption=announcement_caption, reply_markup=watch_markup
-                            )
-                    else:
-                        raise RuntimeError("ANIME SOUL batch poster could not be generated.")
-                finally:
-                    if poster_path and os.path.exists(poster_path):
-                        try:
-                            os.remove(poster_path)
-                        except OSError:
-                            pass
-                if not main_post or not getattr(main_post, "id", None):
-                    raise RuntimeError("Telegram did not confirm the combined Main Channel announcement.")
-
-                # The completion sticker belongs after the ONE combined Main
-                # Channel announcement, never after each individual episode.
-                sticker_sent = await send_sticker_to_channel(
-                    int(Var.MAIN_CHANNEL), getattr(Var, "STICKER_ID", None)
-                )
-                if not sticker_sent:
-                    await rep.report(
-                        f"Combined Main Channel post sent for {anime_name}, "
-                        "but its completion sticker could not be delivered.",
-                        "warning"
-                    )
                 main_announcement_sent = True
             except Exception as announcement_error:
                 failed += 1
