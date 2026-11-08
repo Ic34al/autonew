@@ -3373,11 +3373,14 @@ async def addtask_destination_callback(client, callback_query):
         member = await client.get_chat_member(destination, me.id)
         status = str(getattr(member, "status", "")).lower()
         if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
-            return await callback_query.answer("Bot is not an administrator in this channel.", show_alert=True)
+            return await callback_query.message.edit_text(
+                "<b>Bot is not an administrator in this channel.</b>"
+            )
         if getattr(member, "can_post_messages", True) is False:
-            return await callback_query.answer("Bot cannot post in this channel.", show_alert=True)
+            return await callback_query.message.edit_text(
+                "<b>Bot cannot post in this channel.</b>"
+            )
 
-        await callback_query.answer()
         await callback_query.message.edit_text(
             f"<b>Destination:</b> {chat.title or destination}\n"
             "<b>Now send the RSS URL.</b>\n"
