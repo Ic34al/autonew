@@ -4329,22 +4329,48 @@ async def anime_search_destination_callback(client, callback_query):
                 first_episode_info = TextEditor(queue[0][0])
                 await first_episode_info.load_info()
 
-                def _episode_number(info):
-                    value = (getattr(info, "pdata", {}) or {}).get("episode_number")
-                    if isinstance(value, list):
-                        value = value[0] if value else None
-                    try:
-                        return int(value)
-                    except (TypeError, ValueError):
-                        return None
+                # Read episode numbers from the actual selected RSS release
+                # titles. TextEditor may resolve every release to the same anime
+                # metadata episode, which incorrectly produced "Episode: 05".
+                selected_episode_numbers = []
+                episode_patterns = (
+                    r"\bS\s*\d{1,2}\s*[-._ ]+\s*0*(\d{1,3})\b",
+                    r"\bS\s*\d{1,2}\s*E\s*0*(\d{1,3})\b",
+                    r"\b(?:EP|EPISODE)\s*[-._ ]*0*(\d{1,3})\b",
+                    r"(?:^|[-._])\s*0*(\d{1,3})(?=\s*(?:\(|\[|$))",
+                )
+                for selected_title, _ in queue:
+                    normalized_title = str(selected_title or "").replace(
+                        "—", "-"
+                    ).replace("–", "-").replace("−", "-")
+                    found_number = None
+                    for pattern in episode_patterns:
+                        match = re.search(pattern, normalized_title, re.IGNORECASE)
+                        if match:
+                            found_number = int(match.group(1))
+                            break
+                    if found_number is not None:
+                        selected_episode_numbers.append(found_number)
 
-                first_ep = _episode_number(first_episode_info)
-                last_ep = _episode_number(episode_info)
-                if first_ep is not None and last_ep is not None:
-                    episode_label = (
-                        f"{min(first_ep, last_ep):02d}-{max(first_ep, last_ep):02d}"
-                        if first_ep != last_ep else f"{last_ep:02d}"
+                selected_episode_numbers = sorted(set(selected_episode_numbers))
+                if selected_episode_numbers:
+                    is_contiguous = all(
+                        right == left + 1
+                        for left, right in zip(
+                            selected_episode_numbers, selected_episode_numbers[1:]
+                        )
                     )
+                    if len(selected_episode_numbers) == 1:
+                        episode_label = f"{selected_episode_numbers[0]:02d}"
+                    elif is_contiguous:
+                        episode_label = (
+                            f"{selected_episode_numbers[0]:02d}-"
+                            f"{selected_episode_numbers[-1]:02d}"
+                        )
+                    else:
+                        episode_label = ", ".join(
+                            f"{number:02d}" for number in selected_episode_numbers
+                        )
                 else:
                     episode_label = f"01-{len(queue):02d}" if len(queue) > 1 else "01"
 
@@ -4379,6 +4405,18 @@ async def anime_search_destination_callback(client, callback_query):
                             pass
                 if not main_post or not getattr(main_post, "id", None):
                     raise RuntimeError("Telegram did not confirm the combined Main Channel announcement.")
+
+                # The completion sticker belongs after the ONE combined Main
+                # Channel announcement, never after each individual episode.
+                sticker_sent = await send_sticker_to_channel(
+                    int(Var.MAIN_CHANNEL), getattr(Var, "STICKER_ID", None)
+                )
+                if not sticker_sent:
+                    await rep.report(
+                        f"Combined Main Channel post sent for {anime_name}, "
+                        "but its completion sticker could not be delivered.",
+                        "warning"
+                    )
                 main_announcement_sent = True
             except Exception as announcement_error:
                 failed += 1
