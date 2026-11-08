@@ -56,6 +56,35 @@ MANUAL_SEARCH_BATCH_LOCK = asyncio.Lock()
 
 RANDOM_PIC = None
 
+# Cache channel metadata and serialize lookups. Repeated get_chat calls for the
+# same destination otherwise generate unnecessary GetFullChannel RPCs.
+_CHAT_CACHE = {}
+_CHAT_LOOKUP_LOCK = asyncio.Lock()
+
+async def get_chat_cached(client, chat_id, ttl=900):
+    chat_id = int(chat_id)
+    cached = _CHAT_CACHE.get(chat_id)
+    if cached and time.monotonic() - cached[0] < ttl:
+        return cached[1]
+    async with _CHAT_LOOKUP_LOCK:
+        cached = _CHAT_CACHE.get(chat_id)
+        if cached and time.monotonic() - cached[0] < ttl:
+            return cached[1]
+        for attempt in range(5):
+            try:
+                chat = await client.get_chat(chat_id)
+                _CHAT_CACHE[chat_id] = (time.monotonic(), chat)
+                return chat
+            except FloodWait as flood:
+                wait_seconds = max(1, int(flood.value) + 1)
+                await rep.report(
+                    f"Telegram channel lookup rate-limited; retrying in {wait_seconds}s.",
+                    "warning",
+                    log=False,
+                )
+                await asyncio.sleep(wait_seconds)
+        raise RuntimeError(f"Telegram kept rate-limiting channel lookup for {chat_id}.")
+
 async def publish_manual_search_batch_announcement(anime_name, queue, destination):
     """Publish one combined Main Channel card and its completion sticker per batch."""
     if not queue:
@@ -1267,7 +1296,7 @@ async def send_anime_to_main(client, message: Message):
             return
 
         destination = int(Var.MAIN_CHANNEL)
-        await client.get_chat(destination)
+        # copy_message validates the destination itself; avoid an extra GetFullChannel RPC.
         copied = await client.copy_message(
             chat_id=destination,
             from_chat_id=source.id,
@@ -2983,7 +3012,17 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
         from zoneinfo import ZoneInfo
         from datetime import datetime, timezone
         ist = ZoneInfo("Asia/Kolkata")
-        feeds = await gather(*(getfeeds(url) for url in rss_urls))
+        await status.edit_text(
+            f"<b>Scanning {len(rss_urls)} configured RSS feeds...</b>\\n"
+            f"Date: <code>{target_date.isoformat()}</code> (IST)"
+        )
+        async def _safe_feed(url):
+            try:
+                return await asyncio.wait_for(getfeeds(url), timeout=45)
+            except asyncio.TimeoutError:
+                await rep.report(f"/retry RSS feed timed out: {url}", "warning")
+                return []
+        feeds = await gather(*(_safe_feed(url) for url in rss_urls))
         candidates = []
         seen_links = set()
         wanted = (anime_filter or "").casefold().strip()
@@ -3005,10 +3044,21 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
                 candidates.append((title, link))
 
         queue = []
-        for title, link in candidates:
+        total_candidates = len(candidates)
+        for candidate_index, (title, link) in enumerate(candidates, start=1):
+            if candidate_index == 1 or candidate_index % 3 == 0:
+                try:
+                    await status.edit_text(
+                        f"<b>Checking unfinished releases...</b>\\n"
+                        f"Date: <code>{target_date.isoformat()}</code> (IST)\\n"
+                        f"Scanned: <code>{candidate_index - 1}/{total_candidates}</code>\\n"
+                        f"Queued: <code>{len(queue)}</code>"
+                    )
+                except Exception:
+                    pass
             try:
                 info = TextEditor(title)
-                await info.load_info()
+                await asyncio.wait_for(info.load_info(), timeout=35)
                 if wanted:
                     title_data = info.adata.get("title") or {}
                     possible_titles = [str(title)]
@@ -3284,7 +3334,7 @@ async def add_custom_task(client, message: Message):
                 channel_id = int(raw_id)
                 if channel_id in seen:
                     continue
-                chat = await client.get_chat(channel_id)
+                chat = await get_chat_cached(client, channel_id)
                 member = await client.get_chat_member(channel_id, me.id)
                 status = str(getattr(member, "status", "")).lower()
                 if status.endswith("administrator") or status.endswith("owner") or status.endswith("creator"):
@@ -3317,7 +3367,7 @@ async def addtask_destination_callback(client, callback_query):
         return await callback_query.answer("Admin access required.", show_alert=True)
     try:
         destination = int(callback_query.data.split(":", 1)[1])
-        chat = await client.get_chat(destination)
+        chat = await get_chat_cached(client, destination)
         me = await client.get_me()
         member = await client.get_chat_member(destination, me.id)
         status = str(getattr(member, "status", "")).lower()
