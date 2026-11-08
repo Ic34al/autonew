@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_anime_watch_markup, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -4259,6 +4259,7 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Selected:</b> {len(queue)}"
         )
         completed = skipped = failed = 0
+        last_uploaded_title = None
         # Hold the upload pipeline for this entire anime/channel batch.
         # Concurrent /search selections wait until this batch is complete.
         async with MANUAL_SEARCH_BATCH_LOCK:
@@ -4294,6 +4295,7 @@ async def anime_search_destination_callback(client, callback_query):
                         elif result == "uploaded":
                             await db.markManualSearchTaskComplete(task_id)
                             completed += 1
+                            last_uploaded_title = title
                             await rep.report(
                                 f"/search upload completed in {destination}: {title}", "info"
                             )
@@ -4313,12 +4315,47 @@ async def anime_search_destination_callback(client, callback_query):
                         break
             finally:
                 MANUAL_SEARCH_HOLD.clear()
+
+        main_announcement_sent = False
+        if failed == 0 and completed > 0 and last_uploaded_title:
+            try:
+                # Resolve the exact final uploaded episode message from the
+                # selected anime channel, then copy its original media/caption
+                # once to Main with the unchanged gold watch button.
+                episode_info = TextEditor(last_uploaded_title)
+                await episode_info.load_info()
+                ani_id = episode_info.adata.get("id")
+                ep_no = episode_info.pdata.get("episode_number")
+                if isinstance(ep_no, list):
+                    ep_no = ep_no[0] if ep_no else None
+                source_post_id = await db.getAnimeDestinationPost(
+                    ani_id, str(ep_no) if ep_no is not None else None, destination
+                )
+                if not source_post_id:
+                    raise RuntimeError("Could not find the final selected-channel episode post.")
+                watch_markup = await build_anime_watch_markup(destination)
+                main_post = await client.copy_message(
+                    chat_id=int(Var.MAIN_CHANNEL),
+                    from_chat_id=destination,
+                    message_id=int(source_post_id),
+                    reply_markup=watch_markup
+                )
+                if not main_post or not getattr(main_post, "id", None):
+                    raise RuntimeError("Telegram did not confirm the Main Channel announcement.")
+                main_announcement_sent = True
+            except Exception as announcement_error:
+                failed += 1
+                await rep.report(
+                    f"/search batch Main Channel announcement failed for {anime_name}: {announcement_error}",
+                    "error"
+                )
+
         await callback_query.message.edit_text(
             f"<b>Search upload finished:</b> <code>{anime_name}</code>\n"
             f"<b>Selected destination:</b> {chat.title or destination}\n"
             f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
             f"<b>Failed / unconfirmed:</b> {failed}\n"
-            f"<b>Main Channel:</b> {'Join-request announcements sent.' if failed == 0 and completed > 0 else 'Check failed episodes in the bot log.'}"
+            f"<b>Main Channel:</b> {'One join-request announcement sent after the full batch.' if main_announcement_sent else 'No announcement sent; check failed/unconfirmed uploads.'}"
         )
     except Exception as error:
         await callback_query.message.reply(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
