@@ -8141,7 +8141,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False, mapped_channel=None):
+async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
     # Automatic ongoing-anime uploads are temporarily disabled.
     # Only explicitly requested manual jobs (search/resume/addtask/retry) may run.
     if not (manual_search or force):
@@ -8419,10 +8419,21 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                                     episode_post = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
                                 if not episode_post or not getattr(episode_post, "id", None):
                                     raise RuntimeError(f"Selected anime channel did not confirm post for {name}.")
-                                # Keep per-episode uploads inside the selected anime
-                                # channel. The single Main Channel announcement is
-                                # published by the completed /search batch handler.
-                                post_msg = episode_post
+                                if defer_main_announcement:
+                                    # /search batches publish one Main Channel post
+                                    # only after every selected episode is uploaded.
+                                    post_msg = episode_post
+                                else:
+                                    # Single-item manual jobs such as /addtask keep
+                                    # their immediate Main Channel announcement.
+                                    announcement_markup = await build_anime_watch_markup(destination_channel)
+                                    if photo_path and ospath.exists(photo_path):
+                                        with open(photo_path, 'rb') as photo_file:
+                                            post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
+                                    else:
+                                        post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
+                                    if not post_msg or not getattr(post_msg, "id", None):
+                                        raise RuntimeError(f"Main Channel join-request announcement failed for {name}.")
                                 await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
                                 await db.saveAnimeDestinationPost(ani_id, ep_no, destination_channel, episode_post.id)
                         elif channel_to_use != Var.MAIN_CHANNEL:
