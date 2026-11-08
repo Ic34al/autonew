@@ -8419,14 +8419,10 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                                     episode_post = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
                                 if not episode_post or not getattr(episode_post, "id", None):
                                     raise RuntimeError(f"Selected anime channel did not confirm post for {name}.")
-                                announcement_markup = await build_anime_watch_markup(destination_channel)
-                                if photo_path and ospath.exists(photo_path):
-                                    with open(photo_path, 'rb') as photo_file:
-                                        post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
-                                else:
-                                    post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
-                                if not post_msg or not getattr(post_msg, "id", None):
-                                    raise RuntimeError(f"Main Channel join-request announcement failed for {name}.")
+                                # Keep per-episode uploads inside the selected anime
+                                # channel. The single Main Channel announcement is
+                                # published by the completed /search batch handler.
+                                post_msg = episode_post
                                 await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
                                 await db.saveAnimeDestinationPost(ani_id, ep_no, destination_channel, episode_post.id)
                         elif channel_to_use != Var.MAIN_CHANNEL:
@@ -8480,11 +8476,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
                 if destination_channel is not None:
                     # Both the selected anime channel and its Main Channel
                     # join-request announcement receive one completion sticker.
-                    sticker_targets = (
-                        [int(destination_channel), int(Var.MAIN_CHANNEL)]
-                        if int(destination_channel) != int(Var.MAIN_CHANNEL)
-                        else [int(Var.MAIN_CHANNEL)]
-                    )
+                    sticker_targets = [int(destination_channel)]
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
