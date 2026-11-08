@@ -3678,7 +3678,7 @@ ANIME_SEARCH_RESULTS = {}
 @bot.on_message(filters.command("searchresume") & filters.private & filters.user(Var.ADMINS))
 @new_task
 async def resume_manual_search_uploads(client, message: Message):
-    """Resume only episodes explicitly selected through /search."""
+    """Resume selected /search batches sequentially and announce each batch once."""
     tasks = await db.getPendingManualSearchTasks()
     if not tasks:
         return await message.reply(
@@ -3690,55 +3690,97 @@ async def resume_manual_search_uploads(client, message: Message):
         f"Pending episodes: <code>{len(tasks)}</code>"
     )
     completed = skipped = failed = 0
+
+    # Preserve original batch order and never mix destinations between anime.
+    batches = {}
+    for task in tasks:
+        batch_key = str(task.get("batch_id") or task.get("_id"))
+        batches.setdefault(batch_key, []).append(task)
+
     async with MANUAL_SEARCH_BATCH_LOCK:
-        for index, task in enumerate(tasks, start=1):
-            title = task.get("title")
-            torrent = task.get("torrent_url")
-            destination = task.get("destination_channel")
-            task_id = task.get("_id")
-            if not title or not torrent or destination is None:
+        for batch_index, (batch_id, batch_tasks) in enumerate(batches.items(), start=1):
+            anime_name = batch_tasks[0].get("anime_name") or "Selected anime"
+            destination = batch_tasks[0].get("destination_channel")
+            batch_queue = [
+                (task.get("title"), task.get("torrent_url"))
+                for task in sorted(batch_tasks, key=lambda item: item.get("position", 0))
+            ]
+            batch_completed = batch_skipped = 0
+            batch_failed = False
+
+            if destination is None or any(not title or not torrent for title, torrent in batch_queue):
                 failed += 1
                 await rep.report(
-                    f"/searchresume skipped invalid saved task {task_id}",
+                    f"/searchresume skipped invalid saved batch {batch_id}",
                     "warning"
                 )
-                continue
-            try:
-                await status.edit_text(
-                    f"<b>Resuming /search upload {index}/{len(tasks)}</b>\n"
-                    f"<code>{title}</code>\n"
-                    f"Destination: <code>{destination}</code>"
-                )
-                while True:
-                    if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                        await asleep(1)
-                        continue
-                    async with AUTO_UPLOAD_PRIORITY_LOCK:
-                        if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                            continue
-                        result = await get_animes(
-                            title, torrent, force=True, manual_search=True,
-                            destination_channel=int(destination)
-                        )
-                        break
-                if result in ("uploaded", "already_published"):
-                    await db.markManualSearchTaskComplete(task_id)
-                    if result == "uploaded":
-                        completed += 1
-                    else:
-                        skipped += 1
-                else:
-                    failed += 1
-                    await rep.report(
-                        f"/searchresume left task pending: {title} (result={result!r})",
-                        "warning"
-                    )
-                    break
-            except Exception as error:
-                failed += 1
-                await rep.report(f"/searchresume failed for {title}: {error}", "error")
                 break
 
+            for episode_index, task in enumerate(
+                sorted(batch_tasks, key=lambda item: item.get("position", 0)), start=1
+            ):
+                title = task.get("title")
+                torrent = task.get("torrent_url")
+                await status.edit_text(
+                    f"<b>Resuming anime batch {batch_index}/{len(batches)}</b>\n"
+                    f"<b>{anime_name}</b> — episode {episode_index}/{len(batch_tasks)}\n"
+                    f"<code>{title}</code>\nDestination: <code>{destination}</code>"
+                )
+                try:
+                    while True:
+                        if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                            await asleep(1)
+                            continue
+                        async with AUTO_UPLOAD_PRIORITY_LOCK:
+                            if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                                continue
+                            result = await get_animes(
+                                title, torrent, force=True, manual_search=True,
+                                destination_channel=int(destination),
+                                defer_main_announcement=True
+                            )
+                            break
+                    if result == "uploaded":
+                        batch_completed += 1
+                    elif result == "already_published":
+                        batch_skipped += 1
+                    else:
+                        batch_failed = True
+                        await rep.report(
+                            f"/searchresume left batch {batch_id} pending at {title} "
+                            f"(result={result!r})",
+                            "warning"
+                        )
+                        break
+                except Exception as error:
+                    batch_failed = True
+                    await rep.report(
+                        f"/searchresume failed for {title}: {error}", "error"
+                    )
+                    break
+
+            if batch_failed:
+                failed += 1
+                break
+
+            try:
+                await publish_manual_search_batch_announcement(
+                    anime_name, batch_queue, int(destination)
+                )
+                # Mark tasks complete only after the combined Main Channel post
+                # and its following sticker have been attempted successfully.
+                for task in batch_tasks:
+                    await db.markManualSearchTaskComplete(task.get("_id"))
+                completed += batch_completed
+                skipped += batch_skipped
+            except Exception as announcement_error:
+                failed += 1
+                await rep.report(
+                    f"/searchresume Main Channel batch announcement failed for "
+                    f"{anime_name}: {announcement_error}",
+                    "error"
+                )
+                break
 
     remaining = await db.getPendingManualSearchTasks()
     await status.edit_text(
