@@ -552,17 +552,41 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
 async def validate_channel_id(channel_id):
     if not channel_id:
         return None
-        
+
     try:
-        await asleep(1)
-        chat_info = await bot.get_chat(channel_id)
-        return chat_info
-    except (ChannelInvalid, PeerIdInvalid) as e:
-        await rep.report(f"Channel validation failed for {channel_id}: {e}", "error")
-        return None
-    except Exception as e:
-        await rep.report(f"Unexpected error validating channel {channel_id}: {e}", "error")
-        return None
+        normalized_id = int(channel_id) if str(channel_id).lstrip("-").isdigit() else channel_id
+    except (TypeError, ValueError):
+        normalized_id = channel_id
+
+    for attempt in range(3):
+        try:
+            chat_info = await bot.get_chat(normalized_id)
+            return chat_info
+        except FloodWait as flood:
+            wait_seconds = max(1, int(flood.value) + 1)
+            await rep.report(
+                f"Telegram rate-limited channel validation for {normalized_id}; "
+                f"retrying in {wait_seconds}s (attempt {attempt + 1}/3).",
+                "warning",
+                log=False,
+            )
+            await asyncio.sleep(wait_seconds)
+        except (ChannelInvalid, PeerIdInvalid) as e:
+            if attempt < 2:
+                await asleep(2)
+                continue
+            await rep.report(
+                f"Channel validation failed for {normalized_id} after 3 attempts: {e}",
+                "error"
+            )
+            return None
+        except Exception as e:
+            await rep.report(
+                f"Unexpected error validating channel {normalized_id}: {e}",
+                "error"
+            )
+            return None
+    return None
 
 async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
     try:
@@ -1167,15 +1191,22 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
         # Resolve the mapped anime channel for automatic releases too.
         # Previously low-end mode always defaulted to MAIN_CHANNEL and bypassed /addanime.
-        if destination_channel is not None:
-            channel_to_use = destination_channel
+        explicit_destination = destination_channel is not None
+        if explicit_destination:
+            channel_to_use = int(destination_channel)
         else:
             channel_to_use = await get_or_create_anime_channel(name, aniInfo)
 
         channel_info = await validate_channel_id(channel_to_use)
         if not channel_info:
+            if explicit_destination:
+                # A user-selected destination must never silently route to Main.
+                raise RuntimeError(
+                    f"Selected destination channel {channel_to_use} is invalid or inaccessible "
+                    "to the bot. Check that the bot is still an administrator there."
+                )
             await rep.report(
-                f"Anime destination {channel_to_use} is unavailable; falling back to Main Channel.",
+                f"Mapped anime destination {channel_to_use} is unavailable; falling back to Main Channel.",
                 "error"
             )
             channel_to_use = Var.MAIN_CHANNEL
