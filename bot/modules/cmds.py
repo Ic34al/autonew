@@ -3421,6 +3421,8 @@ async def addtask_destination_callback(client, callback_query):
 
         async def run_addtask_batch():
             completed, skipped, failed = 0, 0, []
+            announcement_queue = []
+            main_announcement_sent = False
             for index, rss_url in enumerate(urls, start=1):
                 try:
                     await status_msg.edit_text(
@@ -3444,10 +3446,12 @@ async def addtask_destination_callback(client, callback_query):
                         force=True,
                         manual_search=True,
                         destination_channel=destination,
-                        qualities_override=list(Var.QUALS)
+                        qualities_override=list(Var.QUALS),
+                        defer_main_announcement=(int(destination) != int(Var.MAIN_CHANNEL))
                     )
                     if result in ("uploaded", "already_published"):
                         completed += 1
+                        announcement_queue.append((task_info.title, task_info.link))
                     elif result in (None, "in_progress"):
                         # Some successful legacy paths return None; only count as
                         # completed when the task has not raised an exception.
@@ -3462,6 +3466,23 @@ async def addtask_destination_callback(client, callback_query):
                         f"/addtask batch episode {index}/{len(urls)} failed: {episode_error}",
                         "error"
                     )
+            # For a dedicated destination, publish exactly one Main Channel
+            # announcement after the entire batch succeeds. Never announce
+            # individual episodes while /addtask is processing the batch.
+            if (int(destination) != int(Var.MAIN_CHANNEL)
+                    and not failed and len(announcement_queue) == len(urls)):
+                try:
+                    await publish_manual_search_batch_announcement(
+                        announcement_queue[0][0], announcement_queue, int(destination)
+                    )
+                    main_announcement_sent = True
+                except Exception as announcement_error:
+                    failed.append(f"Main Channel announcement: {str(announcement_error)[:180]}")
+                    await rep.report(
+                        f"/addtask combined Main Channel announcement failed: {announcement_error}",
+                        "error"
+                    )
+
             summary = (
                 f"<b>All-quality batch finished.</b>\n"
                 f"<b>Destination:</b> {chat.title or destination}\n"
@@ -3469,6 +3490,8 @@ async def addtask_destination_callback(client, callback_query):
                 f"<b>Already recorded/skipped:</b> {skipped}\n"
                 f"<b>Failed:</b> {len(failed)}"
             )
+            if int(destination) != int(Var.MAIN_CHANNEL):
+                summary += f"\n<b>Main Channel:</b> {'One combined announcement sent.' if main_announcement_sent else 'No announcement sent (batch incomplete or announcement failed).'}"
             if failed:
                 summary += "\n\n<b>Failed items:</b>\n" + "\n".join(failed[:10])
             await status_msg.edit_text(summary)
