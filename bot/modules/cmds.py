@@ -49,6 +49,8 @@ awaiting_manual_dub: dict[int, dict] = {}
 
 # Manual /addtask jobs, keyed by a short ID shown in /canceltask.
 ADD_TASK_JOBS: dict[str, dict] = {}
+# RSS URLs pasted with /addtask, keyed by the admin who is choosing a destination.
+PENDING_ADDTASK_BATCHES: dict[int, list[str]] = {}
 
 # Serialize complete manual /search batches across selected anime channels.
 MANUAL_SEARCH_BATCH_LOCK = asyncio.Lock()
@@ -3323,8 +3325,14 @@ async def retry_date_callback(client, callback_query):
 @new_task
 @rate_limit(3)
 async def add_custom_task(client, message: Message):
-    """Choose a verified destination channel, then submit an episode RSS URL."""
+    """Accept one or many episode RSS URLs, then choose one destination."""
     try:
+        # Supports both /addtask URL and /addtask followed by multiple URL lines.
+        urls = re.findall(r"https?://[^\\s<>]+", message.text or "")
+        urls = list(dict.fromkeys(url.rstrip(".,") for url in urls))
+        if urls:
+            PENDING_ADDTASK_BATCHES[message.from_user.id] = urls
+
         channels = [{"id": int(Var.MAIN_CHANNEL), "name": "Main Channel"}]
         known = await db.get_all_anime_channels()
         me = await client.get_me()
@@ -3347,21 +3355,25 @@ async def add_custom_task(client, message: Message):
         rows = [[InlineKeyboardButton(ch["name"], callback_data=f"addtask_dest:{ch['id']}")]
                 for ch in channels]
         if len(rows) == 1:
+            PENDING_ADDTASK_BATCHES.pop(message.from_user.id, None)
             await message.reply(
-                "<b>No other verified destination channels were found.</b>\n"
-                "Add the bot as an administrator to a channel and make sure that channel is saved in the bot's channel mappings."
+                "<b>No verified destination channels were found.</b>\\n"
+                "Add the bot as an administrator to a channel and save it in the bot's channel mappings."
             )
             return
-        await message.reply(
-            "<b>Select where this RSS episode should be posted:</b>\n"
-            "<i>Only this manual task uses the selected destination.</i>",
-            reply_markup=InlineKeyboardMarkup(rows)
+        prompt = (
+            f"<b>{len(urls)} episode RSS links received.</b>\\n"
+            "<b>Choose the destination for this 720p-only sequential batch:</b>"
+            if urls else
+            "<b>Select where the RSS episode batch should be posted:</b>\\n"
+            "<i>You can paste one RSS URL per line after selecting the channel.</i>"
         )
+        await message.reply(prompt, reply_markup=InlineKeyboardMarkup(rows))
     except Exception as e:
         await message.reply(f"<b>Could not load destination channels:</b> {e}")
 
 
-@bot.on_callback_query(filters.regex(r"^addtask_dest:(-?\d+)$"))
+@bot.on_callback_query(filters.regex(r"^addtask_dest:(-?\\d+)$"))
 async def addtask_destination_callback(client, callback_query):
     if callback_query.from_user.id not in Var.ADMINS:
         return await callback_query.answer("Admin access required.", show_alert=True)
@@ -3373,64 +3385,114 @@ async def addtask_destination_callback(client, callback_query):
         member = await client.get_chat_member(destination, me.id)
         status = str(getattr(member, "status", "")).lower()
         if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
-            return await callback_query.message.edit_text(
-                "<b>Bot is not an administrator in this channel.</b>"
-            )
+            return await callback_query.message.edit_text("<b>Bot is not an administrator in this channel.</b>")
         if getattr(member, "can_post_messages", True) is False:
-            return await callback_query.message.edit_text(
-                "<b>Bot cannot post in this channel.</b>"
-            )
+            return await callback_query.message.edit_text("<b>Bot cannot post in this channel.</b>")
 
-        await callback_query.message.edit_text(
-            f"<b>Destination:</b> {chat.title or destination}\n"
-            "<b>Now send the RSS URL.</b>\n"
-            "<i>Optional format: RSS_URL POSITION (e.g. 3 selects the third feed item).</i>"
+        urls = PENDING_ADDTASK_BATCHES.pop(callback_query.from_user.id, [])
+        if not urls:
+            await callback_query.message.edit_text(
+                f"<b>Destination:</b> {chat.title or destination}\\n"
+                "<b>Now send one or more RSS URLs, one per line.</b>\\n"
+                "<i>Each RSS link must target the episode you want; this manual batch uploads 720p only.</i>"
+            )
+            try:
+                reply = await client.ask(
+                    chat_id=callback_query.from_user.id,
+                    text="Paste the episode RSS URLs (one per line):",
+                    filters=filters.text,
+                    timeout=300
+                )
+            except asyncio.TimeoutError:
+                return await callback_query.message.reply("RSS input timed out. Run /addtask again.")
+            urls = list(dict.fromkeys(
+                url.rstrip(".,")
+                for url in re.findall(r"https?://[^\\s<>]+", reply.text or "")
+            ))
+
+        if not urls:
+            return await callback_query.message.reply("<b>No valid RSS URLs received.</b>")
+
+        status_msg = await callback_query.message.reply(
+            f"<b>Starting sequential 720p batch...</b>\\n"
+            f"<b>Destination:</b> {chat.title or destination}\\n"
+            f"<b>Episodes queued:</b> {len(urls)}"
         )
-        try:
-            reply = await client.ask(
-                chat_id=callback_query.from_user.id,
-                text="Send the RSS URL and optional feed position:",
-                filters=filters.text,
-                timeout=180
-            )
-        except asyncio.TimeoutError:
-            return await callback_query.message.reply("RSS input timed out. Run /addtask again.")
 
-        parts = (reply.text or "").strip().split()
-        if not parts:
-            return await reply.reply("No RSS URL received. Run /addtask again.")
-        rsslink = parts[0]
-        position = max(0, int(parts[1]) - 1) if len(parts) > 1 and parts[1].isdigit() else 0
-        status_msg = await reply.reply("<blockquote><b>Fetching RSS episode...</b></blockquote>")
-        taskInfo = await getfeed(rsslink, position)
-        if not taskInfo:
-            return await status_msg.edit_text(
-                "<b>Failed to fetch RSS feed. Check the URL and feed position.</b>"
+        async def run_addtask_batch():
+            completed, skipped, failed = 0, 0, []
+            for index, rss_url in enumerate(urls, start=1):
+                try:
+                    await status_msg.edit_text(
+                        f"<b>Processing episode {index}/{len(urls)}</b>\\n"
+                        f"<b>Quality:</b> 720p only\\n"
+                        f"<b>Destination:</b> {chat.title or destination}\\n"
+                        f"<code>{rss_url}</code>"
+                    )
+                    task_info = await getfeed(rss_url, 0)
+                    if not task_info:
+                        failed.append(f"{index}: RSS feed could not be read")
+                        continue
+                    if await db.getAnime(task_info.link):
+                        skipped += 1
+                        continue
+                    # Await each episode completely before starting the next.
+                    # The override is per task and does not alter global settings.
+                    result = await get_animes(
+                        task_info.title,
+                        task_info.link,
+                        force=True,
+                        manual_search=True,
+                        destination_channel=destination,
+                        qualities_override=["720"]
+                    )
+                    if result in ("uploaded", "already_published"):
+                        completed += 1
+                    elif result in (None, "in_progress"):
+                        # Some successful legacy paths return None; only count as
+                        # completed when the task has not raised an exception.
+                        completed += 1
+                    else:
+                        failed.append(f"{index}: {result}")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as episode_error:
+                    failed.append(f"{index}: {str(episode_error)[:180]}")
+                    await rep.report(
+                        f"/addtask batch episode {index}/{len(urls)} failed: {episode_error}",
+                        "error"
+                    )
+            summary = (
+                f"<b>720p batch finished.</b>\\n"
+                f"<b>Destination:</b> {chat.title or destination}\\n"
+                f"<b>Completed:</b> {completed}\\n"
+                f"<b>Already recorded/skipped:</b> {skipped}\\n"
+                f"<b>Failed:</b> {len(failed)}"
             )
-        if await db.getAnime(taskInfo.link):
-            return await status_msg.edit_text(
-                "<b>This episode link is already recorded as uploaded.</b>"
-            )
+            if failed:
+                summary += "\\n\\n<b>Failed items:</b>\\n" + "\\n".join(failed[:10])
+            await status_msg.edit_text(summary)
 
-        task = bot_loop.create_task(
-            get_animes(taskInfo.title, taskInfo.link, force=True, manual_search=True, destination_channel=destination)
-        )
         job_id = secrets.token_hex(3)
+        task = bot_loop.create_task(run_addtask_batch())
         ADD_TASK_JOBS[job_id] = {
-            "task": task, "title": taskInfo.title, "mode": "anime",
-            "user_id": callback_query.from_user.id, "destination": destination
+            "task": task,
+            "title": f"720p batch ({len(urls)} episodes)",
+            "mode": "anime",
+            "user_id": callback_query.from_user.id,
+            "destination": destination
         }
         task.add_done_callback(lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None))
-        await status_msg.edit_text(
-            f"<b>Episode task started.</b>\n"
-            f"<b>Anime:</b> {taskInfo.title}\n"
-            f"<b>Destination:</b> {chat.title or destination}\n"
-            f"<b>Job ID:</b> <code>{job_id}</code>"
+        await callback_query.message.edit_text(
+            f"<b>720p-only batch queued.</b>\\n"
+            f"<b>Destination:</b> {chat.title or destination}\\n"
+            f"<b>Episodes:</b> {len(urls)}\\n"
+            f"<b>Job ID:</b> <code>{job_id}</code>\\n"
+            "<i>Episodes will be processed one by one.</i>"
         )
     except Exception as e:
-        await callback_query.message.reply(f"<b>Error adding episode task:</b> {e}")
+        await callback_query.message.reply(f"<b>Error adding episode batch:</b> {e}")
         await rep.report(f"Task addition error: {e}", "error")
-
 
 
 @bot.on_message(filters.command("canceltask") & filters.private & filters.user(Var.ADMINS))
