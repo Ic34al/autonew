@@ -7,6 +7,7 @@ from aiofiles.os import remove as aioremove, rename as aiorename
 from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
 import asyncio
+import re
 from asyncio.subprocess import PIPE
 import datetime
 from bot import Var, bot_loop, ffpids_cache, LOGS, ani_cache
@@ -349,6 +350,22 @@ class FFEncoder:
         await aiorename(self.dl_path, dl_npath)
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
+
+        # Anime-specific HDRip templates sometimes contain an empty -map
+        # argument or require a subtitle stream that the source does not have.
+        # Drop empty map arguments and make subtitle maps optional so a
+        # subtitle-less episode can still produce its HDRip file.
+        if self.__qual == "HDRi" and ffcode:
+            ffcode = re.sub(
+                r"""(?i)(?:^|\\s)-map\\s+(?:''|""|\\'\\')(?:\\s|$)""",
+                " ",
+                ffcode,
+            )
+            ffcode = re.sub(
+                r"(?i)(-map\\s+)(0:s(?::\\d+)?)(?=\\s|$)",
+                r"\\1\\2?",
+                ffcode,
+            )
 
         # Limit FFmpeg memory usage on small Heroku dynos.
         if ffcode and ffcode.startswith("ffmpeg "):
