@@ -3444,7 +3444,7 @@ async def addtask_destination_callback(client, callback_query):
                         force=True,
                         manual_search=True,
                         destination_channel=destination,
-                        qualities_override=["720"]
+                        qualities_override=list(Var.QUALS)
                     )
                     if result in ("uploaded", "already_published"):
                         completed += 1
