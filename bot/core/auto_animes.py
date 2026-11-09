@@ -8147,7 +8147,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
     # Automatic ongoing-anime uploads are temporarily disabled.
     # Only explicitly requested manual jobs (search/resume/addtask/retry) may run.
     if not (manual_search or force):
@@ -8314,7 +8314,7 @@ async def get_animes(name, torrent, force=False, destination_channel=None, manua
             try:
                 btns = []
                 uploaded_qualities = []
-                required_qualities = list(Var.QUALS) if encoding_enabled else ["HDRi"]
+                required_qualities = list(qualities_override) if qualities_override else (list(Var.QUALS) if encoding_enabled else ["HDRi"])
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
