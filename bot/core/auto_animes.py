@@ -2318,6 +2318,31 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 required_qualities = list(qualities_override) if qualities_override else (list(Var.QUALS) if encoding_enabled else ["HDRi"])
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
+                # Fallback recovery for older uploads whose message IDs were
+                # never checkpointed, or were saved under a different AniList
+                # episode key. Match the exact stored filename/caption.
+                def _storage_name_key(value):
+                    value = ospath.basename(str(value or "")).casefold()
+                    value = re.sub(r"<[^>]+>", "", value)
+                    return re.sub(r"[^a-z0-9]+", "", value)
+
+                storage_name_to_id = {}
+                try:
+                    async for stored in bot.get_chat_history(Var.FILE_STORE, limit=3000):
+                        media = getattr(stored, "video", None) or getattr(stored, "document", None)
+                        media_name = getattr(media, "file_name", None) if media else None
+                        caption_name = getattr(stored, "caption", None)
+                        for candidate_name in (media_name, caption_name):
+                            key = _storage_name_key(candidate_name)
+                            if key:
+                                storage_name_to_id.setdefault(key, int(stored.id))
+                except Exception as scan_error:
+                    await rep.report(
+                        f"Storage history recovery scan unavailable; using database checkpoints only: {scan_error}",
+                        "warning",
+                        log=False,
+                    )
+
                 async def add_quality_button(qual, msg_id):
                     link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
@@ -2332,7 +2357,35 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 for qual in required_qualities:
                     # Reuse a quality that was already uploaded before the last
                     # crash. Verify the message still exists in FILE_STORE.
+                    filename = await aniInfo.get_upname(qual)
                     saved_msg_id = saved_file_ids.get(qual)
+
+                    # Older successful uploads may exist in FILE_STORE without
+                    # a database file_ids entry. Recover them by exact filename.
+                    if not saved_msg_id:
+                        recovered_id = storage_name_to_id.get(_storage_name_key(filename))
+                        if recovered_id:
+                            try:
+                                recovered_msg = await bot.get_messages(
+                                    Var.FILE_STORE, message_ids=int(recovered_id)
+                                )
+                                if recovered_msg and not getattr(recovered_msg, "empty", False):
+                                    saved_msg_id = int(recovered_id)
+                                    saved_file_ids[qual] = saved_msg_id
+                                    await db.saveAnimeFileId(ani_id, ep_no, qual, saved_msg_id)
+                                    await db.saveAnime(ani_id, ep_no, qual, None)
+                                    await rep.report(
+                                        f"Recovered existing {qual} file from storage for {name}; no re-encode needed.",
+                                        "info",
+                                        log=False,
+                                    )
+                            except Exception as recover_error:
+                                await rep.report(
+                                    f"Could not verify recovered {qual} storage message {recovered_id}: {recover_error}",
+                                    "warning",
+                                    log=False,
+                                )
+
                     if saved_msg_id:
                         try:
                             stored_msg = await bot.get_messages(
@@ -2352,7 +2405,6 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                                 "warning"
                             )
 
-                    filename = await aniInfo.get_upname(qual)
                     anime_format = aniInfo.adata.get("format", "").lower()
                     is_movie = anime_format == "movie"
                     await editMessage(
