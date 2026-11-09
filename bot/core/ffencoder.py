@@ -357,13 +357,13 @@ class FFEncoder:
         # subtitle-less episode can still produce its HDRip file.
         if self.__qual == "HDRi" and ffcode:
             ffcode = re.sub(
-                r"""(?i)(?:^|\\s)-map\\s+(?:''|"")(?=\\s|$)""",
+                r"""(?i)(?:^|\s)-map\s+(?:''|"")(?=\s|$)""",
                 " ",
                 ffcode,
             )
             ffcode = re.sub(
-                r"(?i)(-map\\s+)(0:s(?::\\d+)?)(?=\\s|$)",
-                r"\\1\\2?",
+                r"(?i)(-map\s+)(0:s(?::\d+)?)(?=\s|$)",
+                r"\1\2?",
                 ffcode,
             )
 
