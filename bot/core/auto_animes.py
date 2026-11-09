@@ -8375,29 +8375,100 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 required_qualities = list(qualities_override) if qualities_override else (list(Var.QUALS) if encoding_enabled else ["HDRi"])
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
-                # Recovery index: old uploads may predate database checkpoints,
-                # or have been saved under a different AniList episode key.
-                def _storage_name_key(value):
-                    value = ospath.basename(str(value or "")).casefold()
-                    value = re.sub(r"<[^>]+>", "", value)
-                    return re.sub(r"[^a-z0-9]+", "", value)
+                # Build a searchable index of real Telegram storage messages.
+                # Match by season + episode + quality + anime-title aliases, not
+                # by MongoDB/AniList IDs or an exact generated filename alone.
+                import html
+                from difflib import SequenceMatcher
 
-                storage_name_to_id = {}
+                def _plain_storage_name(value):
+                    value = html.unescape(str(value or ""))
+                    value = re.sub(r"<[^>]+>", "", value)
+                    return ospath.basename(value).strip()
+
+                def _normal_title(value):
+                    value = _plain_storage_name(value).casefold()
+                    value = re.sub(r"\[[^\]]*\]", " ", value)
+                    value = re.sub(r"\b(?:480|720|1080|144|240)p\b|\bhdrip\b|\bhdr[iI]\b", " ", value)
+                    value = re.sub(r"\bs\d{1,2}\s*[- ]\s*e?\d{1,3}\b", " ", value)
+                    value = re.sub(r"\bs\d{1,2}[- ]\d{1,3}\b", " ", value)
+                    value = re.sub(r"@[^\s]+", " ", value)
+                    value = re.sub(r"\.(mkv|mp4|avi|webm)$", " ", value)
+                    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+                def _parse_storage_record(value):
+                    raw = _plain_storage_name(value)
+                    ep_match = re.search(r"\[?s(\d{1,2})\s*[- ]\s*e?(\d{1,3})\]?", raw, re.I)
+                    if not ep_match:
+                        return None
+                    season_no, episode_no = int(ep_match.group(1)), int(ep_match.group(2))
+                    if re.search(r"\bhdrip\b|\[hdri\]", raw, re.I):
+                        quality_name = "HDRi"
+                    else:
+                        quality_match = re.search(r"\[(144|240|480|720|1080)p\]", raw, re.I)
+                        if not quality_match:
+                            return None
+                        quality_name = quality_match.group(1)
+                    title = raw[ep_match.end():]
+                    title = re.split(r"\[(?:144|240|480|720|1080)p\]|\[hdrip\]|\[hdri\]", title, flags=re.I)[0]
+                    return season_no, episode_no, quality_name, _normal_title(title)
+
+                season_value = aniInfo.pdata.get("anime_season", "01")
+                if isinstance(season_value, list):
+                    season_value = season_value[-1] if season_value else "01"
+                season_match = re.search(r"\d+", str(season_value or "01"))
+                target_season = int(season_match.group(0)) if season_match else 1
+                target_episode = int(ep_no) if str(ep_no or "").isdigit() else None
+
+                title_aliases = [
+                    name,
+                    cleaned_name,
+                    base_name,
+                    aniInfo.pdata.get("anime_title"),
+                ]
+                metadata_title = aniInfo.adata.get("title", {})
+                if isinstance(metadata_title, dict):
+                    title_aliases.extend(metadata_title.get(key) for key in ("english", "romaji", "native"))
+                target_titles = {_normal_title(value) for value in title_aliases if value}
+                target_titles.discard("")
+
+                storage_records = []
                 try:
-                    async for stored in bot.get_chat_history(Var.FILE_STORE, limit=3000):
+                    async for stored in bot.get_chat_history(Var.FILE_STORE, limit=5000):
                         media = getattr(stored, "video", None) or getattr(stored, "document", None)
                         media_name = getattr(media, "file_name", None) if media else None
                         caption_name = getattr(stored, "caption", None)
-                        for candidate_name in (media_name, caption_name):
-                            key = _storage_name_key(candidate_name)
-                            if key:
-                                storage_name_to_id.setdefault(key, int(stored.id))
+                        parsed = _parse_storage_record(media_name) or _parse_storage_record(caption_name)
+                        if parsed:
+                            storage_records.append((parsed, int(stored.id)))
                 except Exception as scan_error:
                     await rep.report(
-                        f"Storage recovery scan unavailable; checking saved IDs only: {scan_error}",
+                        f"Storage recovery scan failed; only database checkpoints can be reused: {scan_error}",
                         "warning",
                         log=False,
                     )
+
+                def _find_stored_quality(quality):
+                    if target_episode is None or not target_titles:
+                        return None
+                    wanted_quality = "HDRi" if quality.casefold() in ("hdri", "hdrip") else re.sub(r"p$", "", quality.casefold())
+                    for (stored_season, stored_episode, stored_quality, stored_title), stored_id in storage_records:
+                        if (stored_season, stored_episode) != (target_season, target_episode):
+                            continue
+                        if stored_quality.casefold() != wanted_quality:
+                            continue
+                        if not stored_title:
+                            continue
+                        for wanted_title in target_titles:
+                            if stored_title == wanted_title:
+                                return stored_id
+                            wanted_tokens = set(wanted_title.split())
+                            stored_tokens = set(stored_title.split())
+                            overlap = len(wanted_tokens & stored_tokens) / max(1, min(len(wanted_tokens), len(stored_tokens)))
+                            similarity = SequenceMatcher(None, wanted_title, stored_title).ratio()
+                            if overlap >= 0.75 or similarity >= 0.82:
+                                return stored_id
+                    return None
 
                 async def add_quality_button(qual, msg_id):
                     link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
@@ -8431,9 +8502,10 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             )
                             saved_msg_id = None
 
-                    # Recover the already-uploaded quality by exact filename.
+                    # Recover by season/episode/quality/title from storage.
+                    # This also handles changed AniList IDs and filename aliases.
                     if not saved_msg_id:
-                        recovered_id = storage_name_to_id.get(_storage_name_key(filename))
+                        recovered_id = _find_stored_quality(qual)
                         if recovered_id:
                             try:
                                 recovered_msg = await bot.get_messages(
@@ -8445,7 +8517,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                                     await db.saveAnimeFileId(ani_id, ep_no, qual, saved_msg_id)
                                     await db.saveAnime(ani_id, ep_no, qual, None)
                                     await rep.report(
-                                        f"Recovered existing {qual} file from Telegram storage for {name}; skipping re-encode.",
+                                        f"Recovered existing {qual} for S{target_season:02d}E{target_episode:02d} from storage; skipping re-encode.",
                                         "info",
                                         log=False,
                                     )
