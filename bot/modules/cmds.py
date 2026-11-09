@@ -3328,7 +3328,7 @@ async def add_custom_task(client, message: Message):
     """Accept one or many episode RSS URLs, then choose one destination."""
     try:
         # Supports both /addtask URL and /addtask followed by multiple URL lines.
-        urls = re.findall(r"https?://[^\\s<>]+", message.text or "")
+        urls = re.findall(r"https?://[^\s<>]+", message.text or "")
         urls = list(dict.fromkeys(url.rstrip(".,") for url in urls))
         if urls:
             PENDING_ADDTASK_BATCHES[message.from_user.id] = urls
@@ -3357,15 +3357,15 @@ async def add_custom_task(client, message: Message):
         if len(rows) == 1:
             PENDING_ADDTASK_BATCHES.pop(message.from_user.id, None)
             await message.reply(
-                "<b>No verified destination channels were found.</b>\\n"
+                "<b>No verified destination channels were found.</b>\n"
                 "Add the bot as an administrator to a channel and save it in the bot's channel mappings."
             )
             return
         prompt = (
-            f"<b>{len(urls)} episode RSS links received.</b>\\n"
+            f"<b>{len(urls)} episode RSS links received.</b>\n"
             "<b>Choose the destination for this 720p-only sequential batch:</b>"
             if urls else
-            "<b>Select where the RSS episode batch should be posted:</b>\\n"
+            "<b>Select where the RSS episode batch should be posted:</b>\n"
             "<i>You can paste one RSS URL per line after selecting the channel.</i>"
         )
         await message.reply(prompt, reply_markup=InlineKeyboardMarkup(rows))
@@ -3373,7 +3373,7 @@ async def add_custom_task(client, message: Message):
         await message.reply(f"<b>Could not load destination channels:</b> {e}")
 
 
-@bot.on_callback_query(filters.regex(r"^addtask_dest:(-?\\d+)$"))
+@bot.on_callback_query(filters.regex(r"^addtask_dest:(-?\d+)$"))
 async def addtask_destination_callback(client, callback_query):
     if callback_query.from_user.id not in Var.ADMINS:
         return await callback_query.answer("Admin access required.", show_alert=True)
@@ -3392,8 +3392,8 @@ async def addtask_destination_callback(client, callback_query):
         urls = PENDING_ADDTASK_BATCHES.pop(callback_query.from_user.id, [])
         if not urls:
             await callback_query.message.edit_text(
-                f"<b>Destination:</b> {chat.title or destination}\\n"
-                "<b>Now send one or more RSS URLs, one per line.</b>\\n"
+                f"<b>Destination:</b> {chat.title or destination}\n"
+                "<b>Now send one or more RSS URLs, one per line.</b>\n"
                 "<i>Each RSS link must target the episode you want; this manual batch uploads 720p only.</i>"
             )
             try:
@@ -3407,15 +3407,15 @@ async def addtask_destination_callback(client, callback_query):
                 return await callback_query.message.reply("RSS input timed out. Run /addtask again.")
             urls = list(dict.fromkeys(
                 url.rstrip(".,")
-                for url in re.findall(r"https?://[^\\s<>]+", reply.text or "")
+                for url in re.findall(r"https?://[^\s<>]+", reply.text or "")
             ))
 
         if not urls:
             return await callback_query.message.reply("<b>No valid RSS URLs received.</b>")
 
         status_msg = await callback_query.message.reply(
-            f"<b>Starting sequential 720p batch...</b>\\n"
-            f"<b>Destination:</b> {chat.title or destination}\\n"
+            f"<b>Starting sequential 720p batch...</b>\n"
+            f"<b>Destination:</b> {chat.title or destination}\n"
             f"<b>Episodes queued:</b> {len(urls)}"
         )
 
@@ -3424,9 +3424,9 @@ async def addtask_destination_callback(client, callback_query):
             for index, rss_url in enumerate(urls, start=1):
                 try:
                     await status_msg.edit_text(
-                        f"<b>Processing episode {index}/{len(urls)}</b>\\n"
-                        f"<b>Quality:</b> 720p only\\n"
-                        f"<b>Destination:</b> {chat.title or destination}\\n"
+                        f"<b>Processing episode {index}/{len(urls)}</b>\n"
+                        f"<b>Quality:</b> 720p only\n"
+                        f"<b>Destination:</b> {chat.title or destination}\n"
                         f"<code>{rss_url}</code>"
                     )
                     task_info = await getfeed(rss_url, 0)
@@ -3463,14 +3463,14 @@ async def addtask_destination_callback(client, callback_query):
                         "error"
                     )
             summary = (
-                f"<b>720p batch finished.</b>\\n"
-                f"<b>Destination:</b> {chat.title or destination}\\n"
-                f"<b>Completed:</b> {completed}\\n"
-                f"<b>Already recorded/skipped:</b> {skipped}\\n"
+                f"<b>720p batch finished.</b>\n"
+                f"<b>Destination:</b> {chat.title or destination}\n"
+                f"<b>Completed:</b> {completed}\n"
+                f"<b>Already recorded/skipped:</b> {skipped}\n"
                 f"<b>Failed:</b> {len(failed)}"
             )
             if failed:
-                summary += "\\n\\n<b>Failed items:</b>\\n" + "\\n".join(failed[:10])
+                summary += "\n\n<b>Failed items:</b>\n" + "\n".join(failed[:10])
             await status_msg.edit_text(summary)
 
         job_id = secrets.token_hex(3)
@@ -3484,10 +3484,10 @@ async def addtask_destination_callback(client, callback_query):
         }
         task.add_done_callback(lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None))
         await callback_query.message.edit_text(
-            f"<b>720p-only batch queued.</b>\\n"
-            f"<b>Destination:</b> {chat.title or destination}\\n"
-            f"<b>Episodes:</b> {len(urls)}\\n"
-            f"<b>Job ID:</b> <code>{job_id}</code>\\n"
+            f"<b>720p-only batch queued.</b>\n"
+            f"<b>Destination:</b> {chat.title or destination}\n"
+            f"<b>Episodes:</b> {len(urls)}\n"
+            f"<b>Job ID:</b> <code>{job_id}</code>\n"
             "<i>Episodes will be processed one by one.</i>"
         )
     except Exception as e:
