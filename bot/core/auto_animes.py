@@ -2284,7 +2284,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             try:
                 btns = []
                 uploaded_qualities = []
-                required_qualities = (list(qualities_override) if qualities_override else list(Var.QUALS)) if encoding_enabled else ["HDRi"]
+                required_qualities = list(qualities_override) if qualities_override else (list(Var.QUALS) if encoding_enabled else ["HDRi"])
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
