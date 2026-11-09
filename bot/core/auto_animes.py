@@ -8390,7 +8390,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     value = _plain_storage_name(value).casefold()
                     value = re.sub(r"\[[^\]]*\]", " ", value)
                     value = re.sub(r"\b(?:480|720|1080|144|240)p\b|\bhdrip\b|\bhdr[iI]\b", " ", value)
-                    value = re.sub(r"\bs\d{1,2}\s*[- ]\s*e?\d{1,3}\b", " ", value)
+                    value = re.sub(r"\bs\d{1,2}e\d{1,3}\b|\bs\d{1,2}\s*[- ]\s*e?\d{1,3}\b", " ", value)
                     value = re.sub(r"\bs\d{1,2}[- ]\d{1,3}\b", " ", value)
                     value = re.sub(r"@[^\s]+", " ", value)
                     value = re.sub(r"\.(mkv|mp4|avi|webm)$", " ", value)
