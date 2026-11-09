@@ -3500,7 +3500,7 @@ async def addtask_destination_callback(client, callback_query):
         task = bot_loop.create_task(run_addtask_batch())
         ADD_TASK_JOBS[job_id] = {
             "task": task,
-            "title": f"720p batch ({len(urls)} episodes)",
+            "title": f"All-quality batch ({len(urls)} episodes)",
             "mode": "anime",
             "user_id": callback_query.from_user.id,
             "destination": destination
