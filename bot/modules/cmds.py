@@ -3363,7 +3363,7 @@ async def add_custom_task(client, message: Message):
             return
         prompt = (
             f"<b>{len(urls)} episode RSS links received.</b>\n"
-            "<b>Choose the destination for this 720p-only sequential batch:</b>"
+            "<b>Choose the destination for this sequential all-quality batch:</b>"
             if urls else
             "<b>Select where the RSS episode batch should be posted:</b>\n"
             "<i>You can paste one RSS URL per line after selecting the channel.</i>"
@@ -3414,7 +3414,7 @@ async def addtask_destination_callback(client, callback_query):
             return await callback_query.message.reply("<b>No valid RSS URLs received.</b>")
 
         status_msg = await callback_query.message.reply(
-            f"<b>Starting sequential 720p batch...</b>\n"
+            f"<b>Starting sequential all-quality batch...</b>\n"
             f"<b>Destination:</b> {chat.title or destination}\n"
             f"<b>Episodes queued:</b> {len(urls)}"
         )
@@ -3425,7 +3425,7 @@ async def addtask_destination_callback(client, callback_query):
                 try:
                     await status_msg.edit_text(
                         f"<b>Processing episode {index}/{len(urls)}</b>\n"
-                        f"<b>Quality:</b> 720p only\n"
+                        f"<b>Qualities:</b> 480p + 720p + 1080p + HDRip\n"
                         f"<b>Destination:</b> {chat.title or destination}\n"
                         f"<code>{rss_url}</code>"
                     )
@@ -3433,9 +3433,9 @@ async def addtask_destination_callback(client, callback_query):
                     if not task_info:
                         failed.append(f"{index}: RSS feed could not be read")
                         continue
-                    if await db.getAnime(task_info.link):
-                        skipped += 1
-                        continue
+                    # Do not skip an existing database record: it may contain
+                    # only 3/4 qualities. get_animes reuses verified stored files
+                    # and encodes only the missing quality before publishing.
                     # Await each episode completely before starting the next.
                     # The override is per task and does not alter global settings.
                     result = await get_animes(
@@ -3463,7 +3463,7 @@ async def addtask_destination_callback(client, callback_query):
                         "error"
                     )
             summary = (
-                f"<b>720p batch finished.</b>\n"
+                f"<b>All-quality batch finished.</b>\n"
                 f"<b>Destination:</b> {chat.title or destination}\n"
                 f"<b>Completed:</b> {completed}\n"
                 f"<b>Already recorded/skipped:</b> {skipped}\n"
@@ -3484,11 +3484,11 @@ async def addtask_destination_callback(client, callback_query):
         }
         task.add_done_callback(lambda _task, jid=job_id: ADD_TASK_JOBS.pop(jid, None))
         await callback_query.message.edit_text(
-            f"<b>720p-only batch queued.</b>\n"
+            f"<b>All-quality batch queued.</b>\n"
             f"<b>Destination:</b> {chat.title or destination}\n"
             f"<b>Episodes:</b> {len(urls)}\n"
             f"<b>Job ID:</b> <code>{job_id}</code>\n"
-            "<i>Episodes will be processed one by one.</i>"
+            "<i>Each episode will receive all four configured qualities before the next episode starts.</i>"
         )
     except Exception as e:
         await callback_query.message.reply(f"<b>Error adding episode batch:</b> {e}")
