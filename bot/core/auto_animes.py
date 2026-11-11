@@ -136,7 +136,7 @@ async def detect_audio_type(video_path):
             return "Japanese"
         return "Unknown"
     except Exception as e:
-        LOGGER.warning("Audio/subtitle detection failed for %s: %s", video_path, e)
+        LOGS.warning("Audio/subtitle detection failed for %s: %s", video_path, e)
         return "Unknown"
 
 
