@@ -102,25 +102,100 @@ def patch_caption_episode(caption, episode_count):
     )
 
 async def detect_audio_type(video_path):
+    """Detect audio and subtitle languages from actual media streams."""
     try:
-        cmd = [
-            "ffprobe", "-v", "error", "-select_streams", "a",
-            "-show_entries", "stream=language", "-of", "csv=p=0", video_path
-        ]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        audio_langs = [line.strip() for line in result.stdout.splitlines() if line.strip()]
-        unique_langs = set(audio_langs)
-        if len(unique_langs) > 2:
-            return "Multi"
-        elif len(unique_langs) == 2:
-            return "Dual"
-        elif len(unique_langs) == 1:
-            return "Dub" if "eng" in unique_langs else "Sub"
-        else:
-            return "Sub"
+        cmd = ["ffprobe", "-v", "error", "-show_streams", "-of", "json", video_path]
+        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
+        if result.returncode != 0:
+            return "Unknown"
+        payload = jloads(result.stdout or "{}")
+        audio_languages, subtitle_languages = set(), set()
+        for stream in payload.get("streams", []):
+            language = str((stream.get("tags") or {}).get("language") or "").casefold().strip()
+            if not language:
+                continue
+            if stream.get("codec_type") == "audio":
+                audio_languages.add(language)
+            elif stream.get("codec_type") == "subtitle":
+                subtitle_languages.add(language)
+        english_audio = bool(audio_languages & {"eng", "en", "english"})
+        japanese_audio = bool(audio_languages & {"jpn", "ja", "japanese"})
+        english_subtitles = bool(subtitle_languages & {"eng", "en", "english"})
+        if len(audio_languages) > 2:
+            return "Multi Audio"
+        if english_audio and japanese_audio:
+            return "Dual Audio"
+        if english_audio:
+            return "English Dub"
+        if japanese_audio and english_subtitles:
+            return "Japanese [English Sub]"
+        if japanese_audio:
+            return "Japanese"
+        return "Unknown"
     except Exception as e:
-        print(f"Audio detection failed: {e}")
-        return "Sub"
+        LOGGER.warning("Audio/subtitle detection failed for %s: %s", video_path, e)
+        return "Unknown"
+
+
+async def detect_release_language(video_path, release_title=""):
+    """Prefer stream metadata; fall back to explicit language markers in release title."""
+    detected = await detect_audio_type(video_path)
+    if detected != "Unknown":
+        return detected
+    title = str(release_title or "").casefold()
+    if re.search(r"\bdual[ ._-]?audio\b", title):
+        return "Dual Audio"
+    if re.search(r"\bmulti[ ._-]?audio\b", title):
+        return "Multi Audio"
+    if re.search(r"\b(english[ ._-]?dub|eng[ ._-]?dub|dubbed)\b", title):
+        return "English Dub"
+    if re.search(r"\b(japanese|jpn)\b", title) and re.search(r"\b(eng[ ._-]?sub|english[ ._-]?sub|multi[ ._-]?sub)\b", title):
+        return "Japanese [English Sub]"
+    if re.search(r"\b(eng[ ._-]?sub|english[ ._-]?sub|multi[ ._-]?sub)\b", title):
+        return "Japanese [English Sub]"
+    if re.search(r"\b(japanese|jpn)\b", title):
+        return "Japanese"
+    return "Unknown"
+
+
+async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, qualities):
+    """Main-channel fallback caption matching the second supplied screenshot."""
+    import html
+    data = getattr(aniInfo, "adata", {}) or {}
+    pdata = getattr(aniInfo, "pdata", {}) or {}
+    titles = data.get("title") or {}
+    display_title = titles.get("english") or titles.get("romaji") or anime_name
+    season_value = pdata.get("anime_season") or "1"
+    if isinstance(season_value, list):
+        season_value = season_value[-1] if season_value else "1"
+    try:
+        season_number = str(int(season_value))
+    except (TypeError, ValueError):
+        season_number = str(season_value)
+    try:
+        episode_label = f"{int(episode_number):02d}"
+    except (TypeError, ValueError):
+        episode_label = str(episode_number or "—")
+    quality_names = {"480": "480p", "720": "720p", "1080": "1080p", "HDRi": "HDRip", "HDRip": "HDRip"}
+    quality_labels = [quality_names[q] for q in ("480", "720", "1080", "HDRi") if q in (qualities or {})]
+    quality_text = ", ".join(quality_labels) if quality_labels else "Multi Quality"
+    language = str(pdata.get("audio_type") or "Unknown")
+    status = str(data.get("status") or "RELEASING").replace("_", " ").title()
+    return (
+        f"<b>▣ {html.escape(str(display_title))}</b>\n"
+        f"<b>Season {html.escape(season_number)}</b>\n"
+        "✦━━━━━━━━━━━━━━━━━━━━✦\n"
+        f"<b>≫ SEASON: {html.escape(season_number)}</b>\n"
+        f"<b>≫ EPISODE: {html.escape(episode_label)}</b>\n"
+        f"<b>≫ QUALITY: {html.escape(quality_text)}</b>\n"
+        f"<b>≫ LANGUAGE: {html.escape(language)}</b>\n"
+        "✦━━━━━━━━━━━━━━━━━━━━✦\n"
+        f"<blockquote>≡ STATUS: {html.escape(status)}</blockquote>\n"
+        "<blockquote>≡ POWERED BY: <b>Ongoing Anime Time</b></blockquote>\n"
+        "✦━━━━━━━━━━━━━━━━━━━━✦\n"
+        "<blockquote>≡ HOW TO DOWNLOAD? - <b>WATCH NOW</b></blockquote>\n"
+        "<blockquote>≡ USE VLC PLAYER OR MX PLAYER TO CHANGE AUDIO AND SUBTITLES FOR A BETTER VIEWING EXPERIENCE.</blockquote>"
+    )
 
 async def process_batch_anime(anime_name, torrent_url, audio):
     import re
@@ -7708,7 +7783,7 @@ async def fetch_animes():
             await report_schedule_status_once(
                 ("matched", matched_signature),
                 f"Schedule scan matched {len(eligible)} eligible release(s) for today. "
-                "Uploads are handled by the manual-only gate.",
+                "Automatic scheduled uploads are enabled; releases are routed to mapped channels or Main Channel.",
                 "success"
             )
 
@@ -8206,12 +8281,6 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
 
 
 async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
-    # Automatic ongoing-anime uploads are temporarily disabled.
-    # Only explicitly requested manual jobs (search/resume/addtask/retry) may run.
-    if not (manual_search or force):
-        await rep.report(f"Automatic ongoing upload paused by admin setting: {name}", "info")
-        return "automatic_disabled"
-
     # Manual selected-channel batches can hold automatic processing while active.
     mode = await db.get_mode()
     if mode != "anime":
@@ -8357,7 +8426,15 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 await rep.report(f"File Download Incomplete for {name}, Try Again", "error")
                 await stat_msg.delete()
                 raise RuntimeError(f"File download incomplete for {name}; RSS item remains retryable.")
-            
+
+            try:
+                language_label = await detect_release_language(dl_path, name)
+                aniInfo.pdata["audio_type"] = language_label
+                await rep.report(f"Detected release language for {name}: {language_label}", "info", log=False)
+            except Exception as language_error:
+                aniInfo.pdata["audio_type"] = "Unknown"
+                await rep.report(f"Could not detect audio/subtitle language for {name}: {language_error}", "warning", log=False)
+
             post_id = int(datetime.datetime.now().timestamp() * 1000000)
             ffEvent = Event()
             ff_queued[post_id] = ffEvent
@@ -8576,9 +8653,15 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             finally:
                 ffLock.release()
             
-            caption = await build_main_channel_announcement_caption(
-                aniInfo, name, ep_no, {quality: True for quality in uploaded_qualities}
-            )
+            available_quality_map = {quality: True for quality in uploaded_qualities}
+            if int(channel_to_use) == int(Var.MAIN_CHANNEL):
+                caption = await build_main_channel_feed_caption(
+                    aniInfo, name, ep_no, available_quality_map
+                )
+            else:
+                caption = await build_main_channel_announcement_caption(
+                    aniInfo, name, ep_no, available_quality_map
+                )
             try:
                 fontchanger_status = await db.get_fontchanger()
                 if fontchanger_status == "on":
