@@ -31,6 +31,7 @@ from PIL import Image
 import shutil
 import time
 import hashlib
+from json import loads as jloads
 
 # Scheduled releases take priority over manual /search queues.
 AUTO_UPLOAD_PRIORITY_LOCK = asyncio.Lock()
