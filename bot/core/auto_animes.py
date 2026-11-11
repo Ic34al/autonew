@@ -105,10 +105,13 @@ async def detect_audio_type(video_path):
     """Detect audio and subtitle languages from actual media streams."""
     try:
         cmd = ["ffprobe", "-v", "error", "-show_streams", "-of", "json", video_path]
-        result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-        if result.returncode != 0:
+        process = await asyncio.create_subprocess_exec(
+            *cmd, stdout=PIPE, stderr=PIPE
+        )
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+        if process.returncode != 0:
             return "Unknown"
-        payload = jloads(result.stdout or "{}")
+        payload = jloads(stdout.decode("utf-8", errors="replace") or "{}")
         audio_languages, subtitle_languages = set(), set()
         for stream in payload.get("streams", []):
             language = str((stream.get("tags") or {}).get("language") or "").casefold().strip()
@@ -155,6 +158,8 @@ async def detect_release_language(video_path, release_title=""):
         return "Japanese [English Sub]"
     if re.search(r"\b(japanese|jpn)\b", title):
         return "Japanese"
+    if re.search(r"\b(subsplease|erai[- ]?raws|horriblesubs|fansub)\b", title):
+        return "Japanese [English Sub]"
     return "Unknown"
 
 
