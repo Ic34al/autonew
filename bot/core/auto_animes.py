@@ -1751,7 +1751,7 @@ async def get_or_create_anime_channel(name: str, aniInfo):
             if not value:
                 return []
             normalized = normalize_anime_name_for_search(value)
-            compact = re.sub(r"\\s+", " ", value.lower()).strip()
+            compact = re.sub(r"\s+", " ", value.lower()).strip()
             return list(dict.fromkeys(key for key in (value.lower(), normalized, compact) if key))
 
         candidate_keys = set()
@@ -2574,15 +2574,16 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     # The dedicated channel gets the full episode post and
                     # quality buttons. Main Channel gets exactly one join-request
                     # announcement after every requested quality has uploaded.
-                    join_markup = await build_anime_watch_markup(target_channel)
-                    main_join_post = await bot.send_photo(
-                        Var.MAIN_CHANNEL,
-                        photo=(post_msg.photo.file_id if post_msg.photo else photo_url),
-                        caption=f"<b>{name}</b>",
-                        reply_markup=join_markup
-                    )
-                    if not main_join_post:
-                        raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
+                    if destination_channel is None and not manual_search:
+                        join_markup = await build_anime_watch_markup(target_channel)
+                        main_join_post = await bot.send_photo(
+                            Var.MAIN_CHANNEL,
+                            photo=(post_msg.photo.file_id if post_msg.photo else photo_url),
+                            caption=f"<b>{name}</b>",
+                            reply_markup=join_markup
+                        )
+                        if not main_join_post:
+                            raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
