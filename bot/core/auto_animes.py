@@ -1758,37 +1758,7 @@ async def get_or_create_anime_channel(name: str, aniInfo):
         for candidate in candidates:
             candidate_keys.update(mapping_keys(candidate))
 
-        # /channeladd stores mappings in selected_anime_channels. Resolve that
-        # registry as well as the legacy /addanime collection.
-        try:
-            selected_channels = await db.list_selected_anime_channels()
-            for item in selected_channels or []:
-                if not isinstance(item, dict) or item.get("channel_id") is None:
-                    continue
-                mapped_name = item.get("anime_name", "")
-                if candidate_keys.intersection(mapping_keys(mapped_name)):
-                    mapped_id = int(item["channel_id"])
-                    info = await validate_channel_id(mapped_id)
-                    if info:
-                        for alias in candidates:
-                            for alias_key in mapping_keys(alias):
-                                try:
-                                    await db.add_anime_channel_mapping(alias_key, info.id)
-                                except Exception:
-                                    pass
-                        await rep.report(
-                            f"Automatic release routed to mapped channel {info.id} for {base_anime_name}.",
-                            "success"
-                        )
-                        return info.id
-                    await rep.report(
-                        f"Mapped channel {mapped_id} for {mapped_name} is unavailable; using Main Channel.",
-                        "warning"
-                    )
-                    return Var.MAIN_CHANNEL
-        except Exception as selected_error:
-            await rep.report(f"Could not read selected anime channel mappings: {selected_error}", "warning")
-
+        # Dedicated destinations are managed only by the original /addanime command.
         seen = set()
         for candidate in candidates:
             for key in mapping_keys(candidate):
