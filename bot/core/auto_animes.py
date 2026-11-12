@@ -192,22 +192,19 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
     )
     language = str(pdata.get("audio_type") or "Japanese [English Sub]")
     status = str(data.get("status") or "RELEASING").replace("_", " ").upper()
-    title = html.escape(str(display_title))
-    language = html.escape(language)
-    status = html.escape(status)
     return (
-        f"❐ <b>{title}</b>\\n"
+        f"❐ <b>{html.escape(str(display_title))}</b>\\n"
         "✦─━━━━━━━━━━─✦\\n"
         f"›› Sᴇᴀꜱᴏɴ: {html.escape(season_number)}\\n"
         f"›› Eᴘɪsᴏᴅᴇ: {html.escape(episode_label)}\\n"
         f"›› Qᴜᴀʟɪᴛʏ: {html.escape(quality_text)}\\n"
-        f"›› Lᴀɴɢᴜᴀɢᴇ: {language}\\n"
+        f"›› Lᴀɴɢᴜᴀɢᴇ: {html.escape(language)}\\n"
         "✦─━━━━━━━━━━─✦\\n"
-        f"≡ Sᴛᴀᴛᴜꜱ: {status}\\n"
-        "≡ Pᴏᴡᴇʀᴇᴅ Bʏ: <a href=\\"https://t.me/Ongoing_Anime_Time\\">Ongoing Anime Time</a>\\n"
+        f"≡ Sᴛᴀᴛᴜꜱ: {html.escape(status)}\\n"
+        "≡ Pᴏᴡᴇʀᴇᴅ Bʏ: <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a>\\n"
         "✦─━━━━━━━━━━─✦\\n"
-        "≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - <a href=\\"https://t.me/+y6wpSaZzvk0xYjQ9\\">Wᴀᴛᴄʜ Nᴏᴡ</a>\\n"
-        "≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ꜰᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ."
+        "≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - <a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a>\\n"
+        "≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ."
     )
 
 async def process_batch_anime(anime_name, torrent_url, audio):
@@ -2569,7 +2566,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     )
 
                 # Only mark the canonical Main Channel post when that was the destination.
-                target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
+                target_channel = int(channel_to_use)
                 if int(target_channel) == int(Var.MAIN_CHANNEL):
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 else:
