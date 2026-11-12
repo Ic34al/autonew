@@ -193,7 +193,7 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
     language = str(pdata.get("audio_type") or "Japanese [English Sub]")
     status = str(data.get("status") or "RELEASING").replace("_", " ").upper()
     return (
-        f"❐ <b>{html.escape(str(display_title))}</b>\\n"
+        f"❐ <b>{html.escape(str(display_title))}</b>\n"
         "✦─━━━━━━━━━━─✦\\n"
         f"›› Sᴇᴀꜱᴏɴ: {html.escape(season_number)}\\n"
         f"›› Eᴘɪsᴏᴅᴇ: {html.escape(episode_label)}\\n"
