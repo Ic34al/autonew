@@ -4468,9 +4468,7 @@ async def anime_search_upload_callback(client, callback_query):
             reply_markup=build_anime_search_keyboard(message_id, state)
         )
 
-    # Channels are stored in two collections:
-    # legacy /addanime mappings (anime_channels) and the newer /channeladd
-    # dedicated-channel registry (selected_anime_channels). Include BOTH.
+    # Channel destinations are managed through the original /addanime command.
     channel_candidates = []
     try:
         known = await db.get_all_anime_channels()
@@ -4516,8 +4514,8 @@ async def anime_search_upload_callback(client, callback_query):
     if len(channels) == 1:
         notice = (
             "<b>No connected dedicated anime channels were found.</b>\n"
-            "Only Main Channel is currently available. Add channels with /channeladd "
-            "or /addanime, and make sure the bot is an administrator with posting permission."
+            "Only Main Channel is currently available. Add anime destinations with /addanime, "
+            "and make sure the bot is an administrator with posting permission."
         )
     else:
         notice = "<b>Choose the channel where these episodes should be posted:</b>"
