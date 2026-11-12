@@ -165,7 +165,7 @@ async def detect_release_language(video_path, release_title=""):
 
 
 async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, qualities):
-    """Main-channel fallback caption matching the second supplied screenshot."""
+    """Build the requested Main Channel post format with the two fixed hyperlinks."""
     import html
     data = getattr(aniInfo, "adata", {}) or {}
     pdata = getattr(aniInfo, "pdata", {}) or {}
@@ -178,29 +178,36 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         season_number = str(int(season_value))
     except (TypeError, ValueError):
         season_number = str(season_value)
+    if "season" not in str(display_title).lower():
+        display_title = f"{display_title} Season {season_number}"
     try:
         episode_label = f"{int(episode_number):02d}"
     except (TypeError, ValueError):
         episode_label = str(episode_number or "—")
-    quality_names = {"480": "480p", "720": "720p", "1080": "1080p", "HDRi": "HDRip", "HDRip": "HDRip"}
-    quality_labels = [quality_names[q] for q in ("480", "720", "1080", "HDRi") if q in (qualities or {})]
-    quality_text = ", ".join(quality_labels) if quality_labels else "Multi Quality"
-    language = str(pdata.get("audio_type") or "Unknown")
-    status = str(data.get("status") or "RELEASING").replace("_", " ").title()
+
+    available = [q for q in ("480", "720", "1080", "HDRi") if q in (qualities or {})]
+    quality_text = "Multi Quality" if len(available) > 1 else (
+        {"480": "480p", "720": "720p", "1080": "1080p", "HDRi": "HDRip"}.get(available[0], "Multi Quality")
+        if available else "Multi Quality"
+    )
+    language = str(pdata.get("audio_type") or "Japanese [English Sub]")
+    status = str(data.get("status") or "RELEASING").replace("_", " ").upper()
+    title = html.escape(str(display_title))
+    language = html.escape(language)
+    status = html.escape(status)
     return (
-        f"<b>▣ {html.escape(str(display_title))}</b>\n"
-        f"<b>Season {html.escape(season_number)}</b>\n"
-        "✦━━━━━━━━━━━━━━━━━━━━✦\n"
-        f"<b>≫ SEASON: {html.escape(season_number)}</b>\n"
-        f"<b>≫ EPISODE: {html.escape(episode_label)}</b>\n"
-        f"<b>≫ QUALITY: {html.escape(quality_text)}</b>\n"
-        f"<b>≫ LANGUAGE: {html.escape(language)}</b>\n"
-        "✦━━━━━━━━━━━━━━━━━━━━✦\n"
-        f"<blockquote>≡ STATUS: {html.escape(status)}</blockquote>\n"
-        "<blockquote>≡ POWERED BY: <b>Ongoing Anime Time</b></blockquote>\n"
-        "✦━━━━━━━━━━━━━━━━━━━━✦\n"
-        "<blockquote>≡ HOW TO DOWNLOAD? - <b>WATCH NOW</b></blockquote>\n"
-        "<blockquote>≡ USE VLC PLAYER OR MX PLAYER TO CHANGE AUDIO AND SUBTITLES FOR A BETTER VIEWING EXPERIENCE.</blockquote>"
+        f"❐ <b>{title}</b>\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"›› Sᴇᴀꜱᴏɴ: {html.escape(season_number)}\\n"
+        f"›› Eᴘɪsᴏᴅᴇ: {html.escape(episode_label)}\\n"
+        f"›› Qᴜᴀʟɪᴛʏ: {html.escape(quality_text)}\\n"
+        f"›› Lᴀɴɢᴜᴀɢᴇ: {language}\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"≡ Sᴛᴀᴛᴜꜱ: {status}\\n"
+        "≡ Pᴏᴡᴇʀᴇᴅ Bʏ: <a href=\\"https://t.me/Ongoing_Anime_Time\\">Ongoing Anime Time</a>\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        "≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - <a href=\\"https://t.me/+y6wpSaZzvk0xYjQ9\\">Wᴀᴛᴄʜ Nᴏᴡ</a>\\n"
+        "≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ꜰᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ."
     )
 
 async def process_batch_anime(anime_name, torrent_url, audio):
@@ -1728,7 +1735,7 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Resolve /addanime mapping using RSS, AniList English/Romaji/native and synonyms."""
+    """Resolve dedicated-channel mappings; unmapped anime always use Main Channel."""
     try:
         base_anime_name = extract_base_anime_name(name)
         normalized_name = normalize_anime_name_for_search(base_anime_name)
@@ -1750,6 +1757,41 @@ async def get_or_create_anime_channel(name: str, aniInfo):
             compact = re.sub(r"\\s+", " ", value.lower()).strip()
             return list(dict.fromkeys(key for key in (value.lower(), normalized, compact) if key))
 
+        candidate_keys = set()
+        for candidate in candidates:
+            candidate_keys.update(mapping_keys(candidate))
+
+        # /channeladd stores mappings in selected_anime_channels. Resolve that
+        # registry as well as the legacy /addanime collection.
+        try:
+            selected_channels = await db.list_selected_anime_channels()
+            for item in selected_channels or []:
+                if not isinstance(item, dict) or item.get("channel_id") is None:
+                    continue
+                mapped_name = item.get("anime_name", "")
+                if candidate_keys.intersection(mapping_keys(mapped_name)):
+                    mapped_id = int(item["channel_id"])
+                    info = await validate_channel_id(mapped_id)
+                    if info:
+                        for alias in candidates:
+                            for alias_key in mapping_keys(alias):
+                                try:
+                                    await db.add_anime_channel_mapping(alias_key, info.id)
+                                except Exception:
+                                    pass
+                        await rep.report(
+                            f"Automatic release routed to mapped channel {info.id} for {base_anime_name}.",
+                            "success"
+                        )
+                        return info.id
+                    await rep.report(
+                        f"Mapped channel {mapped_id} for {mapped_name} is unavailable; using Main Channel.",
+                        "warning"
+                    )
+                    return Var.MAIN_CHANNEL
+        except Exception as selected_error:
+            await rep.report(f"Could not read selected anime channel mappings: {selected_error}", "warning")
+
         seen = set()
         for candidate in candidates:
             for key in mapping_keys(candidate):
@@ -1763,8 +1805,7 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                     info = await validate_channel_id(mapped)
                     if not info:
                         await rep.report(f"Configured anime channel {mapped} for '{key}' is unavailable.", "warning")
-                        continue
-                    # Store all canonical variants against the same channel.
+                        return Var.MAIN_CHANNEL
                     for alias in candidates:
                         for alias_key in mapping_keys(alias):
                             try:
@@ -1772,33 +1813,18 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                             except Exception:
                                 pass
                     await rep.report(
-                        f"Automatic release routed to configured channel {info.id} "
-                        f"for {base_anime_name} (matched alias: {key}). Main Channel receives the join-request announcement.",
+                        f"Automatic release routed to configured channel {info.id} for {base_anime_name}.",
                         "success"
                     )
                     return info.id
                 except Exception as lookup_error:
                     await rep.report(f"Anime channel mapping lookup failed for '{key}': {lookup_error}", "warning")
 
-        existing = await find_existing_anime_channel(base_anime_name)
-        if existing:
-            info = await validate_channel_id(existing)
-            if info:
-                return info.id
-
-        channel_creation = await db.get_channel_creation()
-        if not channel_creation or not Var.USER_SESSION:
-            await rep.report(f"No dedicated channel mapping found for '{base_anime_name}'; using Main Channel.", "warning")
-            return Var.MAIN_CHANNEL
-
-        await rep.report(f"Creating new channel for: {base_anime_name}", "info")
-        new_channel = await create_anime_channel(name, aniInfo)
-        if new_channel:
-            for alias in candidates:
-                for alias_key in mapping_keys(alias):
-                    await db.add_anime_channel_mapping(alias_key, new_channel)
-            return new_channel
-        await rep.report(f"Could not create dedicated channel for {base_anime_name}; using Main Channel.", "error")
+        # Do not silently create a new destination. No mapping means Main Channel.
+        await rep.report(
+            f"No dedicated channel mapping found for '{base_anime_name}'; using Main Channel.",
+            "info"
+        )
         return Var.MAIN_CHANNEL
     except Exception as error:
         await rep.report(f"Error in get_or_create_anime_channel: {error}", "error")
@@ -2502,12 +2528,16 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             await stat_msg.delete()
             if btns:
                 markup = InlineKeyboardMarkup(btns)
-                # Telegram may temporarily rate-limit the Main Channel post.
+                if int(channel_to_use) == int(Var.MAIN_CHANNEL):
+                    caption = await build_main_channel_feed_caption(
+                        aniInfo, name, ep_no, {quality: True for quality in uploaded_qualities}
+                    )
+                # Telegram may temporarily rate-limit the destination post.
                 # Retry the publish step without re-uploading the already stored files.
                 last_publish_error = None
                 for publish_attempt in range(5):
                     try:
-                        target_channel = destination_channel if destination_channel is not None else Var.MAIN_CHANNEL
+                        target_channel = int(channel_to_use)
                         if photo_path and ospath.exists(photo_path):
                             with open(photo_path, 'rb') as photo_file:
                                 post_msg = await bot.send_photo(
@@ -2544,6 +2574,18 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 else:
                     await db.saveAnimeDestinationPost(ani_id, ep_no, target_channel, post_msg.id)
+                    # The dedicated channel gets the full episode post and
+                    # quality buttons. Main Channel gets exactly one join-request
+                    # announcement after every requested quality has uploaded.
+                    join_markup = await build_anime_watch_markup(target_channel)
+                    main_join_post = await bot.send_photo(
+                        Var.MAIN_CHANNEL,
+                        photo=(post_msg.photo.file_id if post_msg.photo else photo_url),
+                        caption=f"<b>{name}</b>",
+                        reply_markup=join_markup
+                    )
+                    if not main_join_post:
+                        raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
@@ -2553,7 +2595,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 if destination_channel is not None:
                     sticker_targets = [] if manual_search else [int(destination_channel)]
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
-                    sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
+                    sticker_targets = [int(channel_to_use)]
                 else:
                     sticker_targets = [int(Var.MAIN_CHANNEL)]
 
@@ -2567,16 +2609,6 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # Manual /search uploads send their sticker from the selection
                 # workflow, using the exact chosen destination. This prevents
                 # the generic uploader path from placing it in Main Channel.
-                if not manual_search:
-                    try:
-                        await asleep(Var.STICKER_INTERVAL)
-                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-                    except FloodWait as flood:
-                        await asyncio.sleep(max(1, int(flood.value) + 1))
-                        await send_sticker_to_channel(target_channel, Var.STICKER_ID)
-                    except Exception as sticker_error:
-                        await rep.report(f"Episode published, but sticker send failed: {sticker_error}", "warning")
-
                 # Mark complete only after the Main Channel post exists.
                 ani_cache['completed'].add(episode_key)
                 ani_cache['ongoing'].discard(episode_key)
