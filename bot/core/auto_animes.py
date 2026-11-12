@@ -200,7 +200,7 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         return f"<b>{html.escape(str(value))}</b>"
 
     return (
-        f"❐ {bold(display_title)}\n"
+        f"<blockquote>❐ {bold(display_title)}</blockquote>\n"
         "✦─━━━━━━━━━━─✦\n"
         f"{bold('›› Sᴇᴀꜱᴏɴ: ' + season_number)}\n"
         f"{bold('›› Eᴘɪsᴏᴅᴇ: ' + episode_label)}\n"
