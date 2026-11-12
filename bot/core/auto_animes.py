@@ -165,12 +165,13 @@ async def detect_release_language(video_path, release_title=""):
 
 
 async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, qualities):
-    """Build the requested Main Channel post format with the two fixed hyperlinks."""
+    """Build the exact bold Main Channel post with separate Telegram quote blocks."""
     import html
     data = getattr(aniInfo, "adata", {}) or {}
     pdata = getattr(aniInfo, "pdata", {}) or {}
     titles = data.get("title") or {}
     display_title = titles.get("english") or titles.get("romaji") or anime_name
+
     season_value = pdata.get("anime_season") or "1"
     if isinstance(season_value, list):
         season_value = season_value[-1] if season_value else "1"
@@ -178,8 +179,10 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         season_number = str(int(season_value))
     except (TypeError, ValueError):
         season_number = str(season_value)
+
     if "season" not in str(display_title).lower():
         display_title = f"{display_title} Season {season_number}"
+
     try:
         episode_label = f"{int(episode_number):02d}"
     except (TypeError, ValueError):
@@ -192,19 +195,23 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
     )
     language = str(pdata.get("audio_type") or "Japanese [English Sub]")
     status = str(data.get("status") or "RELEASING").replace("_", " ").upper()
+
+    def bold(value):
+        return f"<b>{html.escape(str(value))}</b>"
+
     return (
-        f"❐ <b>{html.escape(str(display_title))}</b>\n"
-        "✦─━━━━━━━━━━─✦\n"
-        f"›› Sᴇᴀꜱᴏɴ: {html.escape(season_number)}\n"
-        f"›› Eᴘɪsᴏᴅᴇ: {html.escape(episode_label)}\n"
-        f"›› Qᴜᴀʟɪᴛʏ: {html.escape(quality_text)}\n"
-        f"›› Lᴀɴɢᴜᴀɢᴇ: {html.escape(language)}\n"
-        "✦─━━━━━━━━━━─✦\n"
-        f"≡ Sᴛᴀᴛᴜꜱ: {html.escape(status)}\n"
-        "≡ Pᴏᴡᴇʀᴇᴅ Bʏ: <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a>\n"
-        "✦─━━━━━━━━━━─✦\n"
-        "≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - <a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a>\n"
-        "≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ."
+        f"❐ {bold(display_title)}\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"{bold('›› Sᴇᴀꜱᴏɴ: ' + season_number)}\\n"
+        f"{bold('›› Eᴘɪsᴏᴅᴇ: ' + episode_label)}\\n"
+        f"{bold('›› Qᴜᴀʟɪᴛʏ: ' + quality_text)}\\n"
+        f"{bold('›› Lᴀɴɢᴜᴀɢᴇ: ' + language)}\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"<blockquote>{bold('≡ Sᴛᴀᴛᴜꜱ: ' + status)}</blockquote>\\n"
+        f"<blockquote>{bold('≡ Pᴏᴡᴇʀᴇᴅ Bʏ: ')}<b><a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"<blockquote>{bold('≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - ')}<b><a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a></b></blockquote>\\n"
+        f"<blockquote>{bold('≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ sᴜʙᴛɪᴛʟᴇs ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.')}</blockquote>"
     )
 
 async def process_batch_anime(anime_name, torrent_url, audio):
@@ -1360,7 +1367,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             caption = await aniInfo.get_caption()
             try:
                 fontchanger_status = await db.get_fontchanger()
-                if fontchanger_status == "on":
+                if fontchanger_status == "on" and int(channel_to_use) != int(Var.MAIN_CHANNEL):
                     caption = obfuscate_text_for_copyright(caption)
             except Exception as e:
                 await rep.report(f"Error applying font changer: {e}", "warning")
