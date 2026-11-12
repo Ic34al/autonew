@@ -194,16 +194,16 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
     status = str(data.get("status") or "RELEASING").replace("_", " ").upper()
     return (
         f"❐ <b>{html.escape(str(display_title))}</b>\n"
-        "✦─━━━━━━━━━━─✦\\n"
-        f"›› Sᴇᴀꜱᴏɴ: {html.escape(season_number)}\\n"
-        f"›› Eᴘɪsᴏᴅᴇ: {html.escape(episode_label)}\\n"
-        f"›› Qᴜᴀʟɪᴛʏ: {html.escape(quality_text)}\\n"
-        f"›› Lᴀɴɢᴜᴀɢᴇ: {html.escape(language)}\\n"
-        "✦─━━━━━━━━━━─✦\\n"
-        f"≡ Sᴛᴀᴛᴜꜱ: {html.escape(status)}\\n"
-        "≡ Pᴏᴡᴇʀᴇᴅ Bʏ: <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a>\\n"
-        "✦─━━━━━━━━━━─✦\\n"
-        "≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - <a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a>\\n"
+        "✦─━━━━━━━━━━─✦\n"
+        f"›› Sᴇᴀꜱᴏɴ: {html.escape(season_number)}\n"
+        f"›› Eᴘɪsᴏᴅᴇ: {html.escape(episode_label)}\n"
+        f"›› Qᴜᴀʟɪᴛʏ: {html.escape(quality_text)}\n"
+        f"›› Lᴀɴɢᴜᴀɢᴇ: {html.escape(language)}\n"
+        "✦─━━━━━━━━━━─✦\n"
+        f"≡ Sᴛᴀᴛᴜꜱ: {html.escape(status)}\n"
+        "≡ Pᴏᴡᴇʀᴇᴅ Bʏ: <a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a>\n"
+        "✦─━━━━━━━━━━─✦\n"
+        "≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - <a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a>\n"
         "≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ ꜱᴜʙᴛɪᴛʟᴇꜱ ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ."
     )
 
