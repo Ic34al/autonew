@@ -8,7 +8,6 @@ from pyrogram.filters import command, user
 from os import path as ospath, execl, kill, environ
 from sys import executable
 from signal import SIGKILL
-from bot.core.auto_animes import fetch_animes
 from bot import bot, Var, bot_loop, sch, LOGS, ffQueue, ffLock, ffpids_cache, ff_queued
 from bot.core.func_utils import clean_up, clean_old_files, new_task, editMessage
 from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
@@ -156,10 +155,11 @@ async def main():
         await restart()
         
         LOGS.info("Starting tasks...")
-        # Start continuous RSS scanning automatically; fetch_animes prioritizes today's ongoing releases over backlog.
+        # Automatic ongoing-anime RSS detection/upload is intentionally disabled.
+        # Keep queue_loop running so admin-triggered manual uploads continue to work.
+        LOGS.info("Automatic ongoing anime uploads are OFF; manual upload commands remain enabled.")
         tasks = [
             create_task(queue_loop()),
-            create_task(fetch_animes()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')
