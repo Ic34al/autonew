@@ -7896,7 +7896,19 @@ async def fetch_animes():
             eligible = []
             total_entries = 0
             for feed_url, entries in zip(feed_urls, feed_results):
-                if isinstance(entries, Exception) or not entries:
+                if isinstance(entries, Exception):
+                    await report_schedule_status_once(
+                        ("feed_error", feed_url, str(entries)),
+                        f"RSS feed request failed; it will be retried automatically: {feed_url} - {entries}",
+                        "warning"
+                    )
+                    continue
+                if not entries:
+                    await report_schedule_status_once(
+                        ("feed_empty", feed_url, today.isoformat()),
+                        f"RSS feed returned no entries; it will be checked again: {feed_url}",
+                        "warning"
+                    )
                     continue
                 total_entries += len(entries)
                 for entry in entries:
