@@ -7924,6 +7924,10 @@ async def fetch_animes():
                         r"\beng(?:lish)?[- ]?sub\b|\bsubbed\b)",
                         release_title
                     )
+                    if dual_multi_audio:
+                        # Dual/multi-audio stays out of automatic uploads and
+                        # remains available through the existing manual review flow.
+                        continue
                     subsplease_feed = "subsplease" in str(feed_url).casefold()
                     # All configured anime feeds are eligible once title and
                     # exact scheduled episode match. Explicit dual/multi-audio
