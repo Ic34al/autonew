@@ -337,38 +337,44 @@ class MongoDB:
         await self.__anime_channels.delete_many(query)
 
     async def get_anime_channel(self, anime_name: str) -> int | None:
-        """Resolve /addanime aliases, including safe season/release-name variations."""
-        def title_key(value):
+        """Resolve both legacy and current /addanime records using safe normalized aliases."""
+        def compact(value):
             return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
 
         def series_key(value):
             value = str(value or "").casefold()
-            value = re.sub(r"\bseason\s*\d+\b|\bs\s*\d{1,2}\b", " ", value)
-            value = re.sub(r"\b(?:episode|ep)\s*[-._ ]*\d+\b", " ", value)
-            value = re.sub(r"\b(?:part|cour)\s*\d+\b", " ", value)
-            return title_key(value)
+            value = re.sub(r"\\bseason\\s*\\d+\\b|\\bs\\s*\\d{1,2}\\b", " ", value)
+            value = re.sub(r"\\b(?:episode|ep)\\s*[-._ ]*\\d+\\b", " ", value)
+            value = re.sub(r"\\b(?:part|cour)\\s*\\d+\\b", " ", value)
+            return compact(value)
 
-        target = title_key(anime_name)
+        target = compact(anime_name)
         base_target = series_key(anime_name)
         if not target:
             return None
 
-        # Exact normalized alias always wins over the broader series fallback.
-        exact_channels = set()
-        series_channels = set()
+        exact_channels, series_channels, token_channels = set(), set(), set()
+        ignored = {"the", "a", "an", "of", "and", "to"}
+        target_tokens = {t for t in re.findall(r"[a-z0-9]+", str(anime_name).casefold()) if t not in ignored}
         async for entry in self.__anime_channels.find():
             if not isinstance(entry, dict):
                 continue
-            stored_name = entry.get("anime_name")
-            channel_id = entry.get("channel_id")
-            if stored_name is None or channel_id is None:
+            stored_name = entry.get("anime_name") or entry.get("name") or entry.get("anime")
+            channel_id = entry.get("channel_id") or entry.get("channel") or entry.get("destination")
+            if not stored_name or channel_id is None:
                 continue
-            stored_key = title_key(stored_name)
-            normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else channel_id
+            stored_key = compact(stored_name)
+            stored_series = series_key(stored_name)
+            normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id).strip()
             if stored_key == target:
                 exact_channels.add(normalized_channel)
-            if base_target and series_key(stored_name) == base_target:
+            if base_target and stored_series == base_target:
                 series_channels.add(normalized_channel)
+            stored_tokens = {t for t in re.findall(r"[a-z0-9]+", str(stored_name).casefold()) if t not in ignored}
+            if len(target_tokens) >= 3 and len(stored_tokens) >= 3:
+                overlap = len(target_tokens & stored_tokens)
+                if overlap >= 3 and overlap / max(1, min(len(target_tokens), len(stored_tokens))) >= 0.8:
+                    token_channels.add(normalized_channel)
 
         if len(exact_channels) == 1:
             return next(iter(exact_channels))
@@ -376,7 +382,10 @@ class MongoDB:
             return None
         if len(series_channels) == 1:
             return next(iter(series_channels))
-        # Never guess when two distinct saved destinations could match.
+        if len(series_channels) > 1:
+            return None
+        if len(token_channels) == 1:
+            return next(iter(token_channels))
         return None
 
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
