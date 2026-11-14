@@ -7848,6 +7848,51 @@ async def fetch_animes():
                 *(getfeeds(url) for url in feed_urls),
                 return_exceptions=True
             )
+            # Replay persisted unfinished automatic uploads every scan, including
+            # episodes that have fallen out of the provider's current RSS window.
+            recovered_links = set()
+            try:
+                pending_tasks = await db.getAnimeResumeTasks()
+                for pending_task in pending_tasks:
+                    pending_link = pending_task.get("torrent_url")
+                    pending_name = pending_task.get("name")
+                    if not pending_link or not pending_name:
+                        continue
+                    recovered_links.add(pending_link)
+                    if retry_after.get(pending_link, 0) > asyncio.get_running_loop().time():
+                        continue
+                    try:
+                        await rep.report(
+                            f"Automatically recovering unfinished scheduled episode: {pending_name}",
+                            "info",
+                            log=False
+                        )
+                        recovered_result = await get_animes(
+                            pending_name,
+                            pending_link,
+                            destination_channel=pending_task.get("destination_channel")
+                        )
+                        if recovered_result in ("uploaded", "already_published"):
+                            seen_links.add(pending_link)
+                            retry_after.pop(pending_link, None)
+                        else:
+                            retry_after[pending_link] = asyncio.get_running_loop().time() + 60
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as recovery_error:
+                        retry_after[pending_link] = asyncio.get_running_loop().time() + 60
+                        await rep.report(
+                            f"Automatic recovery failed; will retry: {pending_name} - {recovery_error}",
+                            "warning"
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as recovery_scan_error:
+                await rep.report(
+                    f"Could not read unfinished upload records; will retry next scan: {recovery_scan_error}",
+                    "error"
+                )
+
             eligible = []
             total_entries = 0
             for feed_url, entries in zip(feed_urls, feed_results):
@@ -7857,12 +7902,13 @@ async def fetch_animes():
                 for entry in entries:
                     link = getattr(entry, "link", None)
                     title = getattr(entry, "title", None)
-                    if not link or not title or link in seen_links:
+                    if not link or not title or link in seen_links or link in recovered_links:
                         continue
                     if retry_after.get(link, 0) > asyncio.get_running_loop().time():
                         continue
-                    if not published_today(entry, today):
-                        continue
+                    # The schedule title + exact scheduled episode is the recovery
+                    # gate. Do not reject a missed release merely because its RSS
+                    # timestamp is yesterday, timezone-shifted, or absent.
                     # Today's scheduled ongoing anime may be released as:
                     # 1) Dual/Multi Audio, or 2) Japanese audio with English subs.
                     # SubsPlease releases are Japanese audio + English subtitles
@@ -7879,8 +7925,9 @@ async def fetch_animes():
                         release_title
                     )
                     subsplease_feed = "subsplease" in str(feed_url).casefold()
-                    if not (dual_multi_audio or japanese_english_sub or subsplease_feed):
-                        continue
+                    # All configured anime feeds are eligible once title and
+                    # exact scheduled episode match. Explicit dual/multi-audio
+                    # remains excluded from automatic upload.
                     rss_episode = extract_episode_number(release_title)
                     if rss_episode is None:
                         # Never accept season packs, episode ranges, or an RSS
@@ -7893,10 +7940,9 @@ async def fetch_animes():
                             continue
                         # If schedule has no episode number, a single numbered
                         # release is still safe; batch/range releases were rejected above.
-                        route_to_main = (
-                            bool(japanese_english_sub or subsplease_feed)
-                            and not dual_multi_audio
-                        ) or not selected_channel
+                        # A valid /addanime mapping always wins, regardless of
+                        # whether the RSS source is SubsPlease or another sub feed.
+                        route_to_main = not bool(selected_channel)
                         eligible.append((
                             title, link, feed_url, scheduled_title,
                             route_to_main, selected_channel, rss_episode
@@ -7955,7 +8001,7 @@ async def fetch_animes():
                         retry_after[link] = asyncio.get_running_loop().time() + 90
                     else:
                         # Keep failed download/encode/publish items retryable.
-                        retry_after[link] = asyncio.get_running_loop().time() + 300
+                        retry_after[link] = asyncio.get_running_loop().time() + 60
                 except asyncio.CancelledError:
                     raise
                 except Exception:
