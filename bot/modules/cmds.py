@@ -4690,7 +4690,7 @@ async def dual_audio_list_cmd(client, message: Message):
                 continue
             for entry in entries:
                 title = str(getattr(entry, "title", "") or "").strip()
-                if not re.search(r"\\bdual[ ._-]*audio\\b", title, re.IGNORECASE):
+                if not re.search(r"\bdual[ ._-]*audio\b", title, re.IGNORECASE):
                     continue
                 candidates = []
                 for enclosure in (getattr(entry, "enclosures", None) or []):
@@ -4715,7 +4715,7 @@ async def dual_audio_list_cmd(client, message: Message):
         if not found:
             PENDING_DUAL_AUDIO.pop(message.from_user.id, None)
             return await status.edit_text(
-                "<b>No explicit Dual Audio releases found in the current RSS feeds.</b>\\n"
+                "<b>No explicit Dual Audio releases found in the current RSS feeds.</b>\n"
                 "<i>Only releases marked Dual Audio are shown here.</i>"
             )
 
@@ -4737,12 +4737,12 @@ async def dual_audio_list_cmd(client, message: Message):
         ]
         for index, item in enumerate(found, start=1):
             lines.append(f"<b>{index}.</b> {item['title'][:100]}")
-        await status.edit_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+        await status.edit_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
     except Exception as error:
         await status.edit_text(f"<b>Dual-audio scan failed:</b> <code>{str(error)[:300]}</code>")
 
 
-@bot.on_callback_query(filters.regex(r"^dualup:(\\d+):(\\d+)$"))
+@bot.on_callback_query(filters.regex(r"^dualup:(\d+):(\d+)$"))
 async def dual_audio_upload_callback(client, callback_query):
     if callback_query.from_user.id not in Var.ADMINS:
         return await callback_query.answer("Admin access required.", show_alert=True)
@@ -4757,7 +4757,7 @@ async def dual_audio_upload_callback(client, callback_query):
         item = items[index]
         await callback_query.answer("Starting selected dual-audio upload...")
         await callback_query.message.edit_text(
-            f"<b>Uploading selected dual-audio release:</b>\\n{item['title']}\\n\\n<i>Please wait...</i>"
+            f"<b>Uploading selected dual-audio release:</b>\n{item['title']}\n\n<i>Please wait...</i>"
         )
         result = await get_animes(
             item["title"],
@@ -4766,7 +4766,7 @@ async def dual_audio_upload_callback(client, callback_query):
             manual_search=True
         )
         await callback_query.message.edit_text(
-            f"<b>Selected dual-audio task finished:</b>\\n{item['title']}\\n"
+            f"<b>Selected dual-audio task finished:</b>\n{item['title']}\n"
             f"<b>Result:</b> <code>{result or 'processed'}</code>"
         )
     except Exception as error:
