@@ -1694,7 +1694,7 @@ async def fetch_animes():
 
                     # Dual-audio releases are never selected by the automatic uploader.
                     # They remain available through the admin /dualaudio review list.
-                    if re.search(r"\\bdual[ ._-]*audio\\b", str(title), re.IGNORECASE):
+                    if re.search(r"\bdual[ ._-]*audio\b", str(title), re.IGNORECASE):
                         continue
 
                     normalized_feed_title = normalize_schedule_title(title)
