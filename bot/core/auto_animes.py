@@ -1716,25 +1716,29 @@ async def fetch_animes():
             if not candidates:
                 continue
 
-            # Process only one eligible scheduled release per scan. Re-scan
-            # schedule/RSS before the next upload so no stale backlog is drained.
+            # Process every distinct release published today in this scan.
+            # This avoids one failed RSS item blocking other scheduled anime.
+            # Episode-level database checks prevent duplicate posts across feeds.
             candidates.sort(key=lambda item: item[0].casefold())
-            title, link, source_feed = candidates[0]
-            await rep.report(
-                f"Today's scheduled release selected: {title}. "
-                f"Unscheduled and older releases remain blocked.",
-                "info"
-            )
-            try:
-                await get_animes(title, link)
-                seen_rss_links.setdefault(source_feed, set()).add(link)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
+            for title, link, source_feed in candidates:
+                if ani_cache.get("global_pause") or await db.get_mode() != "anime":
+                    break
                 await rep.report(
-                    f"Scheduled release failed; it will be checked again: {title}\n{format_exc()}",
-                    "error"
+                    f"Today's scheduled release selected: {title}. "
+                    f"Unscheduled, dual-audio, and older releases remain blocked.",
+                    "info"
                 )
+                try:
+                    await get_animes(title, link)
+                    seen_rss_links.setdefault(source_feed, set()).add(link)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    await rep.report(
+                        f"Scheduled release failed; it will be checked again: {title}\\n{format_exc()}",
+                        "error"
+                    )
+
         except asyncio.CancelledError:
             raise
         except Exception as e:
