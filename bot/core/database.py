@@ -343,9 +343,9 @@ class MongoDB:
 
         def series_key(value):
             value = str(value or "").casefold()
-            value = re.sub(r"\\bseason\\s*\\d+\\b|\\bs\\s*\\d{1,2}\\b", " ", value)
-            value = re.sub(r"\\b(?:episode|ep)\\s*[-._ ]*\\d+\\b", " ", value)
-            value = re.sub(r"\\b(?:part|cour)\\s*\\d+\\b", " ", value)
+            value = re.sub(r"\bseason\s*\d+\b|\bs\s*\d{1,2}\b", " ", value)
+            value = re.sub(r"\b(?:episode|ep)\s*[-._ ]*\d+\b", " ", value)
+            value = re.sub(r"\b(?:part|cour)\s*\d+\b", " ", value)
             return title_key(value)
 
         target = title_key(anime_name)
