@@ -14,6 +14,7 @@ from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
 from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
+from bot.core.auto_animes import fetch_animes
 
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
@@ -155,11 +156,12 @@ async def main():
         await restart()
         
         LOGS.info("Starting tasks...")
-        # Automatic ongoing-anime RSS detection/upload is intentionally disabled.
-        # Keep queue_loop running so admin-triggered manual uploads continue to work.
-        LOGS.info("Automatic ongoing anime uploads are OFF; manual upload commands remain enabled.")
+        # Start the scheduled ongoing-anime RSS detector.
+        # Dual-audio releases are filtered out and handled only through /dualaudio.
+        LOGS.info("Automatic ongoing anime detection/upload is ON; dual-audio releases are manual-only.")
         tasks = [
             create_task(queue_loop()),
+            create_task(fetch_animes()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')
