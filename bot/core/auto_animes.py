@@ -7858,6 +7858,23 @@ async def fetch_animes():
                     pending_name = pending_task.get("name")
                     if not pending_link or not pending_name:
                         continue
+
+                    # Strict schedule-only recovery: never replay an old resume
+                    # task unless its anime AND episode are on today's schedule.
+                    pending_episode = extract_episode_number(pending_name)
+                    scheduled_match = None
+                    for scheduled_title, aliases, selected_channel, expected_episode in scheduled:
+                        if not title_matches(pending_name, aliases):
+                            continue
+                        if expected_episode is None or pending_episode is None:
+                            continue
+                        if pending_episode != expected_episode:
+                            continue
+                        scheduled_match = (scheduled_title, selected_channel)
+                        break
+                    if scheduled_match is None:
+                        continue
+
                     recovered_links.add(pending_link)
                     if retry_after.get(pending_link, 0) > asyncio.get_running_loop().time():
                         continue
@@ -7867,10 +7884,11 @@ async def fetch_animes():
                             "info",
                             log=False
                         )
+                        scheduled_title, mapped_destination = scheduled_match
                         recovered_result = await get_animes(
                             pending_name,
                             pending_link,
-                            destination_channel=pending_task.get("destination_channel")
+                            destination_channel=mapped_destination
                         )
                         if recovered_result in ("uploaded", "already_published"):
                             seen_links.add(pending_link)
