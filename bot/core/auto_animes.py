@@ -1629,13 +1629,32 @@ async def fetch_animes():
             getattr(entry, "published_parsed", None)
             or getattr(entry, "updated_parsed", None)
         )
+        # Some RSS providers omit publication timestamps. Schedule title and
+        # episode matching below remains the eligibility gate in that case.
         if not published:
-            return False
+            return True
         try:
             published_at = datetime(*published[:6], tzinfo=timezone.utc)
             return published_at.astimezone(ist).date() == today
         except Exception:
-            return False
+            return True
+
+    def extract_episode_number(value):
+        text = str(value or "")
+        patterns = (
+            r"\\bS\\d{1,2}\\s*E(\\d{1,3})\\b",
+            r"\\bEpisode\\s*(\\d{1,3})\\b",
+            r"\\bEp\\.?\\s*(\\d{1,3})\\b",
+            r"[- ](\\d{1,3})(?:v\\d+)?(?:\\s|$)",
+        )
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                try:
+                    return str(int(match.group(1)))
+                except (TypeError, ValueError):
+                    pass
+        return None
 
     while True:
         await asleep(30)
@@ -1650,11 +1669,25 @@ async def fetch_animes():
             # The daily SubsPlease schedule is the allow-list. If it cannot
             # be fetched, fail closed: do not upload arbitrary RSS entries.
             schedule_items = await fetch_today_schedule()
-            scheduled_titles = {
-                normalize_schedule_title(item.get("title"))
-                for item in schedule_items
-                if isinstance(item, dict) and item.get("title")
-            }
+            scheduled_titles = set()
+            scheduled_episodes = {}
+            for item in schedule_items:
+                if not isinstance(item, dict) or not item.get("title"):
+                    continue
+                schedule_title = str(item.get("title"))
+                aliases = [schedule_title]
+                try:
+                    aliases.extend(await get_all_possible_anime_names(schedule_title))
+                except Exception:
+                    pass
+                for alias in aliases:
+                    normalized_alias = normalize_schedule_title(alias)
+                    if normalized_alias:
+                        scheduled_titles.add(normalized_alias)
+                        scheduled_episodes[normalized_alias] = str(
+                            item.get("episode") or item.get("episodeNumber")
+                            or item.get("episode_number") or ""
+                        )
             scheduled_titles.discard("")
             if not scheduled_titles:
                 await rep.report(
@@ -1676,10 +1709,19 @@ async def fetch_animes():
                 await rep.report("No RSS feeds configured; scheduled uploads held.", "warning")
                 continue
 
-            feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
+            # One broken/slow RSS source must not prevent healthy feeds from
+            # being scanned. Each feed is isolated and retried next cycle.
+            feeds_by_url = await asyncio.gather(
+                *(getfeeds(url) for url in rss_urls),
+                return_exceptions=True
+            )
             candidates = []
             for rss_url, entries in zip(rss_urls, feeds_by_url):
+                if isinstance(entries, Exception):
+                    await rep.report(f"RSS feed scan failed; it will retry next cycle: {rss_url} - {entries}", "warning")
+                    continue
                 if not entries:
+                    await rep.report(f"RSS feed returned no entries this cycle: {rss_url}", "info")
                     continue
                 seen = seen_rss_links.setdefault(rss_url, set())
                 for entry in entries:
@@ -1703,13 +1745,23 @@ async def fetch_animes():
 
                     # Require the scheduled series title to appear in the
                     # normalized RSS title. Dual-audio releases are manual-only.
-                    if not any(
-                        scheduled in normalized_feed_title
-                        or normalized_feed_title in scheduled
-                        for scheduled in scheduled_titles
-                        if len(scheduled) >= 5
-                    ):
+                    matched_schedule = next((
+                        scheduled for scheduled in scheduled_titles
+                        if len(scheduled) >= 5 and (
+                            scheduled in normalized_feed_title
+                            or normalized_feed_title in scheduled
+                        )
+                    ), None)
+                    if not matched_schedule:
                         continue
+
+                    # When the schedule supplies an episode number, do not
+                    # accidentally upload an older episode for the same series.
+                    expected_episode = scheduled_episodes.get(matched_schedule)
+                    actual_episode = extract_episode_number(title)
+                    if expected_episode and str(expected_episode).isdigit():
+                        if not actual_episode or int(actual_episode) != int(expected_episode):
+                            continue
 
                     candidates.append((title, link, rss_url))
 
