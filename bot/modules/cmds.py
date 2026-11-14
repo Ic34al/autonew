@@ -51,6 +51,8 @@ awaiting_manual_dub: dict[int, dict] = {}
 ADD_TASK_JOBS: dict[str, dict] = {}
 # RSS URLs pasted with /addtask, keyed by the admin who is choosing a destination.
 PENDING_ADDTASK_BATCHES: dict[int, list[str]] = {}
+# Dual-audio RSS releases are listed for admin review and uploaded only on selection.
+PENDING_DUAL_AUDIO: dict[int, list[dict]] = {}
 
 # Serialize complete manual /search batches across selected anime channels.
 MANUAL_SEARCH_BATCH_LOCK = asyncio.Lock()
@@ -4652,3 +4654,125 @@ async def anime_search_destination_callback(client, callback_query):
     except Exception as error:
         await callback_query.message.edit_text(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
         await rep.report(f"/search destination upload error: {error}", "error")
+
+
+@bot.on_message(filters.command("dualaudio") & filters.private & filters.user(Var.ADMINS))
+@new_task
+async def dual_audio_list_cmd(client, message: Message):
+    """List explicit dual-audio RSS releases; never upload until an admin selects one."""
+    status = await message.reply("<b>Scanning configured anime feeds for dual-audio releases...</b>")
+    try:
+        from bot.core.auto_animes import is_valid_torrent_url
+        configured = list(getattr(Var, "RSS_ITEMS_ANIME", []) or [])
+        low_end = getattr(Var, "RSS_LOW_END", {}) or {}
+        if isinstance(low_end, dict):
+            configured.extend(low_end.values())
+        try:
+            saved = await db.get_all_rss_links()
+            configured.extend(
+                item.get("link") for item in (saved or [])
+                if item.get("type") == "anime" and item.get("link")
+            )
+        except Exception:
+            pass
+        urls = list(dict.fromkeys(str(url).strip() for url in configured if url))
+        if not urls:
+            return await status.edit_text("<b>No anime RSS feeds are configured.</b>")
+
+        feeds = await asyncio.gather(
+            *(getfeeds(url) for url in urls),
+            return_exceptions=True
+        )
+        found = []
+        seen = set()
+        for entries in feeds:
+            if isinstance(entries, Exception) or not entries:
+                continue
+            for entry in entries:
+                title = str(getattr(entry, "title", "") or "").strip()
+                if not re.search(r"\\bdual[ ._-]*audio\\b", title, re.IGNORECASE):
+                    continue
+                candidates = []
+                for enclosure in (getattr(entry, "enclosures", None) or []):
+                    href = enclosure.get("href") or enclosure.get("url")
+                    if href:
+                        candidates.append(href)
+                for item in (getattr(entry, "links", None) or []):
+                    href = item.get("href")
+                    if href:
+                        candidates.append(href)
+                if getattr(entry, "link", None):
+                    candidates.append(entry.link)
+                torrent = None
+                for candidate in dict.fromkeys(str(x).strip() for x in candidates if x):
+                    if await is_valid_torrent_url(candidate):
+                        torrent = candidate
+                        break
+                if torrent and torrent not in seen:
+                    seen.add(torrent)
+                    found.append({"title": title, "torrent": torrent})
+
+        if not found:
+            PENDING_DUAL_AUDIO.pop(message.from_user.id, None)
+            return await status.edit_text(
+                "<b>No explicit Dual Audio releases found in the current RSS feeds.</b>\\n"
+                "<i>Only releases marked Dual Audio are shown here.</i>"
+            )
+
+        found.sort(key=lambda item: item["title"].casefold())
+        found = found[:30]
+        PENDING_DUAL_AUDIO[message.from_user.id] = found
+        rows = [
+            [InlineKeyboardButton(
+                f"Upload {index:02d} · {item['title'][:35]}",
+                callback_data=f"dualup:{message.from_user.id}:{index - 1}"
+            )]
+            for index, item in enumerate(found, start=1)
+        ]
+        lines = [
+            "<b>DUAL AUDIO RELEASES — MANUAL ONLY</b>",
+            f"<b>Found:</b> {len(found)}",
+            "",
+            "Choose an episode below to upload it. Nothing is uploaded automatically from this list."
+        ]
+        for index, item in enumerate(found, start=1):
+            lines.append(f"<b>{index}.</b> {item['title'][:100]}")
+        await status.edit_text("\\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+    except Exception as error:
+        await status.edit_text(f"<b>Dual-audio scan failed:</b> <code>{str(error)[:300]}</code>")
+
+
+@bot.on_callback_query(filters.regex(r"^dualup:(\\d+):(\\d+)$"))
+async def dual_audio_upload_callback(client, callback_query):
+    if callback_query.from_user.id not in Var.ADMINS:
+        return await callback_query.answer("Admin access required.", show_alert=True)
+    try:
+        _, owner_text, index_text = callback_query.data.split(":")
+        owner_id, index = int(owner_text), int(index_text)
+        if owner_id != callback_query.from_user.id:
+            return await callback_query.answer("This list belongs to another admin.", show_alert=True)
+        items = PENDING_DUAL_AUDIO.get(owner_id) or []
+        if index < 0 or index >= len(items):
+            return await callback_query.answer("This release list expired. Run /dualaudio again.", show_alert=True)
+        item = items[index]
+        await callback_query.answer("Starting selected dual-audio upload...")
+        await callback_query.message.edit_text(
+            f"<b>Uploading selected dual-audio release:</b>\\n{item['title']}\\n\\n<i>Please wait...</i>"
+        )
+        result = await get_animes(
+            item["title"],
+            item["torrent"],
+            force=True,
+            manual_search=True
+        )
+        await callback_query.message.edit_text(
+            f"<b>Selected dual-audio task finished:</b>\\n{item['title']}\\n"
+            f"<b>Result:</b> <code>{result or 'processed'}</code>"
+        )
+    except Exception as error:
+        try:
+            await callback_query.message.edit_text(
+                f"<b>Dual-audio upload failed:</b> <code>{str(error)[:300]}</code>"
+            )
+        except Exception:
+            pass
