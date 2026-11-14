@@ -1598,11 +1598,13 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 await stat_msg.delete()
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
+            return "uploaded"
 
     except Exception as e:
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
         await rep.report(f"Low-end processing error: {str(e)}", "error")
+        return None
 
 async def fetch_animes():
     """Discover scheduled releases and automatically resume every persisted unfinished episode."""
@@ -2384,8 +2386,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         print(f"get_animes: upload_mode={upload_mode}")
         if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
-            await process_low_end(name, torrent, destination_channel=destination_channel)
-            return
+            return await process_low_end(name, torrent, destination_channel=destination_channel)
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -2439,6 +2440,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
+            return "uploaded"
             return "already_published"
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
@@ -3022,7 +3024,8 @@ async def process_low_end(name, torrent_url, force=False):
     except Exception as e:
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
-        await rep.report(f"Low-end processing error: {str(e)}", "error")
+        await rep.report(f"Anime upload failed for {name}: {str(e)}", "error")
+        return None
 
 async def fetch_animes():
     await rep.report("Fetching Anime Started !!!", "info")
@@ -3092,21 +3095,30 @@ async def fetch_animes():
                     title = getattr(entry, "title", None)
                     if not link or not title or link in seen or link in recovered_links:
                         continue
-                    seen.add(link)
-                    pending.append((title, link))
+                    pending.append((title, link, rss_url))
                 # Bound memory while retaining a recent de-duplication window.
                 if len(seen) > 500:
                     seen_rss_links[rss_url] = set(list(seen)[-250:])
 
             # One episode at a time: finish/retry the current item before advancing.
-            for title, link in pending:
+            for title, link, source_feed in pending:
                 try:
-                    await get_animes(title, link)
+                    result = await get_animes(title, link)
+                    if result in ("uploaded", "already_published", "completed"):
+                        seen_rss_links.setdefault(source_feed, set()).add(link)
+                    else:
+                        await rep.report(
+                            f"Upload did not confirm completion; keeping release pending for automatic retry: {title}",
+                            "warning"
+                        )
+                        break
+                except asyncio.CancelledError:
+                    raise
                 except Exception:
-                    await rep.report(f"Episode processing failed; will retry on next RSS scan: {title}\\n{format_exc()}", "error")
-                    # Make it eligible for the next scan instead of permanently consuming it.
-                    for rss_url in rss_urls:
-                        seen_rss_links.get(rss_url, set()).discard(link)
+                    await rep.report(
+                        f"Episode processing failed; keeping it pending for the next automatic scan: {title}\\n{format_exc()}",
+                        "error"
+                    )
                     break
         except Exception as e:
             await rep.report(f"Anime fetch error: {str(e)}", "error")
