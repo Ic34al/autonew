@@ -1642,10 +1642,10 @@ async def fetch_animes():
     def extract_episode_number(value):
         text = str(value or "")
         patterns = (
-            r"\\bS\\d{1,2}\\s*E(\\d{1,3})\\b",
-            r"\\bEpisode\\s*(\\d{1,3})\\b",
-            r"\\bEp\\.?\\s*(\\d{1,3})\\b",
-            r"[- ](\\d{1,3})(?:v\\d+)?(?:\\s|$)",
+            r"\bS\d{1,2}\s*E(\d{1,3})\b",
+            r"\bEpisode\s*(\d{1,3})\b",
+            r"\bEp\.?\s*(\d{1,3})\b",
+            r"[- ](\d{1,3})(?:v\d+)?(?:\s|$)",
         )
         for pattern in patterns:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -1671,6 +1671,7 @@ async def fetch_animes():
             schedule_items = await fetch_today_schedule()
             scheduled_titles = set()
             scheduled_episodes = {}
+            scheduled_release_times = {}
             for item in schedule_items:
                 if not isinstance(item, dict) or not item.get("title"):
                     continue
@@ -1688,6 +1689,7 @@ async def fetch_animes():
                             item.get("episode") or item.get("episodeNumber")
                             or item.get("episode_number") or ""
                         )
+                        scheduled_release_times[normalized_alias] = str(item.get("time") or "")
             scheduled_titles.discard("")
             if not scheduled_titles:
                 await rep.report(
@@ -1757,6 +1759,16 @@ async def fetch_animes():
 
                     # When the schedule supplies an episode number, do not
                     # accidentally upload an older episode for the same series.
+                    # Do not upload ahead of the published schedule time.
+                    release_clock = scheduled_release_times.get(matched_schedule)
+                    if release_clock:
+                        try:
+                            release_time = datetime.strptime(release_clock, "%I:%M %p").time()
+                            if now_ist.time().replace(tzinfo=None) < release_time:
+                                continue
+                        except ValueError:
+                            pass
+
                     expected_episode = scheduled_episodes.get(matched_schedule)
                     actual_episode = extract_episode_number(title)
                     if expected_episode and str(expected_episode).isdigit():
