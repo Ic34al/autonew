@@ -1793,8 +1793,13 @@ async def fetch_animes():
                     "info"
                 )
                 try:
-                    await get_animes(title, link)
-                    seen_rss_links.setdefault(source_feed, set()).add(link)
+                    result = await get_animes(title, link)
+                    # get_animes may return None on a handled download/encode/
+                    # Telegram failure. Do not mark such RSS entries as seen:
+                    # the next 30-second scan must retry them. Successful and
+                    # already-published results are safe to suppress in memory.
+                    if result in ("uploaded", "already_published", "completed"):
+                        seen_rss_links.setdefault(source_feed, set()).add(link)
                 except asyncio.CancelledError:
                     raise
                 except Exception:
