@@ -1692,12 +1692,17 @@ async def fetch_animes():
                     if not published_today(entry, today):
                         continue
 
+                    # Dual-audio releases are never selected by the automatic uploader.
+                    # They remain available through the admin /dualaudio review list.
+                    if re.search(r"\\bdual[ ._-]*audio\\b", str(title), re.IGNORECASE):
+                        continue
+
                     normalized_feed_title = normalize_schedule_title(title)
                     if not normalized_feed_title:
                         continue
 
                     # Require the scheduled series title to appear in the
-                    # normalized RSS title. No audio-type preference is used.
+                    # normalized RSS title. Dual-audio releases are manual-only.
                     if not any(
                         scheduled in normalized_feed_title
                         or normalized_feed_title in scheduled
@@ -1778,8 +1783,8 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                         continue
                     info = await validate_channel_id(mapped)
                     if not info:
-                        await rep.report(f"Configured anime channel {mapped} for '{key}' is unavailable.", "warning")
-                        return Var.MAIN_CHANNEL
+                        await rep.report(f"Configured anime channel {mapped} for '{key}' is unavailable; checking other saved aliases.", "warning")
+                        continue
                     for alias in candidates:
                         for alias_key in mapping_keys(alias):
                             try:
