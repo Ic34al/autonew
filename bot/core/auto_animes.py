@@ -1735,7 +1735,7 @@ async def fetch_animes():
                     raise
                 except Exception:
                     await rep.report(
-                        f"Scheduled release failed; it will be checked again: {title}\\n{format_exc()}",
+                        f"Scheduled release failed; it will be checked again: {title}\n{format_exc()}",
                         "error"
                     )
 
