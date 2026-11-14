@@ -3070,18 +3070,22 @@ async def fetch_animes():
                     # Do not advance to another episode until this saved episode
                     # completes. get_animes re-raises failures after preserving
                     # successful per-quality checkpoints.
-                    await get_animes(resume_name, resume_link)
+                    resume_result = await get_animes(resume_name, resume_link)
+                    if resume_result not in ("uploaded", "already_published", "completed"):
+                        resume_failed = True
+                        await rep.report(
+                            f"Saved episode is still unfinished and will retry automatically: {resume_name}",
+                            "warning"
+                        )
             except Exception as resume_error:
                 resume_failed = True
                 await rep.report(
-                    f"Episode resume failed; holding the queue on this unfinished episode. "
-                    f"It will retry on the next scan: {resume_error}",
+                    f"Episode resume failed; it remains pending for the next automatic scan: {resume_error}",
                     "error"
                 )
 
-            if resume_failed:
-                # Never start fresh RSS jobs while an earlier episode is unfinished.
-                continue
+            # A failed old item must remain pending, but must not block unrelated
+            # releases from being checked and uploaded in this scan.
 
             feeds_by_url = await asyncio.gather(*(getfeeds(url) for url in rss_urls))
             pending = []
@@ -3111,7 +3115,7 @@ async def fetch_animes():
                             f"Upload did not confirm completion; keeping release pending for automatic retry: {title}",
                             "warning"
                         )
-                        break
+                        continue
                 except asyncio.CancelledError:
                     raise
                 except Exception:
@@ -3119,7 +3123,7 @@ async def fetch_animes():
                         f"Episode processing failed; keeping it pending for the next automatic scan: {title}\\n{format_exc()}",
                         "error"
                     )
-                    break
+                    continue
         except Exception as e:
             await rep.report(f"Anime fetch error: {str(e)}", "error")
 
