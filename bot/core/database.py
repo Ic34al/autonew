@@ -337,28 +337,46 @@ class MongoDB:
         await self.__anime_channels.delete_many(query)
 
     async def get_anime_channel(self, anime_name: str) -> int | None:
-        """Resolve /addanime mappings using exact normalized aliases."""
+        """Resolve /addanime aliases, including safe season/release-name variations."""
         def title_key(value):
             return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
 
+        def series_key(value):
+            value = str(value or "").casefold()
+            value = re.sub(r"\\bseason\\s*\\d+\\b|\\bs\\s*\\d{1,2}\\b", " ", value)
+            value = re.sub(r"\\b(?:episode|ep)\\s*[-._ ]*\\d+\\b", " ", value)
+            value = re.sub(r"\\b(?:part|cour)\\s*\\d+\\b", " ", value)
+            return title_key(value)
+
         target = title_key(anime_name)
+        base_target = series_key(anime_name)
         if not target:
             return None
 
-        entry = await self.__anime_channels.find_one({
-            "anime_name": str(anime_name or "").casefold().strip()
-        })
-        if entry and entry.get("channel_id") is not None:
-            return entry.get("channel_id")
-
+        # Exact normalized alias always wins over the broader series fallback.
+        exact_channels = set()
+        series_channels = set()
         async for entry in self.__anime_channels.find():
             if not isinstance(entry, dict):
                 continue
             stored_name = entry.get("anime_name")
             channel_id = entry.get("channel_id")
-            if stored_name is not None and channel_id is not None and title_key(stored_name) == target:
-                return channel_id
+            if stored_name is None or channel_id is None:
+                continue
+            stored_key = title_key(stored_name)
+            normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else channel_id
+            if stored_key == target:
+                exact_channels.add(normalized_channel)
+            if base_target and series_key(stored_name) == base_target:
+                series_channels.add(normalized_channel)
 
+        if len(exact_channels) == 1:
+            return next(iter(exact_channels))
+        if len(exact_channels) > 1:
+            return None
+        if len(series_channels) == 1:
+            return next(iter(series_channels))
+        # Never guess when two distinct saved destinations could match.
         return None
 
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
