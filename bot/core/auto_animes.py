@@ -1605,13 +1605,13 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
         await rep.report(f"Low-end processing error: {str(e)}", "error")
 
 async def fetch_animes():
-    """Upload only today's scheduled anime releases; never auto-resume old backlog."""
+    """Discover scheduled releases and automatically resume every persisted unfinished episode."""
     from zoneinfo import ZoneInfo
     from datetime import datetime, timezone
     from bot.modules.daily_schedule import fetch_today_schedule
 
     await rep.report(
-        "Scheduled-only Anime Fetcher Started. Old backlog and unscheduled RSS uploads are disabled.",
+        "Automatic Anime Fetcher Started. Scheduled discovery and saved unfinished-episode recovery are enabled.",
         "info"
     )
     seen_rss_links = {}
@@ -1666,8 +1666,46 @@ async def fetch_animes():
             now_ist = datetime.now(ist)
             today = now_ist.date()
 
-            # The daily SubsPlease schedule is the allow-list. If it cannot
-            # be fetched, fail closed: do not upload arbitrary RSS entries.
+            # First recover every unfinished episode already persisted in MongoDB.
+            # This runs automatically after restart and on every scanner cycle;
+            # no /retry command is required. The saved destination is retained.
+            try:
+                pending_tasks = await db.getAnimeResumeTasks()
+                for pending in pending_tasks:
+                    if ani_cache.get("global_pause") or await db.get_mode() != "anime":
+                        break
+                    task_name = pending.get("name")
+                    task_url = pending.get("torrent_url")
+                    if not task_name or not task_url:
+                        continue
+                    try:
+                        await rep.report(
+                            f"Automatically resuming unfinished episode: {task_name}",
+                            "info"
+                        )
+                        await get_animes(
+                            task_name,
+                            task_url,
+                            destination_channel=pending.get("destination_channel")
+                        )
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as resume_error:
+                        await rep.report(
+                            f"Automatic recovery will retry {task_name}: {resume_error}",
+                            "warning"
+                        )
+            except asyncio.CancelledError:
+                raise
+            except Exception as resume_scan_error:
+                await rep.report(
+                    f"Could not read automatic recovery queue; next scan will retry: {resume_scan_error}",
+                    "error"
+                )
+
+            # The daily SubsPlease schedule remains the allow-list for discovering
+            # new releases. Saved pending episodes above are not limited to today's
+            # schedule and recover even after the episode disappears from RSS.
             schedule_items = await fetch_today_schedule()
             scheduled_titles = set()
             scheduled_episodes = {}
@@ -1788,8 +1826,8 @@ async def fetch_animes():
                 if ani_cache.get("global_pause") or await db.get_mode() != "anime":
                     break
                 await rep.report(
-                    f"Today's scheduled release selected: {title}. "
-                    f"Unscheduled, dual-audio, and older releases remain blocked.",
+                    f"Scheduled release selected: {title}. "
+                    f"Dual-audio releases remain manual-only.",
                     "info"
                 )
                 try:
