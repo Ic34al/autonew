@@ -2718,6 +2718,42 @@ async def start_msg(client, message):
     def wrap_blockquote(text):
         return "\n".join([f"<blockquote><b>{line}</b></blockquote>" for line in text.splitlines() if line.strip()])
 
+    if len(arg) == 2 and arg[0] == 'getlist':
+        try:
+            scaled_ids = [int(value) for value in arg[1].split(",") if value]
+            if not scaled_ids or len(scaled_ids) > 200:
+                raise ValueError("Invalid file list")
+            file_ids = [int(value / abs(int(Var.FILE_STORE))) for value in scaled_ids]
+        except Exception:
+            return await editMessage(temp, "<blockquote><b>Batch file link is invalid.</b></blockquote>")
+
+        copied = 0
+        for file_id in file_ids:
+            try:
+                stored_message = await client.get_messages(
+                    Var.FILE_STORE, message_ids=file_id
+                )
+                if not stored_message or getattr(stored_message, "empty", False):
+                    continue
+                await stored_message.copy(chat_id=message.chat.id)
+                copied += 1
+            except Exception as copy_error:
+                await rep.report(
+                    f"Batch file delivery failed for storage message {file_id}: {copy_error}",
+                    "warning",
+                    log=False,
+                )
+        if hasattr(temp, "delete"):
+            await temp.delete()
+        if copied == 0:
+            return await message.reply("<blockquote><b>No files were available in this batch.</b></blockquote>")
+        if copied < len(file_ids):
+            await message.reply(
+                f"<blockquote><b>Batch delivered: {copied}/{len(file_ids)} files. "
+                "Some storage messages were unavailable.</b></blockquote>"
+            )
+        return
+
     if len(arg) == 3 and arg[0] == 'get':
         try:
             first = int(int(arg[1]) / abs(int(Var.FILE_STORE)))
