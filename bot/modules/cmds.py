@@ -2718,6 +2718,60 @@ async def start_msg(client, message):
     def wrap_blockquote(text):
         return "\n".join([f"<blockquote><b>{line}</b></blockquote>" for line in text.splitlines() if line.strip()])
 
+    if len(arg) == 2 and arg[0] == 'getbatch':
+        token = arg[1]
+        if not re.fullmatch(r"[a-f0-9]{24}", token):
+            return await editMessage(temp, "<blockquote><b>Batch file link is invalid.</b></blockquote>")
+        file_ids = await db.get_batch_file_link(token)
+        if not file_ids or len(file_ids) > 200:
+            return await editMessage(temp, "<blockquote><b>Batch files are unavailable.</b></blockquote>")
+
+        copied = 0
+        sent_messages = []
+        for file_id in file_ids:
+            try:
+                stored_message = await client.get_messages(
+                    Var.FILE_STORE, message_ids=int(file_id)
+                )
+                if not stored_message or getattr(stored_message, "empty", False):
+                    continue
+                delivered = await stored_message.copy(chat_id=message.chat.id)
+                copied += 1
+                if delivered and Var.AUTO_DEL:
+                    sent_messages.append(delivered)
+            except Exception as copy_error:
+                await rep.report(
+                    f"Batch file delivery failed for storage message {file_id}: {copy_error}",
+                    "warning",
+                    log=False,
+                )
+        if hasattr(temp, "delete"):
+            await temp.delete()
+        if copied == 0:
+            return await message.reply("<blockquote><b>No files were available in this batch.</b></blockquote>")
+        if copied < len(file_ids):
+            await message.reply(
+                f"<blockquote><b>Batch delivered: {copied}/{len(file_ids)} files. "
+                "Some storage messages were unavailable.</b></blockquote>"
+            )
+        if sent_messages and Var.AUTO_DEL:
+            minutes = Var.DEL_TIMER // 60
+            await sendMessage(
+                message,
+                f"<blockquote><b>⚠️ These batch files will be deleted automatically in {minutes} minutes. Forward them to keep them.</b></blockquote>"
+            )
+
+            async def auto_delete_batch(messages, timer):
+                await asleep(timer)
+                for delivered_message in messages:
+                    try:
+                        await delivered_message.delete()
+                    except Exception:
+                        pass
+
+            bot_loop.create_task(auto_delete_batch(sent_messages, Var.DEL_TIMER))
+        return
+
     if len(arg) == 2 and arg[0] == 'getlist':
         try:
             scaled_ids = [int(value) for value in arg[1].split(",") if value]
