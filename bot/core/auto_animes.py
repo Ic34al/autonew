@@ -214,7 +214,7 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         f"<blockquote>{bold('≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ sᴜʙᴛɪᴛʟᴇs ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.')}</blockquote>"
     )
 
-async def process_batch_anime(anime_name, torrent_url, audio, destination_channel=None, send_completion_sticker=True):
+async def process_batch_anime(anime_name, torrent_url, audio, destination_channel=None, send_completion_sticker=True, send_main_announcement=True):
     import re
     import time
     import os
@@ -364,8 +364,9 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
         batch_markup = InlineKeyboardMarkup([batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)])
         if channel_to_use != Var.MAIN_CHANNEL:
             batch_post = await bot.send_photo(channel_to_use, photo=batch_photo, caption=caption, reply_markup=batch_markup)
-            main_markup = await build_anime_watch_markup(channel_to_use)
-            await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=main_markup)
+            if send_main_announcement:
+                main_markup = await build_anime_watch_markup(channel_to_use)
+                await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=main_markup)
         else:
             batch_post = await bot.send_photo(Var.MAIN_CHANNEL, photo=batch_photo, caption=caption, reply_markup=batch_markup)
         if batch_post and send_completion_sticker:
