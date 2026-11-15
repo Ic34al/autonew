@@ -369,9 +369,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     buttons = []
     for quality in quality_order:
         upload_name = await info.get_upname(quality)
+        quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
+        os.makedirs("encode", exist_ok=True)
+        shutil.copy2(source, quality_source)
         encoded_path = await FFEncoder(
             await bot.send_message(Var.LOG_CHANNEL, f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"),
-            source, upload_name, quality
+            quality_source, upload_name, quality
         ).start_encode()
         if not encoded_path or not os.path.exists(encoded_path):
             raise RuntimeError(f"Encoding failed for S{season_number}E{episode_number} at {quality}.")
@@ -619,19 +622,8 @@ async def uploadchannel_callbacks(client, callback):
                         archive_id, season_index, destination_id
                     )
                     previous_status = (previous or {}).get("status")
-                    if previous_status == "complete":
-                        await rep.report(
-                            f"Archive already completed; skipping duplicate: {selected_title} / Season {season_index}.",
-                            "info",
-                            log=False,
-                        )
-                        continue
-                    if previous_status == "in_progress":
-                        raise RuntimeError(
-                            f"Season {season_index} of {selected_title} has an unfinished previous batch run. "
-                            "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
-                        )
-
+                    # Resume safely from the channel history; a stale DB status must not
+                    # suppress uploads when the destination channel is actually empty.
                     # Check the destination channel's history; existing episodes are skipped.
                     existing_episodes = set()
                     async for channel_message in bot.get_chat_history(destination_id, limit=500):
@@ -655,7 +647,7 @@ async def uploadchannel_callbacks(client, callback):
                         f"<b>Episodes:</b> {_escape(episode_total)}\n"
                         f"<b>Format:</b> {_escape(season_format)}\n"
                         f"<b>Status:</b> {_escape(season_status)}\n"
-                        f"<b>Quality:</b> 720p"
+                        f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
                     )
                     info_message = await bot.send_message(
                         chat_id=destination_id,
@@ -667,15 +659,6 @@ async def uploadchannel_callbacks(client, callback):
                             f"Could not publish Season {season_index} information for {selected_title}; "
                             "the season batch was not started."
                         )
-                    sticker_ok = await send_sticker_to_channel(
-                        destination_id, getattr(Var, "STICKER_ID", None)
-                    )
-                    if not sticker_ok:
-                        raise RuntimeError(
-                            f"Season {season_index} sticker failed for {selected_title}; "
-                            "the season batch was not started."
-                        )
-
                     sticker_ok = await send_sticker_to_channel(
                         destination_id, getattr(Var, "STICKER_ID", None)
                     )
