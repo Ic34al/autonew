@@ -214,7 +214,7 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         f"<blockquote>{bold('≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ sᴜʙᴛɪᴛʟᴇs ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.')}</blockquote>"
     )
 
-async def process_batch_anime(anime_name, torrent_url, audio):
+async def process_batch_anime(anime_name, torrent_url, audio, destination_channel=None):
     import re
     import time
     import os
@@ -242,7 +242,11 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     else:
         poster_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
 
-    channel_to_use = await get_or_create_anime_channel(anime_name, aniInfo)
+    channel_to_use = (
+        int(destination_channel)
+        if destination_channel is not None
+        else await get_or_create_anime_channel(anime_name, aniInfo)
+    )
 
     channel_valid = False
     for attempt in range(3):
@@ -251,6 +255,11 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             break
         await asyncio.sleep(2)
     if not channel_valid:
+        if destination_channel is not None:
+            raise RuntimeError(
+                f"Selected archive destination {channel_to_use} is inaccessible; "
+                "batch upload stopped instead of falling back to Main Channel."
+            )
         await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
         channel_to_use = Var.MAIN_CHANNEL
 
@@ -264,7 +273,18 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     episode_count = len(video_files)
     if not video_files:
         await rep.report(f"No video files found in batch for {anime_name}", "error")
-        return
+        return False
+    expected_episodes = aniInfo.adata.get("episodes")
+    if expected_episodes:
+        try:
+            expected_episodes = int(expected_episodes)
+        except (TypeError, ValueError):
+            expected_episodes = None
+        if expected_episodes and episode_count != expected_episodes:
+            raise RuntimeError(
+                f"Season pack for {anime_name} contains {episode_count} video(s), "
+                f"but AniList lists {expected_episodes} episodes. Refusing to publish an incomplete range."
+            )
 
     aniInfo.pdata["audio_type"] = audio
     aniInfo.pdata["quality_label"] = "720p"
@@ -321,12 +341,19 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             except Exception:
                 pass
 
+        if len(qual_msg_ids) != episode_count:
+            raise RuntimeError(
+                f"720p archive upload incomplete for {anime_name}: "
+                f"{len(qual_msg_ids)}/{episode_count} episodes reached FILE_STORE. "
+                "No range button or channel post was published."
+            )
         if qual_msg_ids:
-            first_id = min(qual_msg_ids)
-            last_id = max(qual_msg_ids)
-            batch_string = f"get-{first_id * abs(Var.FILE_STORE)}-{last_id * abs(Var.FILE_STORE)}"
+            batch_string = "getlist-" + ",".join(
+                str(int(message_id) * abs(Var.FILE_STORE))
+                for message_id in qual_msg_ids
+            )
             batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
-            btn_text = f"Download Now Ep 1 to {episode_count}"
+            btn_text = f"• Download Ep 1 To {episode_count} Click Here •"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
             if batch_buttons:
                 btns = [batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]
@@ -351,6 +378,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
         logging.info(f"[CLEANUP] Removing batch_dir: {batch_dir}")
         shutil.rmtree(batch_dir, ignore_errors=True)
     await rep.report(f"Batch processing done and cleaned for {anime_name}", "info")
+    return bool(batch_buttons)
 
 def download_image(url, filename):
     try:
