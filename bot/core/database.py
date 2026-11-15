@@ -432,6 +432,44 @@ class MongoDB:
             {"_id": key}, {"$set": {"anime_name": key, "channel_id": int(channel_id), "enabled": True}}, upsert=True
         )
 
+    async def set_batch_file_link(self, token: str, message_ids):
+        clean_ids = [int(message_id) for message_id in message_ids]
+        await self.__db.batch_file_links.update_one(
+            {"_id": str(token)},
+            {"$set": {"message_ids": clean_ids, "updated_at": datetime.datetime.utcnow()}},
+            upsert=True,
+        )
+
+    async def get_batch_file_link(self, token: str):
+        record = await self.__db.batch_file_links.find_one({"_id": str(token)})
+        return (record or {}).get("message_ids", [])
+
+    async def get_anime_archive_batch(self, anime_id: int, season_number: int, channel_id: int):
+        key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
+        return await self.__db.anime_archive_batches.find_one({"_id": key})
+
+    async def set_anime_archive_batch(
+        self, anime_id: int, season_number: int, channel_id: int,
+        status: str, torrent_url: str = "", release_title: str = "",
+    ):
+        if status not in ("in_progress", "complete", "failed"):
+            raise ValueError("Invalid archive batch status")
+        key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        await self.__db.anime_archive_batches.update_one(
+            {"_id": key},
+            {"$set": {
+                "anime_id": int(anime_id),
+                "season_number": int(season_number),
+                "channel_id": int(channel_id),
+                "status": status,
+                "torrent_url": str(torrent_url or ""),
+                "release_title": str(release_title or ""),
+                "updated_at": now,
+            }, "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+
     async def get_selected_anime_channel(self, anime_name: str):
         key = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
         doc = await self.__db.selected_anime_channels.find_one({"_id": key, "enabled": True})

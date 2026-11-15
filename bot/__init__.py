@@ -151,6 +151,7 @@ class Var:
         (
             "<b><blockquote>Anime Management</blockquote>\n"
             "<blockquote>• /addanime - Map anime to channel\n"
+            "• /uploadchannel - Create channels and backfill previous seasons\n"
             "• /delanime - Remove anime mapping\n"
             "• /delallanimes - Remove all anime mapping\n"
             "• /listanimes - List anime channels\n"
