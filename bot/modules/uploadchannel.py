@@ -261,11 +261,11 @@ async def uploadchannel_callbacks(client, callback):
             # when asHtml=false; normalize them before escaping for Telegram HTML.
             raw_synopsis = str(media.get("description") or "Synopsis unavailable.")
             raw_synopsis = re.sub(r"(?i)<br\s*/?>", "\n\n", raw_synopsis)
-            raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\s*>", "\\n\\n", raw_synopsis)
+            raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\s*>", "\n\n", raw_synopsis)
             synopsis = re.sub(r"<[^>]+>", "", raw_synopsis)
             synopsis = html.unescape(synopsis)
             synopsis = re.sub(r"[ \t]+", " ", synopsis)
-            synopsis = re.sub(r"\n{3,}", "\\n\\n", synopsis).strip()
+            synopsis = re.sub(r"\n{3,}", "\n\n", synopsis).strip()
             titles = media.get("title") or {}
             english_title = titles.get("english") or title
             romaji_title = titles.get("romaji")
