@@ -13,7 +13,7 @@ import httpx
 from pyrogram import filters
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivileges
 
-from bot import bot, Var
+from bot import bot, Var, LOGS
 from bot.core.database import db
 from bot.core.auto_animes import send_sticker_to_channel
 from bot.core.reporter import rep
@@ -21,6 +21,7 @@ from bot.core.reporter import rep
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
+LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
 query ($page: Int, $perPage: Int) {
