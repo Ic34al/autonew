@@ -203,32 +203,38 @@ async def uploadchannel_callbacks(client, callback):
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
-            # Reuse an existing mapping instead of creating duplicate channels.
+            # Reuse a persisted channel mapping where possible. Avoid scanning
+            # every account dialog: a stale channel can make get_dialogs raise
+            # CHANNEL_INVALID and abort the entire channel-creation workflow.
+            chat = None
             existing_channel = await db.get_anime_channel(title)
             if existing_channel:
                 try:
-                    existing_chat = await user_client.get_chat(int(existing_channel))
-                    created.append((title + " (already mapped)", existing_chat.id, True))
-                    continue
-                except Exception:
-                    pass  # Stale mapping: replace it with a fresh channel.
+                    chat = await user_client.get_chat(int(existing_channel))
+                except Exception as lookup_error:
+                    await rep.report(
+                        f"Stored channel mapping for {title} is stale ({lookup_error}); creating a replacement.",
+                        "warning",
+                    )
+                    await db.remove_anime_channel_mapping(title, existing_channel)
 
-            # A previous run may have created the channel but failed while
-            # adding the bot. Reuse an exact-title channel owned by this session.
-            chat = None
-            async for dialog in user_client.get_dialogs():
-                candidate = dialog.chat
-                if (
-                    getattr(candidate, "title", None)
-                    and candidate.title.casefold() == title.casefold()
-                    and str(getattr(candidate, "type", "")).lower().endswith("channel")
-                ):
-                    chat = candidate
-                    break
             if chat is None:
                 chat = await user_client.create_channel(
                     title, f"Official episode channel for {title}"
                 )
+
+            # Save the mapping immediately. A retry can then recover this
+            # channel even if bot promotion fails after channel creation.
+            aliases = media.get("title") or {}
+            names = []
+            for key in ("english", "romaji", "native"):
+                value = aliases.get(key)
+                if value and value not in names:
+                    names.append(value)
+            names.append(title)
+            for name in dict.fromkeys(names):
+                await db.add_anime_channel_mapping(name, chat.id)
+            await db.set_anime_channel_selected(title, chat.id)
 
             # Telegram does not allow bots to be ordinary channel members.
             # A bot must be promoted directly by the channel creator/admin.
@@ -255,17 +261,6 @@ async def uploadchannel_callbacks(client, callback):
                         can_pin_messages=True,
                     ),
                 )
-            aliases = media.get("title") or {}
-            names = []
-            for key in ("english", "romaji", "native"):
-                value = aliases.get(key)
-                if value and value not in names:
-                    names.append(value)
-            names.extend([title])
-            for name in dict.fromkeys(names):
-                await db.add_anime_channel_mapping(name, chat.id)
-            await db.set_anime_channel_selected(title, chat.id)
-
             start = media.get("startDate") or {}
             end = media.get("endDate") or {}
             studios = (media.get("studios") or {}).get("nodes") or []
