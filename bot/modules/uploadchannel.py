@@ -501,6 +501,7 @@ async def uploadchannel_callbacks(client, callback):
             api_hash=Var.API_HASH,
             session_string=Var.USER_SESSION,
             in_memory=True,
+            parse_mode=ParseMode.HTML,
         )
         await user_client.start()
         # Resolve the bot through its public username in the USER session.
@@ -540,21 +541,23 @@ async def uploadchannel_callbacks(client, callback):
             reused = False
             if mapped_id:
                 wanted_id = int(mapped_id)
-                # Load the saved channel peer from the USER_SESSION dialog cache.
-                async for dialog in user_client.get_dialogs():
-                    if int(dialog.chat.id) == wanted_id:
-                        chat = dialog.chat
-                        break
-                if chat is None:
-                    try:
-                        chat = await user_client.get_chat(wanted_id)
-                    except Exception:
-                        chat = None
-                if chat is None:
+                # Resolve an existing channel through the bot session. The bot is
+                # already an admin in channels created by this workflow, and its
+                # peer cache is authoritative for the channel it posts into.
+                # Never iterate USER_SESSION dialogs: one stale peer can make
+                # channels.GetChannels fail with CHANNEL_INVALID and abort all titles.
+                try:
+                    chat = await bot.get_chat(wanted_id)
+                except Exception as resolve_error:
                     raise RuntimeError(
-                        f"A channel mapping already exists for '{title}' ({wanted_id}), "
-                        "but USER_SESSION cannot access it. No duplicate channel was created. "
-                        "Check that this account still has access to that channel."
+                        f"Saved channel mapping for '{title}' ({wanted_id}) cannot be opened "
+                        f"by the bot session: {type(resolve_error).__name__}: {resolve_error}. "
+                        "Check that the bot is still an administrator in that channel."
+                    ) from resolve_error
+                if not chat or int(chat.id) != wanted_id:
+                    raise RuntimeError(
+                        f"Saved channel mapping for '{title}' points to {wanted_id}, "
+                        "but Telegram returned a different channel. No duplicate was created."
                     )
                 reused = True
             else:
@@ -567,18 +570,26 @@ async def uploadchannel_callbacks(client, callback):
                 await db.add_anime_channel_mapping(name, chat.id)
             await db.set_anime_channel_selected(title, chat.id)
 
-            # Telegram does not allow bots to be ordinary channel members.
-            # A bot must be promoted directly by the channel creator/admin.
-            # Calling promote_chat_member performs channels.editAdmin; do NOT
-            # call add_chat_members (channels.inviteToChannel), which returns
-            # USER_BOT for bot accounts.
-            try:
-                current_member = await user_client.get_chat_member(chat.id, bot_user.id)
-                current_status = str(getattr(current_member, "status", "")).lower()
-            except Exception:
-                current_status = ""
-
-            if not any(role in current_status for role in ("administrator", "owner", "creator")):
+            # Existing channels must already have the bot as admin. Verify with
+            # the bot session; do not ask USER_SESSION to resolve an old peer.
+            if reused:
+                try:
+                    current_member = await bot.get_chat_member(chat.id, bot_user.id)
+                    current_status = str(getattr(current_member, "status", "")).lower()
+                except Exception as member_error:
+                    raise RuntimeError(
+                        f"Bot cannot verify its membership in '{title}' ({chat.id}): "
+                        f"{type(member_error).__name__}: {member_error}. "
+                        "Add the bot as channel administrator, then retry."
+                    ) from member_error
+                if not any(role in current_status for role in ("administrator", "owner", "creator")):
+                    raise RuntimeError(
+                        f"Bot is not an administrator in '{title}' ({chat.id}). "
+                        "Promote the bot in that channel, then retry /uploadchannel."
+                    )
+            else:
+                # For a newly created channel, the user session is its creator and
+                # can promote the bot directly before episode posting starts.
                 await user_client.promote_chat_member(
                     chat.id,
                     bot_user.id,
