@@ -2723,7 +2723,7 @@ async def start_msg(client, message):
             scaled_ids = [int(value) for value in arg[1].split(",") if value]
             if not scaled_ids or len(scaled_ids) > 200:
                 raise ValueError("Invalid file list")
-            file_ids = [int(value / abs(int(Var.FILE_STORE))) for value in scaled_ids]
+            file_ids = [int(value) // abs(int(Var.FILE_STORE)) for value in scaled_ids]
         except Exception:
             return await editMessage(temp, "<blockquote><b>Batch file link is invalid.</b></blockquote>")
 
