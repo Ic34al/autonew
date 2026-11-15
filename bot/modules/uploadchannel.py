@@ -1,8 +1,8 @@
-"""Interactive automatic Telegram channel creation for selected currently-airing anime.
+"""Interactive channel creation and serial completed-season RSS backfill.
 
-This module deliberately reuses the existing USER_SESSION, AniList metadata,
-anime-channel mapping collection, and sticker helper. Episode ingestion remains
-owned by the existing scheduler/uploader pipeline.
+This module reuses USER_SESSION, AniList relations, persistent anime-channel
+mappings, the configured RSS sources, and the existing batch uploader. The
+currently releasing season remains owned by the normal scheduled uploader.
 """
 import asyncio
 import html
