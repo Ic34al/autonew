@@ -447,92 +447,8 @@ async def uploadchannel_callbacks(client, callback):
                         can_pin_messages=True,
                     ),
                 )
-            start = media.get("startDate") or {}
-            end = media.get("endDate") or {}
-            studios = (media.get("studios") or {}).get("nodes") or []
-
-            # Keep the expandable synopsis format unchanged and restore all metadata.
-            raw_synopsis = str(media.get("description") or "Synopsis unavailable.")
-            raw_synopsis = re.sub(r"(?i)<br\s*/?>", "\n\n", raw_synopsis)
-            raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\s*>", "\n\n", raw_synopsis)
-            synopsis = re.sub(r"<[^>]+>", "", raw_synopsis)
-            synopsis = html.unescape(synopsis)
-            synopsis = re.sub(r"[ \t]+", " ", synopsis)
-            synopsis = re.sub(r"\n{3,}", "\n\n", synopsis).strip()
-            titles = media.get("title") or {}
-            english_title = titles.get("english") or title
-            romaji_title = titles.get("romaji")
-            title_line = (
-                f"❝ <b>{_escape(english_title)}</b> | <i>{_escape(romaji_title)}</i> ❞"
-                if romaji_title and romaji_title.casefold() != english_title.casefold()
-                else f"❝ <b>{_escape(english_title)}</b> ❞"
-            )
-            score = media.get("averageScore")
-            first_aired = "-".join(
-                str(start.get(key, "")).zfill(2) for key in ("year", "month", "day")
-            ) if start.get("year") else "N/A"
-            last_aired = "-".join(
-                str(end.get(key, "")).zfill(2) for key in ("year", "month", "day")
-            ) if end.get("year") else "Ongoing"
-            studios_text = ", ".join(
-                studio.get("name", "") for studio in studios if studio.get("name")
-            ) or "N/A"
-            metadata_text = (
-                f"<b>Genres:</b> {_escape(', '.join(media.get('genres') or []) or 'N/A')}\n"
-                f"<b>Type:</b> {_escape(media.get('format') or media.get('type') or 'N/A')}\n"
-                f"<b>Average Rating:</b> {_escape(f'{score / 10:.1f}/10' if score else 'N/A')}\n"
-                f"<b>Status:</b> {_escape(media.get('status') or 'N/A')}\n"
-                f"<b>First aired:</b> {_escape(first_aired)}\n"
-                f"<b>Last aired:</b> {_escape(last_aired)}\n"
-                f"<b>Runtime:</b> {_escape(str(media.get('duration') or 'N/A'))} minutes\n"
-                f"<b>No. of episodes:</b> {_escape(media.get('episodes') or 'N/A')}\n"
-                f"<b>Studio:</b> {_escape(studios_text)}"
-            )
-            # Telegram photo captions are limited to 1024 characters.
-            # Keep the complete metadata list and expandable synopsis styling,
-            # shortening only the synopsis text if necessary to fit one message.
-            caption_synopsis = synopsis
-            details = ""
-            while True:
-                details = (
-                    f"<blockquote>{title_line}</blockquote>\n\n"
-                    f"{metadata_text}\n\n"
-                    f"<blockquote expandable>▸ <b>Synopsis :</b> <i>{_escape(caption_synopsis)}</i></blockquote>"
-                )
-                if len(details) <= 980 or len(caption_synopsis) <= 100:
-                    break
-                caption_synopsis = caption_synopsis[:max(100, len(caption_synopsis) - 40)].rsplit(" ", 1)[0].rstrip() + "…"
-
-            # Generate the reference-matched split-screen ANIME SOUL thumbnail.
-            image_url = (
-                media.get("bannerImage")
-                or (media.get("coverImage") or {}).get("extraLarge")
-                or (media.get("coverImage") or {}).get("large")
-            )
-            from bot.core.anime_thumbnail import create_anime_thumbnail
-            thumbnail_path = await create_anime_thumbnail(
-                image_url, title, None,
-                output_name=f"channel_{media.get('id') or chat.id}.jpg",
-                metadata=media,
-            )
-
-            # Photo and caption are sent together as ONE Telegram message.
-            photo_source = thumbnail_path or image_url
-            if photo_source:
-                await user_client.send_photo(
-                    chat.id,
-                    photo_source,
-                    caption=details,
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await user_client.send_message(
-                    chat.id, details, disable_web_page_preview=True
-                )
-            sticker_ok = await send_sticker_to_channel(
-                chat.id, getattr(Var, "STICKER_ID", None), client=user_client
-            )
-            created.append((title, chat.id, sticker_ok, reused))
+            # Each archive season gets its own info -> sticker -> episode-batch sequence.
+            created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
 
@@ -581,6 +497,40 @@ async def uploadchannel_callbacks(client, callback):
                             "The next selected channel was not started."
                         )
                     pack_title = str(pack["title"])
+
+                    # Season information must be visible before the sticker,
+                    # and the sticker must be confirmed before batch processing.
+                    season_year = prequel.get("seasonYear") or "N/A"
+                    episode_total = prequel.get("episodes") or "Unknown"
+                    season_format = prequel.get("format") or "TV"
+                    season_status = prequel.get("status") or "N/A"
+                    season_info = (
+                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\\n"
+                        f"<b>Season title:</b> {_escape(season_title)}\\n"
+                        f"<b>Year:</b> {_escape(season_year)}\\n"
+                        f"<b>Episodes:</b> {_escape(episode_total)}\\n"
+                        f"<b>Format:</b> {_escape(season_format)}\\n"
+                        f"<b>Status:</b> {_escape(season_status)}\\n"
+                        f"<b>Quality:</b> 720p"
+                    )
+                    info_message = await bot.send_message(
+                        chat_id=destination_id,
+                        text=season_info,
+                        disable_web_page_preview=True,
+                    )
+                    if not info_message:
+                        raise RuntimeError(
+                            f"Could not publish Season {season_index} information for {selected_title}; "
+                            "the season batch was not started."
+                        )
+                    sticker_ok = await send_sticker_to_channel(
+                        destination_id, getattr(Var, "STICKER_ID", None)
+                    )
+                    if not sticker_ok:
+                        raise RuntimeError(
+                            f"Season {season_index} sticker failed for {selected_title}; "
+                            "the season batch was not started."
+                        )
 
                     audio = (
                         "Dual" if re.search(r"(?i)\bdual\b", pack_title)
