@@ -188,7 +188,18 @@ async def uploadchannel_callbacks(client, callback):
             in_memory=True,
         )
         await user_client.start()
-        bot_me = await bot.get_me()
+        # Resolve the bot through its public username in the USER session.
+        # A bot-session numeric ID is not necessarily an input peer known to this
+        # separate MTProto session and can raise PEER_ID_INVALID.
+        bot_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
+        if not bot_username:
+            bot_username = (await bot.get_me()).username or ""
+        if not bot_username:
+            raise RuntimeError("BOT_USERNAME is missing; set the public bot username in Heroku config.")
+        bot_user = await user_client.get_users(bot_username)
+        if not bot_user or not getattr(bot_user, "id", None):
+            raise RuntimeError(f"Could not resolve public bot username @{bot_username} in USER_SESSION.")
+
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
@@ -203,10 +214,10 @@ async def uploadchannel_callbacks(client, callback):
                     pass  # Stale mapping: replace it with a fresh channel.
 
             chat = await user_client.create_channel(title, f"Official episode channel for {title}")
-            await user_client.add_chat_members(chat.id, bot_me.id)
+            await user_client.add_chat_members(chat.id, bot_user.id)
             await user_client.promote_chat_member(
                 chat.id,
-                bot_me.id,
+                bot_user.id,
                 privileges=ChatPrivileges(
                     can_manage_chat=True,
                     can_post_messages=True,
