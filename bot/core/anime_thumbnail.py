@@ -95,6 +95,55 @@ def wrap_text(draw, text, font, max_width, max_lines=8):
     return lines
 
 
+def fit_wrapped_title(draw, text, max_width, max_lines=4, start_size=57, min_size=24):
+    """Choose the largest readable font that fits the complete title."""
+    words = clean_text(text).split()
+    if not words:
+        words = ["Unknown Anime"]
+
+    for size in range(start_size, min_size - 1, -1):
+        font = get_font(size, True)
+        lines = []
+        current = ""
+        valid = True
+        for word in words:
+            candidate = f"{current} {word}".strip()
+            if draw.textbbox((0, 0), candidate, font=font)[2] <= max_width:
+                current = candidate
+                continue
+            if current:
+                lines.append(current)
+                current = word
+            else:
+                # Split an unusually long single word rather than clipping it.
+                piece = ""
+                for char in word:
+                    test = piece + char
+                    if draw.textbbox((0, 0), test, font=font)[2] <= max_width:
+                        piece = test
+                    else:
+                        if not piece:
+                            valid = False
+                            break
+                        lines.append(piece + "-")
+                        piece = char
+                current = piece
+            if not valid or len(lines) >= max_lines:
+                valid = False
+                break
+        if valid and current:
+            lines.append(current)
+        if valid and len(lines) <= max_lines and all(
+            draw.textbbox((0, 0), line, font=font)[2] <= max_width for line in lines
+        ):
+            return font, lines
+
+    # Extreme fallback: readable minimum size, still wrap rather than clip.
+    font = get_font(min_size, True)
+    lines = wrap_text(draw, clean_text(text), font, max_width, max_lines=max_lines)
+    return font, lines
+
+
 async def download_image(session, url):
     if not isinstance(url, str):
         return None
@@ -526,23 +575,30 @@ def create_dashboard(
     draw.text((800, 165), f"{season_label}  {year_label}".strip().upper(),
               font=get_font(18, True), fill=(165, 55, 60))
 
-    # Large title, wrapped cleanly to the right panel.
-    title_font = get_font(57, True)
-    title_lines = wrap_text(draw, info["title"], title_font, 740, max_lines=3)
-    title_y = 215
+    # Large title: dynamically shrink and wrap the complete name into its area.
+    title_font, title_lines = fit_wrapped_title(
+        draw, info["title"], 735, max_lines=4, start_size=57, min_size=24
+    )
+    title_size = max(24, getattr(title_font, "size", 57))
+    title_line_height = int(title_size * 1.20)
+    title_y = 205
     for line in title_lines:
         draw.text((800, title_y), line, font=title_font, fill=(20, 20, 25))
-        title_y += 70
-    rule_y = title_y + 6
+        title_y += title_line_height
+    rule_y = title_y + 8
     draw.line((800, rule_y, 1535, rule_y), fill=(135, 135, 145), width=2)
 
-    # Synopsis block, preserving the synopsis itself as the main copy.
-    synopsis_y = rule_y + 40
-    synopsis_font = get_font(23)
-    synopsis_lines = wrap_text(draw, info["synopsis"], synopsis_font, 735, max_lines=7)
+    # Keep synopsis clear of the title; use the remaining space above the buttons.
+    synopsis_y = rule_y + 32
+    synopsis_font = get_font(22)
+    available_synopsis_height = max(108, 650 - synopsis_y)
+    synopsis_max_lines = max(3, min(7, available_synopsis_height // 34))
+    synopsis_lines = wrap_text(
+        draw, info["synopsis"], synopsis_font, 735, max_lines=synopsis_max_lines
+    )
     for line in synopsis_lines:
         draw.text((800, synopsis_y), line, font=synopsis_font, fill=(65, 65, 75))
-        synopsis_y += 36
+        synopsis_y += 34
 
     # Read action and bookmark, styled like the supplied reference.
     button_y = min(max(synopsis_y + 42, 610), 720)
@@ -584,18 +640,25 @@ def create_dashboard(
             draw.ellipse((cx - 19, 853, cx + 19, 891), fill=(215, 125, 20))
         draw.text((cx, 872), label, font=get_font(25, True), fill=WHITE, anchor="mm")
 
-    # Left-side title treatment kept subtle so the artwork remains dominant.
-    left_overlay = Image.new("RGBA", (735, 190), (0, 0, 0, 0))
+    # Left-side title: resize and wrap to preserve the full anime name.
+    left_overlay = Image.new("RGBA", (735, 225), (0, 0, 0, 0))
     overlay_draw = ImageDraw.Draw(left_overlay)
-    for y in range(190):
-        alpha = int(150 * (y / 189))
+    for y in range(225):
+        alpha = int(165 * (y / 224))
         overlay_draw.line((0, y, 735, y), fill=(0, 0, 0, alpha))
-    canvas.paste(left_overlay, (0, HEIGHT - 190), left_overlay)
+    canvas.paste(left_overlay, (0, HEIGHT - 225), left_overlay)
     draw = ImageDraw.Draw(canvas)
-    draw.text((48, HEIGHT - 115), fit_text(draw, info["title"], get_font(31, True), 640),
-              font=get_font(31, True), fill=WHITE)
-    draw.text((50, HEIGHT - 64), f"{season_label}  •  {info['type']}",
-              font=get_font(17, True), fill=(235, 205, 130))
+    left_font, left_lines = fit_wrapped_title(
+        draw, info["title"], 635, max_lines=2, start_size=31, min_size=17
+    )
+    left_size = max(17, getattr(left_font, "size", 31))
+    left_line_height = int(left_size * 1.22)
+    left_y = HEIGHT - 150 - (len(left_lines) - 1) * left_line_height
+    for line in left_lines:
+        draw.text((48, left_y), line, font=left_font, fill=WHITE)
+        left_y += left_line_height
+    draw.text((50, HEIGHT - 54), f"{season_label}  •  {info['type']}",
+              font=get_font(16, True), fill=(235, 205, 130))
 
     canvas.save(
         output_path,
