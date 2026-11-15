@@ -2358,7 +2358,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -2387,7 +2387,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         print(f"get_animes: upload_mode={upload_mode}")
         if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
-            return await process_low_end(name, torrent, destination_channel=destination_channel)
+            return await process_low_end(name, torrent, destination_channel=destination_channel, mapped_channel=mapped_channel)
     except Exception as e:
         await rep.report(f"Error checking upload mode: {str(e)}", "error")
         return
@@ -2419,6 +2419,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # /search or /addtask destinations must be respected.
         if destination_channel is not None:
             channel_to_use = int(destination_channel)
+        elif mapped_channel is not None:
+            channel_to_use = int(mapped_channel)
         else:
             channel_to_use = await get_or_create_anime_channel(name, aniInfo)
 
