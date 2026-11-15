@@ -235,7 +235,7 @@ async def _find_720p_season_pack(media, season_number):
             link = link or getattr(entry, "link", None)
             if not link:
                 continue
-            nyaa_view = re.match(r"^https?://(?:www\\.)?nyaa\\.si/view/(\\d+)(?:[/?#].*)?$", str(link), re.IGNORECASE)
+            nyaa_view = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)(?:[/?#].*)?$", str(link), re.IGNORECASE)
             if nyaa_view:
                 link = f"https://nyaa.si/download/{nyaa_view.group(1)}.torrent"
             title_key = _plain_title(release_title)
