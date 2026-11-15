@@ -207,18 +207,6 @@ async def uploadchannel_callbacks(client, callback):
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
-            # Do not pass a database channel ID to get_chat(). Pyrogram needs
-            # an access_hash for channels, and a bare ID from MongoDB is not
-            # sufficient in a fresh USER_SESSION. That was the source of
-            # CHANNEL_INVALID (channels.GetChannels) on every retry.
-            # Create the channel in this live session and keep its returned
-            # Chat object for all following operations in this run.
-            chat = await user_client.create_channel(
-                title, f"Official episode channel for {title}"
-            )
-
-            # Persist the new ID immediately so the existing uploader's
-            # anime-to-channel routing can see the selected destination.
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
@@ -226,7 +214,45 @@ async def uploadchannel_callbacks(client, callback):
                 if value and value not in names:
                     names.append(value)
             names.append(title)
-            for name in dict.fromkeys(names):
+            names = list(dict.fromkeys(names))
+
+            # Idempotency: check every known title alias before creating a channel.
+            mapped_id = None
+            for name in names:
+                mapped_id = await db.get_anime_channel(name)
+                if not mapped_id:
+                    mapped_id = await db.get_selected_anime_channel(name)
+                if mapped_id:
+                    break
+
+            chat = None
+            reused = False
+            if mapped_id:
+                wanted_id = int(mapped_id)
+                # Load the saved channel peer from the USER_SESSION dialog cache.
+                async for dialog in user_client.get_dialogs():
+                    if int(dialog.chat.id) == wanted_id:
+                        chat = dialog.chat
+                        break
+                if chat is None:
+                    try:
+                        chat = await user_client.get_chat(wanted_id)
+                    except Exception:
+                        chat = None
+                if chat is None:
+                    raise RuntimeError(
+                        f"A channel mapping already exists for '{title}' ({wanted_id}), "
+                        "but USER_SESSION cannot access it. No duplicate channel was created. "
+                        "Check that this account still has access to that channel."
+                    )
+                reused = True
+            else:
+                chat = await user_client.create_channel(
+                    title, f"Official episode channel for {title}"
+                )
+
+            # Refresh all aliases and selected mapping for either reused or new channel.
+            for name in names:
                 await db.add_anime_channel_mapping(name, chat.id)
             await db.set_anime_channel_selected(title, chat.id)
 
