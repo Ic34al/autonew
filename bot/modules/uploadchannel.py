@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from pyrogram import filters
+from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivileges
 
 from bot import bot, Var, LOGS
@@ -19,6 +20,7 @@ from bot.core.database import db
 from bot.core.auto_animes import send_sticker_to_channel
 from bot.core.reporter import rep
 
+# Photo and metadata caption are intentionally sent as one Telegram message.
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
@@ -322,13 +324,22 @@ async def uploadchannel_callbacks(client, callback):
                 f"<b>No. of episodes:</b> {_escape(media.get('episodes') or 'N/A')}\n"
                 f"<b>Studio:</b> {_escape(studios_text)}"
             )
-            details = (
-                f"<blockquote>{title_line}</blockquote>\n\n"
-                f"{metadata_text}\n\n"
-                f"<blockquote expandable>▸ <b>Synopsis :</b> <i>{_escape(synopsis)}</i></blockquote>"
-            )
+            # Telegram photo captions are limited to 1024 characters.
+            # Keep the complete metadata list and expandable synopsis styling,
+            # shortening only the synopsis text if necessary to fit one message.
+            caption_synopsis = synopsis
+            details = ""
+            while True:
+                details = (
+                    f"<blockquote>{title_line}</blockquote>\n\n"
+                    f"{metadata_text}\n\n"
+                    f"<blockquote expandable>▸ <b>Synopsis :</b> <i>{_escape(caption_synopsis)}</i></blockquote>"
+                )
+                if len(details) <= 980 or len(caption_synopsis) <= 100:
+                    break
+                caption_synopsis = caption_synopsis[:max(100, len(caption_synopsis) - 40)].rsplit(" ", 1)[0].rstrip() + "…"
 
-            # Generate the ANIME SOUL landscape dashboard thumbnail for the series.
+            # Generate the reference-matched split-screen ANIME SOUL thumbnail.
             image_url = (
                 media.get("bannerImage")
                 or (media.get("coverImage") or {}).get("extraLarge")
@@ -340,11 +351,20 @@ async def uploadchannel_callbacks(client, callback):
                 output_name=f"channel_{media.get('id') or chat.id}.jpg",
                 metadata=media,
             )
-            if thumbnail_path:
-                await user_client.send_photo(chat.id, thumbnail_path)
-            elif image_url:
-                await user_client.send_photo(chat.id, image_url)
-            await user_client.send_message(chat.id, details, disable_web_page_preview=True)
+
+            # Photo and caption are sent together as ONE Telegram message.
+            photo_source = thumbnail_path or image_url
+            if photo_source:
+                await user_client.send_photo(
+                    chat.id,
+                    photo_source,
+                    caption=details,
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await user_client.send_message(
+                    chat.id, details, disable_web_page_preview=True
+                )
             sticker_ok = await send_sticker_to_channel(
                 chat.id, getattr(Var, "STICKER_ID", None), client=user_client
             )
