@@ -230,14 +230,19 @@ async def uploadchannel_callbacks(client, callback):
                     title, f"Official episode channel for {title}"
                 )
 
-            # Resolve membership first so retries are safe when the bot was
-            # successfully added during an earlier partial attempt.
+            # Telegram does not allow bots to be ordinary channel members.
+            # A bot must be promoted directly by the channel creator/admin.
+            # Calling promote_chat_member performs channels.editAdmin; do NOT
+            # call add_chat_members (channels.inviteToChannel), which returns
+            # USER_BOT for bot accounts.
             try:
-                await user_client.get_chat_member(chat.id, bot_user.id)
+                current_member = await user_client.get_chat_member(chat.id, bot_user.id)
+                current_status = str(getattr(current_member, "status", "")).lower()
             except Exception:
-                await user_client.add_chat_members(chat.id, bot_user.id)
+                current_status = ""
 
-            await user_client.promote_chat_member(
+            if not any(role in current_status for role in ("administrator", "owner", "creator")):
+                await user_client.promote_chat_member(
                 chat.id,
                 bot_user.id,
                 privileges=ChatPrivileges(
@@ -248,8 +253,9 @@ async def uploadchannel_callbacks(client, callback):
                     can_invite_users=True,
                     can_change_info=True,
                     can_pin_messages=True,
+                    can_invite_users=True,
                 ),
-            )
+                )
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
