@@ -348,10 +348,11 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
                 "No range button or channel post was published."
             )
         if qual_msg_ids:
-            batch_string = "getlist-" + ",".join(
-                str(int(message_id) * abs(Var.FILE_STORE))
-                for message_id in qual_msg_ids
-            )
+            batch_token = hashlib.sha256(
+                ",".join(str(int(message_id)) for message_id in qual_msg_ids).encode("utf-8")
+            ).hexdigest()[:24]
+            await db.set_batch_file_link(batch_token, qual_msg_ids)
+            batch_string = f"getbatch-{batch_token}"
             batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
             btn_text = f"• Download Ep 1 To {episode_count} Click Here •"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
