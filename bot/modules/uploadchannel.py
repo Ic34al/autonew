@@ -520,10 +520,34 @@ async def uploadchannel_callbacks(client, callback):
                     )
                     continue
                 pack_title = str(pack["title"])
+                archive_id = int(prequel.get("id") or 0)
+                if not archive_id:
+                    raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
+                previous = await db.get_anime_archive_batch(
+                    archive_id, season_index, destination_id
+                )
+                previous_status = (previous or {}).get("status")
+                if previous_status == "complete":
+                    await rep.report(
+                        f"Archive already completed; skipping duplicate: {selected_title} / Season {season_index}.",
+                        "info",
+                        log=False,
+                    )
+                    continue
+                if previous_status == "in_progress":
+                    raise RuntimeError(
+                        f"Season {season_index} of {selected_title} has an unfinished previous batch run. "
+                        "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
+                    )
+
                 audio = (
                     "Dual" if re.search(r"(?i)\\bdual\\b", pack_title)
                     else "Dub" if re.search(r"(?i)\\b(dub|english)\\b", pack_title)
                     else "Sub"
+                )
+                await db.set_anime_archive_batch(
+                    archive_id, season_index, destination_id, "in_progress",
+                    pack["link"], pack_title,
                 )
                 await rep.report(
                     f"Starting completed-season archive: {selected_title} / Season {season_index} "
@@ -536,10 +560,18 @@ async def uploadchannel_callbacks(client, callback):
                         destination_channel=destination_id,
                     )
                 if not result:
+                    await db.set_anime_archive_batch(
+                        archive_id, season_index, destination_id, "failed",
+                        pack["link"], pack_title,
+                    )
                     raise RuntimeError(
-                        f"720p archive upload did not complete for {season_title}; "
+                        f"720p archive download did not complete for {season_title}; "
                         "the next selected channel was not started."
                     )
+                await db.set_anime_archive_batch(
+                    archive_id, season_index, destination_id, "complete",
+                    pack["link"], pack_title,
+                )
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
