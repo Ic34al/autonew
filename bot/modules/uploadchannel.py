@@ -254,28 +254,33 @@ async def uploadchannel_callbacks(client, callback):
             start = media.get("startDate") or {}
             end = media.get("endDate") or {}
             studios = (media.get("studios") or {}).get("nodes") or []
-            synopsis = " ".join(str(media.get("description") or "Synopsis unavailable.").split())
-            if len(synopsis) > 560:
-                synopsis = synopsis[:557].rsplit(" ", 1)[0] + "..."
-            score = media.get("averageScore")
+            # Match the requested channel post layout: thumbnail first, then
+            # one compact title quote and one expandable synopsis quote.
+            # AniList descriptions sometimes contain literal HTML <br> tags even
+            # when asHtml=false; normalize them before escaping for Telegram HTML.
+            raw_synopsis = str(media.get("description") or "Synopsis unavailable.")
+            raw_synopsis = re.sub(r"(?i)<br\\s*/?>", "\\n\\n", raw_synopsis)
+            raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\\s*>", "\\n\\n", raw_synopsis)
+            synopsis = re.sub(r"<[^>]+>", "", raw_synopsis)
+            synopsis = html.unescape(synopsis)
+            synopsis = re.sub(r"[ \\t]+", " ", synopsis)
+            synopsis = re.sub(r"\\n{3,}", "\\n\\n", synopsis).strip()
+            titles = media.get("title") or {}
+            english_title = titles.get("english") or title
+            romaji_title = titles.get("romaji")
+            title_line = (
+                f"❝ <b>{_escape(english_title)}</b> | <i>{_escape(romaji_title)}</i> ❞"
+                if romaji_title and romaji_title.casefold() != english_title.casefold()
+                else f"❝ <b>{_escape(english_title)}</b> ❞"
+            )
             details = (
-                f"<b>{_escape(title)}</b>\n"
-                f"<b>Genres:</b> {_escape(', '.join(media.get('genres') or []) or 'N/A')}\n"
-                f"<b>Type:</b> {_escape(media.get('format') or media.get('type'))}\n"
-                f"<b>Average Rating:</b> {_escape(f'{score / 10:.1f}/10' if score else 'N/A')}\n"
-                f"<b>Status:</b> {_escape(media.get('status'))}\n"
-                f"<b>First aired:</b> {_escape('-'.join(str(start.get(k, '')).zfill(2) for k in ('year', 'month', 'day')) if start.get('year') else 'N/A')}\n"
-                f"<b>Last aired:</b> {_escape('-'.join(str(end.get(k, '')).zfill(2) for k in ('year', 'month', 'day')) if end.get('year') else 'Ongoing')}\n"
-                f"<b>Runtime:</b> {_escape(str(media.get('duration') or 'N/A'))} minutes\n"
-                f"<b>No. of episodes:</b> {_escape(media.get('episodes') or 'N/A')}\n"
-                f"<b>Studio:</b> {_escape(', '.join(s.get('name', '') for s in studios) or 'N/A')}\n\n"
-                f"<b>Synopsis:</b> <i>{_escape(synopsis)}</i>"
+                f"<blockquote>{title_line}</blockquote>\\n\\n"
+                f"<blockquote expandable>▸ <b>Synopsis :</b> <i>{_escape(synopsis)}</i></blockquote>"
             )
             image_url = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
             if image_url:
-                await user_client.send_photo(chat.id, image_url, caption=details[:1024])
-            else:
-                await user_client.send_message(chat.id, details[:4096], disable_web_page_preview=True)
+                await user_client.send_photo(chat.id, image_url)
+            await user_client.send_message(chat.id, details, disable_web_page_preview=True)
             sticker_ok = await send_sticker_to_channel(
                 chat.id, getattr(Var, "STICKER_ID", None), client=user_client
             )
