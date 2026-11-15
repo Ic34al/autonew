@@ -214,7 +214,7 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         f"<blockquote>{bold('≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ sᴜʙᴛɪᴛʟᴇs ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.')}</blockquote>"
     )
 
-async def process_batch_anime(anime_name, torrent_url, audio):
+async def process_batch_anime(anime_name, torrent_url, audio, destination_channel=None):
     import re
     import time
     import os
@@ -242,7 +242,11 @@ async def process_batch_anime(anime_name, torrent_url, audio):
     else:
         poster_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
 
-    channel_to_use = await get_or_create_anime_channel(anime_name, aniInfo)
+    channel_to_use = (
+        int(destination_channel)
+        if destination_channel is not None
+        else await get_or_create_anime_channel(anime_name, aniInfo)
+    )
 
     channel_valid = False
     for attempt in range(3):
@@ -251,20 +255,25 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             break
         await asyncio.sleep(2)
     if not channel_valid:
+        if destination_channel is not None:
+            raise RuntimeError(
+                f"Selected archive destination {channel_to_use} is inaccessible; "
+                "batch upload stopped instead of falling back to Main Channel."
+            )
         await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
         channel_to_use = Var.MAIN_CHANNEL
 
     dl_path = await TorDownloader(unique_dir).download(torrent_url)
     if not dl_path or not ospath.exists(dl_path):
         await rep.report(f"Batch download failed for {anime_name}", "error")
-        return
+        return False
 
     batch_dir = dl_path if ospath.isdir(dl_path) else unique_dir
     video_files = find_video_files(batch_dir)
     episode_count = len(video_files)
     if not video_files:
         await rep.report(f"No video files found in batch for {anime_name}", "error")
-        return
+        return False
 
     aniInfo.pdata["audio_type"] = audio
     aniInfo.pdata["quality_label"] = "720p"
@@ -326,7 +335,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
             last_id = max(qual_msg_ids)
             batch_string = f"get-{first_id * abs(Var.FILE_STORE)}-{last_id * abs(Var.FILE_STORE)}"
             batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
-            btn_text = f"Download Now Ep 1 to {episode_count}"
+            btn_text = f"• Download Ep 1 To {episode_count} Click Here •"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
             if batch_buttons:
                 btns = [batch_buttons[i:i+2] for i in range(0, len(batch_buttons), 2)]
@@ -351,6 +360,7 @@ async def process_batch_anime(anime_name, torrent_url, audio):
         logging.info(f"[CLEANUP] Removing batch_dir: {batch_dir}")
         shutil.rmtree(batch_dir, ignore_errors=True)
     await rep.report(f"Batch processing done and cleaned for {anime_name}", "info")
+    return True
 
 def download_image(url, filename):
     try:
