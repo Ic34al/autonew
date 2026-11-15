@@ -124,19 +124,20 @@ async def _fetch_currently_airing():
     return result
 
 
+
 def _plain_title(value):
     value = str(value or "").casefold()
-    value = re.sub(r"\\[[^\\]]*\\]|\\([^)]*\\)", " ", value)
-    value = re.sub(r"\\b(?:batch|complete|season pack|full season|720p|1080p|480p|1080|720|480)\\b", " ", value)
-    value = re.sub(r"\\bs\\d{1,2}\\s*[-._ ]*e?\\d{1,3}\\b|\\bseason\\s*\\d+\\b", " ", value)
+    value = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", value)
+    value = re.sub(r"\b(?:batch|complete|season pack|full season|720p|1080p|480p|1080|720|480)\b", " ", value)
+    value = re.sub(r"\bs\d{1,2}\s*[-._ ]*e?\d{1,3}\b|\bseason\s*\d+\b", " ", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return " ".join(value.split())
 
 
 def _season_number_from_release(title):
     patterns = (
-        r"\\bS0*(\\d{1,2})(?:E|\\s*[-._ ]*\\d)",
-        r"\\bSeason\\s*0*(\\d{1,2})\\b",
+        r"\bS0*(\d{1,2})(?:E|\s*[-._ ]*\d)",
+        r"\bSeason\s*0*(\d{1,2})\b",
     )
     for pattern in patterns:
         match = re.search(pattern, str(title or ""), re.IGNORECASE)
@@ -148,6 +149,7 @@ def _season_number_from_release(title):
 def _prequel_seasons(media):
     """Return TV prequel ancestors oldest-first, bounded to two relation levels."""
     found = {}
+
     def walk(parent, depth):
         if depth > 2:
             return
@@ -164,6 +166,7 @@ def _prequel_seasons(media):
                 continue
             found[media_id] = node
             walk(node, depth + 1)
+
     walk(media, 1)
     return sorted(
         found.values(),
@@ -208,14 +211,14 @@ async def _find_720p_season_pack(media, season_number):
                 for alias in aliases
             ):
                 continue
-            # Only a season pack qualifies. Single-episode RSS entries are not
-            # mistaken for a complete archive and cannot create a partial range link.
+            # Only a season pack qualifies; single-episode entries cannot
+            # accidentally create an incomplete range download.
             is_pack = bool(re.search(
-                r"(?i)\\b(batch|complete|full[ ._-]*season|season[ ._-]*pack)\\b|"
-                r"\\b(?:01|1)[ ._-]*(?:-|to)[ ._-]*\\d{1,3}\\b",
+                r"(?i)\b(batch|complete|full[ ._-]*season|season[ ._-]*pack)\b|"
+                r"\b(?:01|1)[ ._-]*(?:-|to)[ ._-]*\d{1,3}\b",
                 release_title,
             ))
-            if not is_pack or not re.search(r"(?i)\\b720p\\b", release_title):
+            if not is_pack or not re.search(r"(?i)\b720p\b", release_title):
                 continue
             release_season = _season_number_from_release(release_title)
             if release_season is None or release_season != int(season_number):
@@ -512,7 +515,7 @@ async def uploadchannel_callbacks(client, callback):
                 if not pack:
                     await rep.report(
                         f"No complete 720p season-pack RSS entry found for {season_title} "
-                        f"(Season {season_index}) of {selected_title}; leaving it queued for a later scan.",
+                        f"(Season {season_index}) of {selected_title}; retry /uploadchannel after the complete 720p pack appears in RSS.",
                         "warning"
                     )
                     continue
