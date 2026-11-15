@@ -6,6 +6,7 @@ owned by the existing scheduler/uploader pipeline.
 """
 import asyncio
 import html
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -259,12 +260,12 @@ async def uploadchannel_callbacks(client, callback):
             # AniList descriptions sometimes contain literal HTML <br> tags even
             # when asHtml=false; normalize them before escaping for Telegram HTML.
             raw_synopsis = str(media.get("description") or "Synopsis unavailable.")
-            raw_synopsis = re.sub(r"(?i)<br\\s*/?>", "\\n\\n", raw_synopsis)
-            raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\\s*>", "\\n\\n", raw_synopsis)
+            raw_synopsis = re.sub(r"(?i)<br\s*/?>", "\n\n", raw_synopsis)
+            raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\s*>", "\\n\\n", raw_synopsis)
             synopsis = re.sub(r"<[^>]+>", "", raw_synopsis)
             synopsis = html.unescape(synopsis)
-            synopsis = re.sub(r"[ \\t]+", " ", synopsis)
-            synopsis = re.sub(r"\\n{3,}", "\\n\\n", synopsis).strip()
+            synopsis = re.sub(r"[ \t]+", " ", synopsis)
+            synopsis = re.sub(r"\n{3,}", "\\n\\n", synopsis).strip()
             titles = media.get("title") or {}
             english_title = titles.get("english") or title
             romaji_title = titles.get("romaji")
@@ -274,7 +275,7 @@ async def uploadchannel_callbacks(client, callback):
                 else f"❝ <b>{_escape(english_title)}</b> ❞"
             )
             details = (
-                f"<blockquote>{title_line}</blockquote>\\n\\n"
+                f"<blockquote>{title_line}</blockquote>\n\n"
                 f"<blockquote expandable>▸ <b>Synopsis :</b> <i>{_escape(synopsis)}</i></blockquote>"
             )
             image_url = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
