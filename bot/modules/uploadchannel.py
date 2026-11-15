@@ -17,7 +17,8 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import send_sticker_to_channel
+from bot.core.auto_animes import send_sticker_to_channel, process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK
+from bot.core.func_utils import getfeeds
 from bot.core.reporter import rep
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
@@ -47,6 +48,32 @@ query ($page: Int, $perPage: Int) {
       endDate { year month day }
       coverImage { extraLarge large }
       studios(isMain: true) { nodes { name } }
+      relations {
+        edges {
+          relationType
+          node {
+            id
+            title { english romaji native }
+            format
+            status
+            episodes
+            seasonYear
+            relations {
+              edges {
+                relationType
+                node {
+                  id
+                  title { english romaji native }
+                  format
+                  status
+                  episodes
+                  seasonYear
+                }
+              }
+            }
+          }
+        }
+      }
       nextAiringEpisode { airingAt episode timeUntilAiring }
     }
   }
@@ -95,6 +122,106 @@ async def _fetch_currently_airing():
         item["_weekday"] = day
         result.append(item)
     return result
+
+
+def _plain_title(value):
+    value = str(value or "").casefold()
+    value = re.sub(r"\\[[^\\]]*\\]|\\([^)]*\\)", " ", value)
+    value = re.sub(r"\\b(?:batch|complete|season pack|full season|720p|1080p|480p|1080|720|480)\\b", " ", value)
+    value = re.sub(r"\\bs\\d{1,2}\\s*[-._ ]*e?\\d{1,3}\\b|\\bseason\\s*\\d+\\b", " ", value)
+    value = re.sub(r"[^a-z0-9]+", " ", value)
+    return " ".join(value.split())
+
+
+def _season_number_from_release(title):
+    patterns = (
+        r"\\bS0*(\\d{1,2})(?:E|\\s*[-._ ]*\\d)",
+        r"\\bSeason\\s*0*(\\d{1,2})\\b",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, str(title or ""), re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    return None
+
+
+def _prequel_seasons(media):
+    """Return TV prequel ancestors oldest-first, bounded to two relation levels."""
+    found = {}
+    def walk(parent, depth):
+        if depth > 2:
+            return
+        relations = (parent.get("relations") or {}).get("edges") or []
+        for edge in relations:
+            if str(edge.get("relationType") or "").upper() != "PREQUEL":
+                continue
+            node = edge.get("node") or {}
+            media_id = node.get("id")
+            if not media_id or media_id in found:
+                continue
+            fmt = str(node.get("format") or "").upper()
+            if fmt not in ("TV", "TV_SHORT", "ONA"):
+                continue
+            found[media_id] = node
+            walk(node, depth + 1)
+    walk(media, 1)
+    return sorted(
+        found.values(),
+        key=lambda item: (
+            int(item.get("seasonYear") or 0),
+            int(item.get("id") or 0),
+        ),
+    )
+
+
+async def _find_720p_season_pack(media, season_number):
+    """Find a clearly labelled complete-season 720p torrent in configured RSS feeds."""
+    titles = media.get("title") or {}
+    aliases = {
+        _plain_title(titles.get(key))
+        for key in ("english", "romaji", "native")
+        if titles.get(key)
+    }
+    aliases.discard("")
+    if not aliases:
+        return None
+
+    quality_feed = (getattr(Var, "RSS_LOW_END", {}) or {}).get("720")
+    feeds = list(dict.fromkeys(
+        url for url in [quality_feed] + list(getattr(Var, "RSS_ITEMS_ANIME", []) or [])
+        if url
+    ))
+    for feed_url in feeds:
+        try:
+            entries = await getfeeds(feed_url)
+        except Exception as exc:
+            await rep.report(f"Archive RSS scan failed for {feed_url}: {exc}", "warning", log=False)
+            continue
+        for entry in entries or []:
+            release_title = str(getattr(entry, "title", "") or "")
+            link = getattr(entry, "link", None)
+            if not link:
+                continue
+            title_key = _plain_title(release_title)
+            if not title_key or not any(
+                alias == title_key or alias in title_key or title_key in alias
+                for alias in aliases
+            ):
+                continue
+            # Only a season pack qualifies. Single-episode RSS entries are not
+            # mistaken for a complete archive and cannot create a partial range link.
+            is_pack = bool(re.search(
+                r"(?i)\\b(batch|complete|full[ ._-]*season|season[ ._-]*pack)\\b|"
+                r"\\b(?:01|1)[ ._-]*(?:-|to)[ ._-]*\\d{1,3}\\b",
+                release_title,
+            ))
+            if not is_pack or not re.search(r"(?i)\\b720p\\b", release_title):
+                continue
+            release_season = _season_number_from_release(release_title)
+            if release_season is None or release_season != int(season_number):
+                continue
+            return {"title": release_title, "link": link}
+    return None
 
 
 def _selection_keyboard(items, selected):
@@ -185,6 +312,7 @@ async def uploadchannel_callbacks(client, callback):
     await callback.message.edit("Creating selected anime channels. Please keep the bot running…")
     user_client = None
     created = []
+    archive_jobs = []
     try:
         user_client = __import__("pyrogram").Client(
             "autonew_channel_creator",
@@ -369,7 +497,46 @@ async def uploadchannel_callbacks(client, callback):
                 chat.id, getattr(Var, "STICKER_ID", None), client=user_client
             )
             created.append((title, chat.id, sticker_ok, reused))
+            archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
+
+        # Process completed prequel seasons serially, one dedicated channel at a time.
+        # The scheduled scanner uses the same lock, so new episodes wait until this
+        # archive queue has finished rather than interleaving storage message IDs.
+        for selected_media, destination_id in archive_jobs:
+            selected_title = _display_title(selected_media)
+            prequels = _prequel_seasons(selected_media)
+            for season_index, prequel in enumerate(prequels, start=1):
+                season_title = _display_title(prequel)
+                pack = await _find_720p_season_pack(prequel, season_index)
+                if not pack:
+                    await rep.report(
+                        f"No complete 720p season-pack RSS entry found for {season_title} "
+                        f"(Season {season_index}) of {selected_title}; leaving it queued for a later scan.",
+                        "warning"
+                    )
+                    continue
+                pack_title = str(pack["title"])
+                audio = (
+                    "Dual" if re.search(r"(?i)\\bdual\\b", pack_title)
+                    else "Dub" if re.search(r"(?i)\\b(dub|english)\\b", pack_title)
+                    else "Sub"
+                )
+                await rep.report(
+                    f"Starting completed-season archive: {selected_title} / Season {season_index} "
+                    f"using the 720p RSS pack in channel {destination_id}.",
+                    "info"
+                )
+                async with AUTO_UPLOAD_PRIORITY_LOCK:
+                    result = await process_batch_anime(
+                        pack_title, pack["link"], audio,
+                        destination_channel=destination_id,
+                    )
+                if not result:
+                    raise RuntimeError(
+                        f"720p archive upload did not complete for {season_title}; "
+                        "the next selected channel was not started."
+                    )
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
