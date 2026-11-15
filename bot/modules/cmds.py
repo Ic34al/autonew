@@ -2728,6 +2728,7 @@ async def start_msg(client, message):
             return await editMessage(temp, "<blockquote><b>Batch file link is invalid.</b></blockquote>")
 
         copied = 0
+        sent_messages = []
         for file_id in file_ids:
             try:
                 stored_message = await client.get_messages(
@@ -2735,8 +2736,10 @@ async def start_msg(client, message):
                 )
                 if not stored_message or getattr(stored_message, "empty", False):
                     continue
-                await stored_message.copy(chat_id=message.chat.id)
+                delivered = await stored_message.copy(chat_id=message.chat.id)
                 copied += 1
+                if delivered and Var.AUTO_DEL:
+                    sent_messages.append(delivered)
             except Exception as copy_error:
                 await rep.report(
                     f"Batch file delivery failed for storage message {file_id}: {copy_error}",
@@ -2752,6 +2755,22 @@ async def start_msg(client, message):
                 f"<blockquote><b>Batch delivered: {copied}/{len(file_ids)} files. "
                 "Some storage messages were unavailable.</b></blockquote>"
             )
+        if sent_messages and Var.AUTO_DEL:
+            minutes = Var.DEL_TIMER // 60
+            await sendMessage(
+                message,
+                f"<blockquote><b>⚠️ These batch files will be deleted automatically in {minutes} minutes. Forward them to keep them.</b></blockquote>"
+            )
+
+            async def auto_delete_batch(messages, timer):
+                await asleep(timer)
+                for delivered_message in messages:
+                    try:
+                        await delivered_message.delete()
+                    except Exception:
+                        pass
+
+            bot_loop.create_task(auto_delete_batch(sent_messages, Var.DEL_TIMER))
         return
 
     if len(arg) == 3 and arg[0] == 'get':
