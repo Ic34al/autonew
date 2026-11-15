@@ -432,6 +432,18 @@ class MongoDB:
             {"_id": key}, {"$set": {"anime_name": key, "channel_id": int(channel_id), "enabled": True}}, upsert=True
         )
 
+    async def set_batch_file_link(self, token: str, message_ids):
+        clean_ids = [int(message_id) for message_id in message_ids]
+        await self.__db.batch_file_links.update_one(
+            {"_id": str(token)},
+            {"$set": {"message_ids": clean_ids, "updated_at": datetime.datetime.utcnow()}},
+            upsert=True,
+        )
+
+    async def get_batch_file_link(self, token: str):
+        record = await self.__db.batch_file_links.find_one({"_id": str(token)})
+        return (record or {}).get("message_ids", [])
+
     async def get_anime_archive_batch(self, anime_id: int, season_number: int, channel_id: int):
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         return await self.__db.anime_archive_batches.find_one({"_id": key})
