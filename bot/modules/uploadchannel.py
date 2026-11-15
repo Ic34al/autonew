@@ -9,6 +9,7 @@ import html
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from urllib.parse import quote_plus
 
 import httpx
 from pyrogram import filters
@@ -189,9 +190,27 @@ async def _find_720p_season_pack(media, season_number):
     if not aliases:
         return None
 
+    # Search Nyaa directly for complete 720p season packs as well as the
+    # bot's configured RSS feeds. The query is title/season-specific; entries
+    # are still strictly validated below before any download starts.
+    search_titles = [
+        titles.get(key) for key in ("english", "romaji", "native") if titles.get(key)
+    ]
+    nyaa_feeds = []
+    for search_title in search_titles:
+        queries = (
+            f'"{search_title}" Season {int(season_number)} 720p Batch',
+            f'"{search_title}" S{int(season_number):02d} 720p Batch',
+            f'"{search_title}" Season {int(season_number)} 720p Complete',
+        )
+        nyaa_feeds.extend(
+            f"https://nyaa.si/?page=rss&q={quote_plus(query)}&c=1_2&f=0"
+            for query in queries
+        )
+
     quality_feed = (getattr(Var, "RSS_LOW_END", {}) or {}).get("720")
     feeds = list(dict.fromkeys(
-        url for url in [quality_feed] + list(getattr(Var, "RSS_ITEMS_ANIME", []) or [])
+        url for url in nyaa_feeds + [quality_feed] + list(getattr(Var, "RSS_ITEMS_ANIME", []) or [])
         if url
     ))
     for feed_url in feeds:
