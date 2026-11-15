@@ -515,10 +515,14 @@ async def uploadchannel_callbacks(client, callback):
                 if not pack:
                     await rep.report(
                         f"No complete 720p season-pack RSS entry found for {season_title} "
-                        f"(Season {season_index}) of {selected_title}; retry /uploadchannel after the complete 720p pack appears in RSS.",
+                        f"(Season {season_index}) of {selected_title}; this channel batch is held. "
+                        "Retry /uploadchannel after the complete 720p pack appears in RSS.",
                         "warning"
                     )
-                    continue
+                    raise RuntimeError(
+                        f"Season {season_index} of {selected_title} is not complete yet. "
+                        "The next selected channel was not started."
+                    )
                 pack_title = str(pack["title"])
                 archive_id = int(prequel.get("id") or 0)
                 if not archive_id:
