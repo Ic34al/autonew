@@ -535,19 +535,6 @@ async def uploadchannel_callbacks(client, callback):
                 prequels = _prequel_seasons(selected_media)
                 for season_index, prequel in enumerate(prequels, start=1):
                     season_title = _display_title(prequel)
-                    pack = await _find_720p_season_pack(prequel, season_index)
-                    if not pack:
-                        await rep.report(
-                            f"No complete 720p season-pack RSS entry found for {season_title} "
-                            f"(Season {season_index}) of {selected_title}; this channel batch is held. "
-                            "Retry /uploadchannel after the complete 720p pack appears in RSS.",
-                            "warning"
-                        )
-                        raise RuntimeError(
-                            f"Season {season_index} of {selected_title} is not complete yet. "
-                            "The next selected channel was not started."
-                        )
-                    pack_title = str(pack["title"])
                     archive_id = int(prequel.get("id") or 0)
                     if not archive_id:
                         raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
@@ -567,7 +554,21 @@ async def uploadchannel_callbacks(client, callback):
                             f"Season {season_index} of {selected_title} has an unfinished previous batch run. "
                             "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
                         )
-    
+
+                    pack = await _find_720p_season_pack(prequel, season_index)
+                    if not pack:
+                        await rep.report(
+                            f"No complete 720p season-pack RSS entry found for {season_title} "
+                            f"(Season {season_index}) of {selected_title}; this channel batch is held. "
+                            "Retry /uploadchannel after the complete 720p pack appears in RSS.",
+                            "warning"
+                        )
+                        raise RuntimeError(
+                            f"Season {season_index} of {selected_title} is not complete yet. "
+                            "The next selected channel was not started."
+                        )
+                    pack_title = str(pack["title"])
+
                     audio = (
                         "Dual" if re.search(r"(?i)\bdual\b", pack_title)
                         else "Dub" if re.search(r"(?i)\b(dub|english)\b", pack_title)
