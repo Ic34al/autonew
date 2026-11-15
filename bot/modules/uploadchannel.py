@@ -291,7 +291,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
         f"https://nyaa.si/?page=rss&q={quote_plus(q)}&c=1_2&f=0"
         for q in queries
     ]
-    feeds.extend((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"),)
+    feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
     feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
     for feed_url in dict.fromkeys(x for x in feeds if x):
         try:
@@ -598,13 +598,19 @@ async def uploadchannel_callbacks(client, callback):
         # episode cannot interleave between Season 1/Season 2 or selected channels.
         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
         try:
-            # Process completed prequel seasons serially, one dedicated channel at a time.
-            # The scheduled scanner uses the same lock, so new episodes wait until this
-            # archive queue has finished rather than interleaving storage message IDs.
+            # Process one selected anime completely before starting the next.
+            # Older seasons first, then the currently airing season.
             for selected_media, destination_id in archive_jobs:
                 selected_title = _display_title(selected_media)
                 prequels = _prequel_seasons(selected_media)
-                for season_index, prequel in enumerate(prequels, start=1):
+                season_jobs = [(index, item, int(item.get("episodes") or 0))
+                               for index, item in enumerate(prequels, start=1)]
+                current_episode_count = max(0, int((selected_media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
+                if current_episode_count:
+                    season_jobs.append((len(season_jobs) + 1, selected_media, current_episode_count))
+                if not season_jobs:
+                    raise RuntimeError(f"No released episodes are known for {selected_title}; no upload was started.")
+                for season_index, prequel, available_episodes in season_jobs:
                     season_title = _display_title(prequel)
                     archive_id = int(prequel.get("id") or 0)
                     if not archive_id:
@@ -626,24 +632,20 @@ async def uploadchannel_callbacks(client, callback):
                             "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
                         )
 
-                    pack = await _find_720p_season_pack(prequel, season_index)
-                    if not pack:
-                        await rep.report(
-                            f"No complete 720p season-pack RSS entry found for {season_title} "
-                            f"(Season {season_index}) of {selected_title}; this channel batch is held. "
-                            "Retry /uploadchannel after the complete 720p pack appears in RSS.",
-                            "warning"
+                    # Check the destination channel's history; existing episodes are skipped.
+                    existing_episodes = set()
+                    async for channel_message in bot.get_chat_history(destination_id, limit=500):
+                        body = " ".join(str(x or "") for x in (
+                            getattr(channel_message, "text", ""),
+                            getattr(channel_message, "caption", ""),
+                        ))
+                        match = re.search(
+                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
                         )
-                        raise RuntimeError(
-                            f"Season {season_index} of {selected_title} is not complete yet. "
-                            "The next selected channel was not started."
-                        )
-                    pack_title = str(pack["title"])
-
-                    # Season information must be visible before the sticker,
-                    # and the sticker must be confirmed before batch processing.
+                        if match:
+                            existing_episodes.add(int(match.group(1)))
                     season_year = prequel.get("seasonYear") or "N/A"
-                    episode_total = prequel.get("episodes") or "Unknown"
+                    episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
                     season_info = (
@@ -674,37 +676,35 @@ async def uploadchannel_callbacks(client, callback):
                             "the season batch was not started."
                         )
 
-                    audio = (
-                        "Dual" if re.search(r"(?i)\bdual\b", pack_title)
-                        else "Dub" if re.search(r"(?i)\b(dub|english)\b", pack_title)
-                        else "Sub"
+                    sticker_ok = await send_sticker_to_channel(
+                        destination_id, getattr(Var, "STICKER_ID", None)
                     )
+                    if not sticker_ok:
+                        raise RuntimeError(
+                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
+                        )
+                    if not available_episodes:
+                        raise RuntimeError(
+                            f"AniList has no released episode count for {season_title}; refusing to guess."
+                        )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "in_progress",
-                        pack["link"], pack_title,
+                        "", f"episode-by-episode S{season_index} 4-quality",
                     )
-                    await rep.report(
-                        f"Starting completed-season archive: {selected_title} / Season {season_index} "
-                        f"using the 720p RSS pack in channel {destination_id}.",
-                        "info"
-                    )
-                    result = await process_batch_anime(
-                        pack_title, pack["link"], audio,
-                        destination_channel=destination_id,
-                        send_completion_sticker=False,
-                    )
-                    if not result:
-                        await db.set_anime_archive_batch(
-                            archive_id, season_index, destination_id, "failed",
-                            pack["link"], pack_title,
+                    for episode_number in range(1, available_episodes + 1):
+                        if episode_number in existing_episodes:
+                            continue
+                        await rep.report(
+                            f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
+                            f"to dedicated channel {destination_id}.",
+                            "info", log=False,
                         )
-                        raise RuntimeError(
-                            f"720p archive download did not complete for {season_title}; "
-                            "the next selected channel was not started."
+                        await _upload_single_episode(
+                            prequel, destination_id, season_index, episode_number
                         )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "complete",
-                        pack["link"], pack_title,
+                        "", f"episode-by-episode S{season_index} 4-quality",
                     )
     
         finally:
