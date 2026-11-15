@@ -18,8 +18,15 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import send_sticker_to_channel, process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK
-from bot.core.func_utils import getfeeds
+from bot.core.auto_animes import send_sticker_to_channel, process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_watch_markup
+from bot.core.func_utils import getfeeds, encode
+from bot.core.tordownload import TorDownloader
+from bot.core.ffencoder import FFEncoder
+from bot.core.tguploader import TgUploader
+from bot.core.text_utils import TextEditor
+import os
+import shutil
+import hashlib
 from bot.core.reporter import rep
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
@@ -260,6 +267,144 @@ async def _find_720p_season_pack(media, season_number):
     return None
 
 
+
+async def _find_episode_torrent(media, season_number, episode_number):
+    """Find one exact 720p source torrent for the requested anime season/episode."""
+    titles = media.get("title") or {}
+    aliases = [_plain_title(titles.get(k)) for k in ("english", "romaji", "native") if titles.get(k)]
+    aliases = [a for a in aliases if a]
+    if not aliases:
+        return None
+    season = int(season_number)
+    episode = int(episode_number)
+    queries = []
+    for key in ("english", "romaji", "native"):
+        title = titles.get(key)
+        if not title:
+            continue
+        queries.extend([
+            f'"{title}" S{season:02d}E{episode:02d} 720p',
+            f'"{title}" Season {season} Episode {episode} 720p',
+            f'"{title}" {season}x{episode:02d} 720p',
+        ])
+    feeds = [
+        f"https://nyaa.si/?page=rss&q={quote_plus(q)}&c=1_2&f=0"
+        for q in queries
+    ]
+    feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
+    feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
+    for feed_url in dict.fromkeys(x for x in feeds if x):
+        try:
+            entries = await getfeeds(feed_url)
+        except Exception as exc:
+            await rep.report(f"Episode RSS scan failed: {exc}", "warning", log=False)
+            continue
+        for entry in entries or []:
+            title = str(getattr(entry, "title", "") or "")
+            normalized = _plain_title(title)
+            if not normalized or not any(a == normalized or a in normalized for a in aliases):
+                continue
+            ep_patterns = (
+                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
+                rf"(?i)\b{season}x0*{episode}\b",
+                rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
+                rf"(?i)\bEp[\s._-]*0*{episode}\b",
+            )
+            if not any(re.search(p, title) for p in ep_patterns):
+                continue
+            detected_season = _season_number_from_release(title)
+            if detected_season is not None and detected_season != season:
+                continue
+            if season > 1 and detected_season != season:
+                continue
+            link = None
+            for candidate in (getattr(entry, "links", None) or []):
+                href = candidate.get("href") if isinstance(candidate, dict) else None
+                rel = str(candidate.get("rel") or "").lower() if isinstance(candidate, dict) else ""
+                typ = str(candidate.get("type") or "").lower() if isinstance(candidate, dict) else ""
+                if href and (rel == "enclosure" or "bittorrent" in typ or "x-bittorrent" in typ):
+                    link = href
+                    break
+            link = link or getattr(entry, "link", None)
+            if not link:
+                continue
+            match = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)", str(link), re.I)
+            if match:
+                link = f"https://nyaa.si/download/{match.group(1)}.torrent"
+            return {"title": title, "link": str(link)}
+    return None
+
+
+async def _upload_single_episode(media, destination_id, season_number, episode_number):
+    """Download one RSS episode, encode four qualities, and publish four buttons."""
+    from bot import Var
+    episode = await _find_episode_torrent(media, season_number, episode_number)
+    if not episode:
+        raise RuntimeError(
+            f"RSS source missing or ambiguous for Season {season_number} Episode {episode_number}; "
+            "stopping to avoid uploading the wrong episode."
+        )
+    title = _display_title(media)
+    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{media.get('id')}_{season_number}_{episode_number}")
+    workdir = os.path.join("downloads", "uc_episode_" + safe)
+    os.makedirs(workdir, exist_ok=True)
+    downloaded = await TorDownloader(workdir).download(episode["link"])
+    if not downloaded or not os.path.exists(downloaded):
+        raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
+    video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
+    if len(video_files) != 1:
+        raise RuntimeError(
+            f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
+        )
+    source = video_files[0]
+    info = TextEditor(title)
+    await info.load_info()
+    info.pdata["episode_number"] = str(episode_number).zfill(2)
+    info.pdata["audio_type"] = (
+        "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
+        else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
+        else "Sub"
+    )
+    quality_order = ("HDRi", "1080", "720", "480")
+    buttons = []
+    for quality in quality_order:
+        upload_name = await info.get_upname(quality)
+        quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
+        os.makedirs("encode", exist_ok=True)
+        shutil.copy2(source, quality_source)
+        encoded_path = await FFEncoder(
+            await bot.send_message(Var.LOG_CHANNEL, f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"),
+            quality_source, upload_name, quality
+        ).start_encode()
+        if not encoded_path or not os.path.exists(encoded_path):
+            raise RuntimeError(f"Encoding failed for S{season_number}E{episode_number} at {quality}.")
+        uploaded = await TgUploader(await bot.send_message(
+            Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
+        )).upload(encoded_path, quality)
+        if not uploaded:
+            raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at {quality}.")
+        token = hashlib.sha256(
+            f"{uploaded.id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
+        ).hexdigest()[:24]
+        await db.set_batch_file_link(token, [uploaded.id])
+        start_payload = f"getbatch-{token}"
+        url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
+        buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
+    caption = (
+        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\n"
+        f"<b>Release:</b> {_escape(episode['title'])}\n"
+        f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
+    )
+    await bot.send_message(
+        chat_id=destination_id,
+        text=caption,
+        reply_markup=InlineKeyboardMarkup([buttons]),
+        disable_web_page_preview=True,
+    )
+    shutil.rmtree(workdir, ignore_errors=True)
+    return True
+
+
 def _selection_keyboard(items, selected):
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     rows = []
@@ -456,13 +601,19 @@ async def uploadchannel_callbacks(client, callback):
         # episode cannot interleave between Season 1/Season 2 or selected channels.
         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
         try:
-            # Process completed prequel seasons serially, one dedicated channel at a time.
-            # The scheduled scanner uses the same lock, so new episodes wait until this
-            # archive queue has finished rather than interleaving storage message IDs.
+            # Process one selected anime completely before starting the next.
+            # Older seasons first, then the currently airing season.
             for selected_media, destination_id in archive_jobs:
                 selected_title = _display_title(selected_media)
                 prequels = _prequel_seasons(selected_media)
-                for season_index, prequel in enumerate(prequels, start=1):
+                season_jobs = [(index, item, int(item.get("episodes") or 0))
+                               for index, item in enumerate(prequels, start=1)]
+                current_episode_count = max(0, int((selected_media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
+                if current_episode_count:
+                    season_jobs.append((len(season_jobs) + 1, selected_media, current_episode_count))
+                if not season_jobs:
+                    raise RuntimeError(f"No released episodes are known for {selected_title}; no upload was started.")
+                for season_index, prequel, available_episodes in season_jobs:
                     season_title = _display_title(prequel)
                     archive_id = int(prequel.get("id") or 0)
                     if not archive_id:
@@ -471,37 +622,22 @@ async def uploadchannel_callbacks(client, callback):
                         archive_id, season_index, destination_id
                     )
                     previous_status = (previous or {}).get("status")
-                    if previous_status == "complete":
-                        await rep.report(
-                            f"Archive already completed; skipping duplicate: {selected_title} / Season {season_index}.",
-                            "info",
-                            log=False,
+                    # Resume safely from the channel history; a stale DB status must not
+                    # suppress uploads when the destination channel is actually empty.
+                    # Check the destination channel's history; existing episodes are skipped.
+                    existing_episodes = set()
+                    async for channel_message in bot.get_chat_history(destination_id, limit=500):
+                        body = " ".join(str(x or "") for x in (
+                            getattr(channel_message, "text", ""),
+                            getattr(channel_message, "caption", ""),
+                        ))
+                        match = re.search(
+                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
                         )
-                        continue
-                    if previous_status == "in_progress":
-                        raise RuntimeError(
-                            f"Season {season_index} of {selected_title} has an unfinished previous batch run. "
-                            "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
-                        )
-
-                    pack = await _find_720p_season_pack(prequel, season_index)
-                    if not pack:
-                        await rep.report(
-                            f"No complete 720p season-pack RSS entry found for {season_title} "
-                            f"(Season {season_index}) of {selected_title}; this channel batch is held. "
-                            "Retry /uploadchannel after the complete 720p pack appears in RSS.",
-                            "warning"
-                        )
-                        raise RuntimeError(
-                            f"Season {season_index} of {selected_title} is not complete yet. "
-                            "The next selected channel was not started."
-                        )
-                    pack_title = str(pack["title"])
-
-                    # Season information must be visible before the sticker,
-                    # and the sticker must be confirmed before batch processing.
+                        if match:
+                            existing_episodes.add(int(match.group(1)))
                     season_year = prequel.get("seasonYear") or "N/A"
-                    episode_total = prequel.get("episodes") or "Unknown"
+                    episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
                     season_info = (
@@ -511,7 +647,7 @@ async def uploadchannel_callbacks(client, callback):
                         f"<b>Episodes:</b> {_escape(episode_total)}\n"
                         f"<b>Format:</b> {_escape(season_format)}\n"
                         f"<b>Status:</b> {_escape(season_status)}\n"
-                        f"<b>Quality:</b> 720p"
+                        f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
                     )
                     info_message = await bot.send_message(
                         chat_id=destination_id,
@@ -528,41 +664,30 @@ async def uploadchannel_callbacks(client, callback):
                     )
                     if not sticker_ok:
                         raise RuntimeError(
-                            f"Season {season_index} sticker failed for {selected_title}; "
-                            "the season batch was not started."
+                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
                         )
-
-                    audio = (
-                        "Dual" if re.search(r"(?i)\bdual\b", pack_title)
-                        else "Dub" if re.search(r"(?i)\b(dub|english)\b", pack_title)
-                        else "Sub"
-                    )
+                    if not available_episodes:
+                        raise RuntimeError(
+                            f"AniList has no released episode count for {season_title}; refusing to guess."
+                        )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "in_progress",
-                        pack["link"], pack_title,
+                        "", f"episode-by-episode S{season_index} 4-quality",
                     )
-                    await rep.report(
-                        f"Starting completed-season archive: {selected_title} / Season {season_index} "
-                        f"using the 720p RSS pack in channel {destination_id}.",
-                        "info"
-                    )
-                    result = await process_batch_anime(
-                        pack_title, pack["link"], audio,
-                        destination_channel=destination_id,
-                        send_completion_sticker=False,
-                    )
-                    if not result:
-                        await db.set_anime_archive_batch(
-                            archive_id, season_index, destination_id, "failed",
-                            pack["link"], pack_title,
+                    for episode_number in range(1, available_episodes + 1):
+                        if episode_number in existing_episodes:
+                            continue
+                        await rep.report(
+                            f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
+                            f"to dedicated channel {destination_id}.",
+                            "info", log=False,
                         )
-                        raise RuntimeError(
-                            f"720p archive download did not complete for {season_title}; "
-                            "the next selected channel was not started."
+                        await _upload_single_episode(
+                            prequel, destination_id, season_index, episode_number
                         )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "complete",
-                        pack["link"], pack_title,
+                        "", f"episode-by-episode S{season_index} 4-quality",
                     )
     
         finally:
