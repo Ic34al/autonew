@@ -356,6 +356,7 @@ async def uploadchannel_callbacks(client, callback):
             api_hash=Var.API_HASH,
             session_string=Var.USER_SESSION,
             in_memory=True,
+            parse_mode=ParseMode.HTML,
         )
         await user_client.start()
         # Resolve the bot through its public username in the USER session.
@@ -395,16 +396,19 @@ async def uploadchannel_callbacks(client, callback):
             reused = False
             if mapped_id:
                 wanted_id = int(mapped_id)
-                # Load the saved channel peer from the USER_SESSION dialog cache.
-                async for dialog in user_client.get_dialogs():
-                    if int(dialog.chat.id) == wanted_id:
-                        chat = dialog.chat
-                        break
-                if chat is None:
-                    try:
-                        chat = await user_client.get_chat(wanted_id)
-                    except Exception:
+                # Resolve only the exact saved channel. Iterating every dialog
+                # can trigger CHANNEL_INVALID on stale Telegram dialog entries.
+                try:
+                    chat = await user_client.get_chat(wanted_id)
+                    if not chat or int(chat.id) != wanted_id:
                         chat = None
+                except Exception as resolve_error:
+                    await rep.report(
+                        f"Could not resolve saved channel {wanted_id} for '{title}': {resolve_error}",
+                        "warning",
+                        log=False,
+                    )
+                    chat = None
                 if chat is None:
                     raise RuntimeError(
                         f"A channel mapping already exists for '{title}' ({wanted_id}), "
