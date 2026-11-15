@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 
 import httpx
 from pyrogram import filters
+from pyrogram.enums import ParseMode
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivileges
 
 from bot import bot, Var, LOGS
@@ -358,7 +359,7 @@ async def uploadchannel_callbacks(client, callback):
                     chat.id,
                     photo_source,
                     caption=details,
-                    parse_mode="html",
+                    parse_mode=ParseMode.HTML,
                 )
             else:
                 await user_client.send_message(
