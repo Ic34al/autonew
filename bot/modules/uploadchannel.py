@@ -541,8 +541,8 @@ async def uploadchannel_callbacks(client, callback):
                     )
 
                 audio = (
-                    "Dual" if re.search(r"(?i)\\bdual\\b", pack_title)
-                    else "Dub" if re.search(r"(?i)\\b(dub|english)\\b", pack_title)
+                    "Dual" if re.search(r"(?i)\bdual\b", pack_title)
+                    else "Dub" if re.search(r"(?i)\b(dub|english)\b", pack_title)
                     else "Sub"
                 )
                 await db.set_anime_archive_batch(
