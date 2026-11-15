@@ -475,241 +475,136 @@ def create_dashboard(
     episode,
     output_path,
 ):
+    """
+    Split-screen series card inspired by the user's Manga Cruise reference:
+    full-height artwork on the left and a clean, bright information panel
+    on the right. Keep the original art intact and avoid the previous busy UI.
+    """
     info = get_metadata(metadata, anime_title)
+    canvas = Image.new("RGB", (WIDTH, HEIGHT), (246, 246, 249))
 
-    # Preserve artwork aspect ratio. Never stretch the original image.
-    background = crop_cover(background, (WIDTH, HEIGHT))
-
-    background = ImageEnhance.Color(background).enhance(1.12)
-    background = ImageEnhance.Contrast(background).enhance(1.10)
-    background = ImageEnhance.Sharpness(background).enhance(1.18)
-
-    canvas = background.convert("RGBA")
-    canvas = draw_gradient_overlay(canvas)
-
-    draw = ImageDraw.Draw(canvas)
-
-    # Brand and navigation.
-    draw_brand(canvas)
-    draw_sidebar(canvas)
-
-    draw = ImageDraw.Draw(canvas)
-
-    # Quote area.
-    draw.text(
-        (105, 125),
-        "“",
-        font=get_font(78, True),
-        fill=RED,
-    )
-
-    draw.text(
-        (160, 145),
-        "ANIME STORIES",
-        font=get_font(20, True),
-        fill=WHITE,
-    )
-
-    draw.text(
-        (160, 174),
-        "THAT STAY WITH YOU.",
-        font=get_font(20, True),
-        fill=RED,
-    )
-
-    # Anime title.
-    title_font = get_font(67, True)
-    title = fit_text(draw, info["title"].upper(), title_font, 980)
-
-    draw.text(
-        (105, 285),
-        title,
-        font=title_font,
-        fill=WHITE,
-        stroke_width=2,
-        stroke_fill=(0, 0, 0),
-    )
-
-    # Episode / season heading.
-    episode_text = clean_text(episode) or "TBA"
-
-    draw.text(
-        (110, 380),
-        f"SEASON  {info['season']}     |     EPISODE  {episode_text}",
-        font=get_font(27, True),
-        fill=RED,
-    )
-
-    draw.rounded_rectangle(
-        (110, 430, 510, 485),
-        radius=28,
-        fill=(0, 0, 0, 225),
-        outline=RED,
-        width=2,
-    )
-
-    draw.ellipse(
-        (128, 439, 168, 479),
-        fill=RED,
-    )
-
-    draw.polygon(
-        [(144, 448), (144, 470), (161, 459)],
-        fill=WHITE,
-    )
-
-    draw.text(
-        (185, 443),
-        "EPISODE UPDATE",
-        font=get_font(20, True),
-        fill=WHITE,
-    )
-
-    # Metadata row.
-    card_y1 = 510
-    card_y2 = 590
-    card_width = 205
-    gap = 12
-    start_x = 100
-
-    cards = [
-        ("STUDIO", info["studio"], "✦"),
-        ("STATUS", info["status"], "●"),
-        ("SEASON", info["season"], "▤"),
-        ("YEAR", info["year"], "▦"),
-        ("TYPE", info["type"], "▶"),
-    ]
-
-    for index, (label, value, icon) in enumerate(cards):
-        x1 = start_x + index * (card_width + gap)
-
-        draw_metadata_card(
-            draw,
-            (x1, card_y1, x1 + card_width, card_y2),
-            label,
-            value,
-            icon,
+    # Left: use the actual cover artwork as a tall hero image.
+    hero = cover or background
+    if hero is not None:
+        hero = ImageOps.fit(
+            hero.convert("RGB"),
+            (735, HEIGHT),
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.5),
         )
+        hero = ImageEnhance.Color(hero).enhance(1.06)
+        hero = ImageEnhance.Sharpness(hero).enhance(1.12)
+        canvas.paste(hero, (0, 0))
 
-    # Genre row.
-    draw_genres(draw, info["genres"])
-
-    # Right synopsis panel.
-    panel(
-        draw,
-        (1190, 235, 1570, 785),
-        fill=(0, 0, 0, 242),
-        outline=RED,
-        radius=22,
-        width=3,
-    )
-
-    # Cover artwork.
-    if cover is not None:
-        rounded_image(
-            canvas,
-            cover,
-            (1210, 255, 1550, 425),
-            radius=13,
-        )
+    # Right panel: faint, enlarged artwork watermark beneath a pale veil.
+    if background is not None:
+        watermark = ImageOps.fit(
+            background.convert("RGB"),
+            (865, HEIGHT),
+            method=Image.Resampling.LANCZOS,
+            centering=(0.5, 0.35),
+        ).filter(__import__("PIL.ImageFilter", fromlist=["GaussianBlur"]).GaussianBlur(8))
+        watermark = ImageEnhance.Brightness(watermark).enhance(1.45)
+        canvas.paste(watermark, (735, 0))
+    veil = Image.new("RGBA", (865, HEIGHT), (250, 250, 253, 225))
+    canvas.paste(veil, (735, 0), veil)
 
     draw = ImageDraw.Draw(canvas)
 
-    draw.text(
-        (1215, 445),
-        "SYNOPSIS",
-        font=get_font(26, True),
-        fill=WHITE,
-    )
+    # Header and wordmark.
+    draw.text((800, 48), "ANIME SOUL", font=get_font(34, True), fill=(20, 20, 25))
+    draw.text((1035, 61), "/ STREAM", font=get_font(18, True), fill=(180, 35, 55))
+    draw.text((1230, 65), "HOME     ANIME     SCHEDULE     LIBRARY",
+              font=get_font(15, True), fill=(55, 55, 65))
+    for offset in (0, 13, 26):
+        draw.rounded_rectangle((1540, 48 + offset, 1580, 53 + offset),
+                               radius=2, fill=(25, 25, 30))
 
-    draw.rounded_rectangle(
-        (1215, 482, 1545, 488),
-        radius=3,
-        fill=RED,
-    )
+    # Small series eyebrow.
+    season_label = info["season"] if info["season"] != "NOT LISTED" else "ANIME SERIES"
+    year_label = info["year"] if info["year"] != "NOT LISTED" else ""
+    draw.text((800, 165), f"{season_label}  {year_label}".strip().upper(),
+              font=get_font(18, True), fill=(165, 55, 60))
 
-    synopsis_font = get_font(19)
-    synopsis_lines = wrap_text(
-        draw,
-        info["synopsis"],
-        synopsis_font,
-        325,
-        max_lines=12,
-    )
+    # Large title, wrapped cleanly to the right panel.
+    title_font = get_font(57, True)
+    title_lines = wrap_text(draw, info["title"], title_font, 740, max_lines=3)
+    title_y = 215
+    for line in title_lines:
+        draw.text((800, title_y), line, font=title_font, fill=(20, 20, 25))
+        title_y += 70
+    rule_y = title_y + 6
+    draw.line((800, rule_y, 1535, rule_y), fill=(135, 135, 145), width=2)
 
-    y = 510
-
+    # Synopsis block, preserving the synopsis itself as the main copy.
+    synopsis_y = rule_y + 40
+    synopsis_font = get_font(23)
+    synopsis_lines = wrap_text(draw, info["synopsis"], synopsis_font, 735, max_lines=7)
     for line in synopsis_lines:
-        draw.text(
-            (1215, y),
-            line,
-            font=synopsis_font,
-            fill=(238, 238, 242),
-        )
-        y += 27
+        draw.text((800, synopsis_y), line, font=synopsis_font, fill=(65, 65, 75))
+        synopsis_y += 36
 
-    # Bottom artwork strip.
-    draw.rectangle(
-        (90, 675, 1600, 900),
-        fill=(0, 0, 0, 190),
-    )
+    # Read action and bookmark, styled like the supplied reference.
+    button_y = min(max(synopsis_y + 42, 610), 720)
+    draw.rounded_rectangle((800, button_y, 1040, button_y + 66),
+                           radius=33, fill=(15, 15, 20))
+    draw.text((920, button_y + 33), "WATCH NOW", font=get_font(20, True),
+              fill=WHITE, anchor="mm")
+    draw.ellipse((1060, button_y, 1126, button_y + 66), fill=WHITE,
+                 outline=(210, 210, 215), width=2)
+    draw.text((1093, button_y + 31), "☆", font=get_font(34, True),
+              fill=(25, 25, 30), anchor="mm")
 
-    strip_y = 700
-    strip_height = 145
-    strip_width = 350
-    strip_gap = 18
+    # Compact factual metadata row along the bottom of the light panel.
+    meta_y = 785
+    draw.line((800, meta_y - 24, 1535, meta_y - 24), fill=(175, 175, 185), width=2)
+    studio = info["studio"]
+    status = info["status"]
+    genre_text = ", ".join(info["genres"][:2]) or "NOT LISTED"
+    meta_items = [
+        ("STUDIO", studio),
+        ("GENRES", genre_text),
+        ("STATUS", status),
+        ("TYPE", info["type"]),
+    ]
+    col_width = 184
+    for index, (label, value) in enumerate(meta_items):
+        x = 800 + index * col_width
+        draw.text((x, meta_y), label, font=get_font(13, True), fill=(115, 115, 125))
+        draw.text((x, meta_y + 28), fit_text(draw, value, get_font(15, True), 170),
+                  font=get_font(15, True), fill=(35, 35, 45))
 
-    # Use different crops of the available banner artwork.
-    # These are crops, not falsely presented as separate source scenes.
-    for index in range(4):
-        x = 100 + index * (strip_width + strip_gap)
+    # Bottom navigation capsule, echoing the reference without copying its brand.
+    nav_box = (1010, 845, 1510, 895)
+    draw.rounded_rectangle(nav_box, radius=25, fill=(8, 8, 12))
+    nav_labels = ["⌂", "⌕", "+", "♟", "↗"]
+    for index, label in enumerate(nav_labels):
+        cx = 1060 + index * 105
+        if index == 2:
+            draw.ellipse((cx - 19, 853, cx + 19, 891), fill=(215, 125, 20))
+        draw.text((cx, 872), label, font=get_font(25, True), fill=WHITE, anchor="mm")
 
-        crop_width = background.width // 4
-        left = index * crop_width
-        right = background.width if index == 3 else (index + 1) * crop_width
-
-        crop = background.crop(
-            (left, 0, right, background.height)
-        )
-
-        rounded_image(
-            canvas,
-            crop,
-            (x, strip_y, x + strip_width, strip_y + strip_height),
-            radius=14,
-        )
-
-        draw = ImageDraw.Draw(canvas)
-
-        draw.rounded_rectangle(
-            (x, strip_y, x + strip_width, strip_y + strip_height),
-            radius=14,
-            outline=RED,
-            width=2,
-        )
-
-    # Brand footer.
+    # Left-side title treatment kept subtle so the artwork remains dominant.
+    left_overlay = Image.new("RGBA", (735, 190), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(left_overlay)
+    for y in range(190):
+        alpha = int(150 * (y / 189))
+        overlay_draw.line((0, y, 735, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, HEIGHT - 190), left_overlay)
     draw = ImageDraw.Draw(canvas)
-
-    draw.text(
-        (104, 862),
-        "ANIME SOUL  •  YOUR ANIME DESTINATION",
-        font=get_font(15, True),
-        fill=WHITE,
-    )
-
-    # Export at full 1600x900 resolution.
-    canvas = canvas.convert("RGB")
+    draw.text((48, HEIGHT - 115), fit_text(draw, info["title"], get_font(31, True), 640),
+              font=get_font(31, True), fill=WHITE)
+    draw.text((50, HEIGHT - 64), f"{season_label}  •  {info['type']}",
+              font=get_font(17, True), fill=(235, 205, 130))
 
     canvas.save(
         output_path,
         "JPEG",
-        quality=97,
+        quality=96,
         optimize=True,
         progressive=True,
         subsampling=0,
     )
-
     return str(output_path)
 
 
