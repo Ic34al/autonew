@@ -453,7 +453,7 @@ async def setchannelinvite_command(client, message):
     try:
         await user_client.start()
         chat = await user_client.get_chat(invite_link)
-        if str(getattr(chat, "type", "")).lower() not in ("channel", "chat.type.channel"):
+        if not chat or not getattr(chat, "id", None) or not str(getattr(chat, "type", "")).lower().endswith("channel"):
             return await message.reply("That invite link did not resolve to a channel.")
         await db.add_anime_channel_mapping(anime_title, chat.id)
         await db.set_anime_channel_invite_link(anime_title, chat.id, invite_link)
@@ -580,6 +580,7 @@ async def uploadchannel_callbacks(client, callback):
 
             chat = None
             reused = False
+            persistent_invite = None
             if mapped_id:
                 wanted_id = int(mapped_id)
                 # The saved channels were created by USER_SESSION. Resolve them
@@ -588,6 +589,7 @@ async def uploadchannel_callbacks(client, callback):
                 # Do not scan get_dialogs(); stale dialog peers can trigger
                 # channels.GetChannels / CHANNEL_INVALID.
                 saved_invite = await db.get_anime_channel_invite_link(title)
+                persistent_invite = saved_invite
                 try:
                     # An invite URL carries a resolvable Telegram peer even after
                     # Heroku restarts and the in-memory Pyrogram peer cache is lost.
@@ -614,15 +616,16 @@ async def uploadchannel_callbacks(client, callback):
             # Persist a durable invite reference for private channels. Unlike a
             # numeric channel ID, the invite URL can repopulate Pyrogram's peer
             # cache after a fresh in-memory USER_SESSION on Heroku.
-            try:
-                invite_obj = await user_client.create_chat_invite_link(
-                    chat.id, name="Anime uploader persistent peer"
-                )
-                persistent_invite = invite_obj.invite_link
-            except Exception as invite_error:
-                raise RuntimeError(
-                    f"Could not create a persistent invite reference for '{title}': {invite_error}"
-                ) from invite_error
+            if not persistent_invite:
+                try:
+                    invite_obj = await user_client.create_chat_invite_link(
+                        chat.id, name="Anime uploader persistent peer"
+                    )
+                    persistent_invite = invite_obj.invite_link
+                except Exception as invite_error:
+                    raise RuntimeError(
+                        f"Could not create a persistent invite reference for '{title}': {invite_error}"
+                    ) from invite_error
 
             # Save aliases and invite reference only after the real channel is resolved.
             for name in names:
