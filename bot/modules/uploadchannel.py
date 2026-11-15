@@ -139,6 +139,7 @@ def _season_number_from_release(title):
     patterns = (
         r"\bS0*(\d{1,2})(?:E|\s*[-._ ]*\d)",
         r"\bSeason\s*0*(\d{1,2})\b",
+        r"\bS0*(\d{1,2})\b",
     )
     for pattern in patterns:
         match = re.search(pattern, str(title or ""), re.IGNORECASE)
