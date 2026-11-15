@@ -523,79 +523,85 @@ async def uploadchannel_callbacks(client, callback):
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
 
-        # Process completed prequel seasons serially, one dedicated channel at a time.
-        # The scheduled scanner uses the same lock, so new episodes wait until this
-        # archive queue has finished rather than interleaving storage message IDs.
-        for selected_media, destination_id in archive_jobs:
-            selected_title = _display_title(selected_media)
-            prequels = _prequel_seasons(selected_media)
-            for season_index, prequel in enumerate(prequels, start=1):
-                season_title = _display_title(prequel)
-                pack = await _find_720p_season_pack(prequel, season_index)
-                if not pack:
+        # Hold the scheduler lock for the entire archive backlog so a new
+        # episode cannot interleave between Season 1/Season 2 or selected channels.
+        await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+        try:
+            # Process completed prequel seasons serially, one dedicated channel at a time.
+            # The scheduled scanner uses the same lock, so new episodes wait until this
+            # archive queue has finished rather than interleaving storage message IDs.
+            for selected_media, destination_id in archive_jobs:
+                selected_title = _display_title(selected_media)
+                prequels = _prequel_seasons(selected_media)
+                for season_index, prequel in enumerate(prequels, start=1):
+                    season_title = _display_title(prequel)
+                    pack = await _find_720p_season_pack(prequel, season_index)
+                    if not pack:
+                        await rep.report(
+                            f"No complete 720p season-pack RSS entry found for {season_title} "
+                            f"(Season {season_index}) of {selected_title}; this channel batch is held. "
+                            "Retry /uploadchannel after the complete 720p pack appears in RSS.",
+                            "warning"
+                        )
+                        raise RuntimeError(
+                            f"Season {season_index} of {selected_title} is not complete yet. "
+                            "The next selected channel was not started."
+                        )
+                    pack_title = str(pack["title"])
+                    archive_id = int(prequel.get("id") or 0)
+                    if not archive_id:
+                        raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
+                    previous = await db.get_anime_archive_batch(
+                        archive_id, season_index, destination_id
+                    )
+                    previous_status = (previous or {}).get("status")
+                    if previous_status == "complete":
+                        await rep.report(
+                            f"Archive already completed; skipping duplicate: {selected_title} / Season {season_index}.",
+                            "info",
+                            log=False,
+                        )
+                        continue
+                    if previous_status == "in_progress":
+                        raise RuntimeError(
+                            f"Season {season_index} of {selected_title} has an unfinished previous batch run. "
+                            "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
+                        )
+    
+                    audio = (
+                        "Dual" if re.search(r"(?i)\bdual\b", pack_title)
+                        else "Dub" if re.search(r"(?i)\b(dub|english)\b", pack_title)
+                        else "Sub"
+                    )
+                    await db.set_anime_archive_batch(
+                        archive_id, season_index, destination_id, "in_progress",
+                        pack["link"], pack_title,
+                    )
                     await rep.report(
-                        f"No complete 720p season-pack RSS entry found for {season_title} "
-                        f"(Season {season_index}) of {selected_title}; this channel batch is held. "
-                        "Retry /uploadchannel after the complete 720p pack appears in RSS.",
-                        "warning"
+                        f"Starting completed-season archive: {selected_title} / Season {season_index} "
+                        f"using the 720p RSS pack in channel {destination_id}.",
+                        "info"
                     )
-                    raise RuntimeError(
-                        f"Season {season_index} of {selected_title} is not complete yet. "
-                        "The next selected channel was not started."
-                    )
-                pack_title = str(pack["title"])
-                archive_id = int(prequel.get("id") or 0)
-                if not archive_id:
-                    raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
-                previous = await db.get_anime_archive_batch(
-                    archive_id, season_index, destination_id
-                )
-                previous_status = (previous or {}).get("status")
-                if previous_status == "complete":
-                    await rep.report(
-                        f"Archive already completed; skipping duplicate: {selected_title} / Season {season_index}.",
-                        "info",
-                        log=False,
-                    )
-                    continue
-                if previous_status == "in_progress":
-                    raise RuntimeError(
-                        f"Season {season_index} of {selected_title} has an unfinished previous batch run. "
-                        "It was not restarted to avoid duplicate file uploads; inspect Anime Logs before retrying."
-                    )
-
-                audio = (
-                    "Dual" if re.search(r"(?i)\bdual\b", pack_title)
-                    else "Dub" if re.search(r"(?i)\b(dub|english)\b", pack_title)
-                    else "Sub"
-                )
-                await db.set_anime_archive_batch(
-                    archive_id, season_index, destination_id, "in_progress",
-                    pack["link"], pack_title,
-                )
-                await rep.report(
-                    f"Starting completed-season archive: {selected_title} / Season {season_index} "
-                    f"using the 720p RSS pack in channel {destination_id}.",
-                    "info"
-                )
-                async with AUTO_UPLOAD_PRIORITY_LOCK:
                     result = await process_batch_anime(
                         pack_title, pack["link"], audio,
                         destination_channel=destination_id,
                     )
-                if not result:
+                    if not result:
+                        await db.set_anime_archive_batch(
+                            archive_id, season_index, destination_id, "failed",
+                            pack["link"], pack_title,
+                        )
+                        raise RuntimeError(
+                            f"720p archive download did not complete for {season_title}; "
+                            "the next selected channel was not started."
+                        )
                     await db.set_anime_archive_batch(
-                        archive_id, season_index, destination_id, "failed",
+                        archive_id, season_index, destination_id, "complete",
                         pack["link"], pack_title,
                     )
-                    raise RuntimeError(
-                        f"720p archive download did not complete for {season_title}; "
-                        "the next selected channel was not started."
-                    )
-                await db.set_anime_archive_batch(
-                    archive_id, season_index, destination_id, "complete",
-                    pack["link"], pack_title,
-                )
+    
+        finally:
+            AUTO_UPLOAD_PRIORITY_LOCK.release()
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
