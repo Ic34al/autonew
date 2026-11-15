@@ -19,6 +19,7 @@ from bot.core.database import db
 from bot.core.auto_animes import send_sticker_to_channel
 from bot.core.reporter import rep
 
+# Photo and metadata caption are intentionally sent as one Telegram message.
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
