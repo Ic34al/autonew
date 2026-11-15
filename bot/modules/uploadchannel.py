@@ -243,18 +243,17 @@ async def uploadchannel_callbacks(client, callback):
 
             if not any(role in current_status for role in ("administrator", "owner", "creator")):
                 await user_client.promote_chat_member(
-                chat.id,
-                bot_user.id,
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_post_messages=True,
-                    can_edit_messages=True,
-                    can_delete_messages=True,
-                    can_invite_users=True,
-                    can_change_info=True,
-                    can_pin_messages=True,
-                    can_invite_users=True,
-                ),
+                    chat.id,
+                    bot_user.id,
+                    privileges=ChatPrivileges(
+                        can_manage_chat=True,
+                        can_post_messages=True,
+                        can_edit_messages=True,
+                        can_delete_messages=True,
+                        can_invite_users=True,
+                        can_change_info=True,
+                        can_pin_messages=True,
+                    ),
                 )
             aliases = media.get("title") or {}
             names = []
