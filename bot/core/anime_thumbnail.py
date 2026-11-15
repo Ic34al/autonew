@@ -530,40 +530,28 @@ def create_dashboard(
         stroke_fill=(0, 0, 0),
     )
 
-    # Episode / season heading.
-    episode_text = clean_text(episode) or "TBA"
-
-    draw.text(
-        (110, 380),
-        f"SEASON  {info['season']}     |     EPISODE  {episode_text}",
-        font=get_font(27, True),
-        fill=RED,
-    )
-
-    draw.rounded_rectangle(
-        (110, 430, 510, 485),
-        radius=28,
-        fill=(0, 0, 0, 225),
-        outline=RED,
-        width=2,
-    )
-
-    draw.ellipse(
-        (128, 439, 168, 479),
-        fill=RED,
-    )
-
-    draw.polygon(
-        [(144, 448), (144, 470), (161, 459)],
-        fill=WHITE,
-    )
-
-    draw.text(
-        (185, 443),
-        "EPISODE UPDATE",
-        font=get_font(20, True),
-        fill=WHITE,
-    )
+    # Episode banner is shown only on episode-specific artwork.
+    if episode:
+        episode_text = clean_text(episode)
+        draw.text(
+            (110, 380),
+            f"SEASON  {info['season']}     |     EPISODE  {episode_text}",
+            font=get_font(27, True),
+            fill=RED,
+        )
+        draw.rounded_rectangle(
+            (110, 430, 510, 485),
+            radius=28,
+            fill=(0, 0, 0, 225),
+            outline=RED,
+            width=2,
+        )
+        draw.ellipse((128, 439, 168, 479), fill=RED)
+        draw.polygon([(144, 448), (144, 470), (161, 459)], fill=WHITE)
+        draw.text(
+            (185, 443), "EPISODE UPDATE",
+            font=get_font(20, True), fill=WHITE,
+        )
 
     # Metadata row.
     card_y1 = 510
