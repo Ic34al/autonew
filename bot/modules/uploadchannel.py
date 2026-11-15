@@ -505,12 +505,12 @@ async def uploadchannel_callbacks(client, callback):
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
                     season_info = (
-                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\\n"
-                        f"<b>Season title:</b> {_escape(season_title)}\\n"
-                        f"<b>Year:</b> {_escape(season_year)}\\n"
-                        f"<b>Episodes:</b> {_escape(episode_total)}\\n"
-                        f"<b>Format:</b> {_escape(season_format)}\\n"
-                        f"<b>Status:</b> {_escape(season_status)}\\n"
+                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
+                        f"<b>Season title:</b> {_escape(season_title)}\n"
+                        f"<b>Year:</b> {_escape(season_year)}\n"
+                        f"<b>Episodes:</b> {_escape(episode_total)}\n"
+                        f"<b>Format:</b> {_escape(season_format)}\n"
+                        f"<b>Status:</b> {_escape(season_status)}\n"
                         f"<b>Quality:</b> 720p"
                     )
                     info_message = await bot.send_message(
