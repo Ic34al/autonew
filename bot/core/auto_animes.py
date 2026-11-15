@@ -534,7 +534,7 @@ async def find_existing_anime_channel(anime_name: str):
 
 _ONGOING_PRIORITY_STICKER_FILE_ID = None
 
-async def send_sticker_to_channel(channel, sticker_id=None):
+async def send_sticker_to_channel(channel, sticker_id=None, client=None):
     """Always send the FIRST sticker from the user's priority sticker pack."""
     global _ONGOING_PRIORITY_STICKER_FILE_ID
     # Sticker priority is mandatory for episode/schedule posts; do not let an old
@@ -556,7 +556,8 @@ async def send_sticker_to_channel(channel, sticker_id=None):
                 raise RuntimeError(f"Priority sticker pack {sticker_set_name} is empty")
             _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
 
-        sent_message = await bot.send_sticker(
+        sender = client or bot
+        sent_message = await sender.send_sticker(
             chat_id=channel,
             sticker=_ONGOING_PRIORITY_STICKER_FILE_ID
         )
