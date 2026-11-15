@@ -222,9 +222,22 @@ async def _find_720p_season_pack(media, season_number):
             continue
         for entry in entries or []:
             release_title = str(getattr(entry, "title", "") or "")
-            link = getattr(entry, "link", None)
+            # Prefer an actual torrent enclosure. Nyaa's RSS alternate link is
+            # usually a /view/<id> HTML page, not a torrent file.
+            link = None
+            for candidate in (getattr(entry, "links", None) or []):
+                href = candidate.get("href") if isinstance(candidate, dict) else None
+                rel = str(candidate.get("rel") or "").lower() if isinstance(candidate, dict) else ""
+                media_type = str(candidate.get("type") or "").lower() if isinstance(candidate, dict) else ""
+                if href and (rel == "enclosure" or "bittorrent" in media_type or "x-bittorrent" in media_type):
+                    link = href
+                    break
+            link = link or getattr(entry, "link", None)
             if not link:
                 continue
+            nyaa_view = re.match(r"^https?://(?:www\\.)?nyaa\\.si/view/(\\d+)(?:[/?#].*)?$", str(link), re.IGNORECASE)
+            if nyaa_view:
+                link = f"https://nyaa.si/download/{nyaa_view.group(1)}.torrent"
             title_key = _plain_title(release_title)
             if not title_key or not any(
                 alias == title_key or alias in title_key or title_key in alias
