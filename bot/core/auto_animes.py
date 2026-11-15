@@ -7788,7 +7788,16 @@ async def fetch_animes():
                     # Today's schedule is the allow-list. A dedicated channel
                     # mapping is optional; unmapped scheduled shows go to Main Channel.
                     selected_channel = None
-                    for alias in alias_cache[cache_key]:
+                    # Check the exact schedule title and its base series title
+                    # first. This is essential for short names such as "Ao Ashi",
+                    # where token-overlap matching is intentionally conservative.
+                    direct_candidates = [original]
+                    try:
+                        direct_candidates.append(extract_base_anime_name(original))
+                    except Exception:
+                        pass
+                    direct_candidates.extend(sorted(alias_cache[cache_key]))
+                    for alias in direct_candidates:
                         alias_value = re.sub(r"\s+", " ", str(alias or "")).strip()
                         if not alias_value:
                             continue
@@ -7817,7 +7826,9 @@ async def fetch_animes():
                                     f"Selected channel mapping for '{original}' is inaccessible; release will not be redirected to Main Channel.",
                                     "error"
                                 )
-                                selected_channel = None
+                                # Do not silently redirect a configured but
+                                # inaccessible destination to Main Channel.
+                                continue
 
                     scheduled.append((
                         original,
