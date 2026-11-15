@@ -203,28 +203,18 @@ async def uploadchannel_callbacks(client, callback):
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
-            # Reuse a persisted channel mapping where possible. Avoid scanning
-            # every account dialog: a stale channel can make get_dialogs raise
-            # CHANNEL_INVALID and abort the entire channel-creation workflow.
-            chat = None
-            existing_channel = await db.get_anime_channel(title)
-            if existing_channel:
-                try:
-                    chat = await user_client.get_chat(int(existing_channel))
-                except Exception as lookup_error:
-                    await rep.report(
-                        f"Stored channel mapping for {title} is stale ({lookup_error}); creating a replacement.",
-                        "warning",
-                    )
-                    await db.remove_anime_channel_mapping(title, existing_channel)
+            # Do not pass a database channel ID to get_chat(). Pyrogram needs
+            # an access_hash for channels, and a bare ID from MongoDB is not
+            # sufficient in a fresh USER_SESSION. That was the source of
+            # CHANNEL_INVALID (channels.GetChannels) on every retry.
+            # Create the channel in this live session and keep its returned
+            # Chat object for all following operations in this run.
+            chat = await user_client.create_channel(
+                title, f"Official episode channel for {title}"
+            )
 
-            if chat is None:
-                chat = await user_client.create_channel(
-                    title, f"Official episode channel for {title}"
-                )
-
-            # Save the mapping immediately. A retry can then recover this
-            # channel even if bot promotion fails after channel creation.
+            # Persist the new ID immediately so the existing uploader's
+            # anime-to-channel routing can see the selected destination.
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
@@ -283,10 +273,12 @@ async def uploadchannel_callbacks(client, callback):
             )
             image_url = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
             if image_url:
-                await bot.send_photo(chat.id, image_url, caption=details[:1024])
+                await user_client.send_photo(chat.id, image_url, caption=details[:1024])
             else:
-                await bot.send_message(chat.id, details[:4096], disable_web_page_preview=True)
-            sticker_ok = await send_sticker_to_channel(chat.id, getattr(Var, "STICKER_ID", None))
+                await user_client.send_message(chat.id, details[:4096], disable_web_page_preview=True)
+            sticker_ok = await send_sticker_to_channel(
+                chat.id, getattr(Var, "STICKER_ID", None), client=user_client
+            )
             created.append((title, chat.id, sticker_ok))
             await asyncio.sleep(1)
 
