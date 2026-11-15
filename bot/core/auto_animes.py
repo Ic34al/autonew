@@ -1913,7 +1913,8 @@ async def get_or_create_anime_channel(name: str, aniInfo):
         for candidate in candidates:
             candidate_keys.update(mapping_keys(candidate))
 
-        # Dedicated destinations are managed only by the original /addanime command.
+        # Prefer the explicit /addanime mapping; otherwise honor the
+        # channel selected and persisted by /uploadchannel.
         seen = set()
         for candidate in candidates:
             for key in mapping_keys(candidate):
@@ -1922,6 +1923,8 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                 seen.add(key)
                 try:
                     mapped = await db.get_anime_channel(key)
+                    if not mapped:
+                        mapped = await db.get_selected_anime_channel(key)
                     if not mapped:
                         continue
                     info = await validate_channel_id(mapped)
