@@ -429,6 +429,47 @@ def _selection_keyboard(items, selected):
     return InlineKeyboardMarkup(rows)
 
 
+
+@bot.on_message(filters.command("setchannelinvite") & filters.private)
+async def setchannelinvite_command(client, message):
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    raw = message.text.split(None, 1)
+    if len(raw) < 2 or "|" not in raw[1]:
+        return await message.reply(
+            "Usage: /setchannelinvite Anime Title | https://t.me/+INVITE_LINK"
+        )
+    anime_title, invite_link = [part.strip() for part in raw[1].split("|", 1)]
+    if not anime_title or not re.match(r"^https?://t\.me/(?:\+|joinchat/)", invite_link):
+        return await message.reply("Send the exact private channel invite link, not a channel ID.")
+    user_client = __import__("pyrogram").Client(
+        "autonew_channel_creator",
+        api_id=int(Var.API_ID),
+        api_hash=Var.API_HASH,
+        session_string=Var.USER_SESSION,
+        in_memory=True,
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await user_client.start()
+        chat = await user_client.get_chat(invite_link)
+        if not chat or not getattr(chat, "id", None) or not str(getattr(chat, "type", "")).lower().endswith("channel"):
+            return await message.reply("That invite link did not resolve to a channel.")
+        await db.add_anime_channel_mapping(anime_title, chat.id)
+        await db.set_anime_channel_invite_link(anime_title, chat.id, invite_link)
+        await db.set_anime_channel_selected(anime_title, chat.id)
+        await message.reply(
+            f"✅ Saved the private channel reference for <b>{_escape(anime_title)}</b> "
+            f"({chat.id}). Retry /uploadchannel now."
+        )
+    except Exception as exc:
+        await message.reply(
+            f"❌ Could not validate that invite link: {_escape(type(exc).__name__)}: {_escape(exc)}"
+        )
+    finally:
+        if user_client.is_connected:
+            await user_client.stop()
+
 @bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
     # Respond explicitly to non-admins instead of silently filtering the command.
@@ -539,6 +580,7 @@ async def uploadchannel_callbacks(client, callback):
 
             chat = None
             reused = False
+            persistent_invite = None
             if mapped_id:
                 wanted_id = int(mapped_id)
                 # The saved channels were created by USER_SESSION. Resolve them
@@ -546,15 +588,19 @@ async def uploadchannel_callbacks(client, callback):
                 # may not have been promoted yet if an earlier run stopped midway.
                 # Do not scan get_dialogs(); stale dialog peers can trigger
                 # channels.GetChannels / CHANNEL_INVALID.
+                saved_invite = await db.get_anime_channel_invite_link(title)
+                persistent_invite = saved_invite
                 try:
-                    chat = await user_client.get_chat(wanted_id)
+                    # An invite URL carries a resolvable Telegram peer even after
+                    # Heroku restarts and the in-memory Pyrogram peer cache is lost.
+                    chat = await user_client.get_chat(saved_invite) if saved_invite else await user_client.get_chat(wanted_id)
                 except Exception as resolve_error:
                     raise RuntimeError(
-                        f"Saved channel '{title}' ({wanted_id}) cannot be opened by "
-                        f"the USER_SESSION creator account: "
+                        f"Saved channel '{title}' ({wanted_id}) has no usable persisted invite link "
+                        f"and its numeric peer cannot be resolved: "
                         f"{type(resolve_error).__name__}: {resolve_error}. "
-                        "Check that the USER_SESSION account still owns or has access "
-                        "to this channel. The existing mapping was kept; no duplicate was created."
+                        "Run /setchannelinvite Anime Title | https://t.me/+INVITE_LINK once for this "
+                        "existing channel. The mapping was kept; no duplicate was created."
                     ) from resolve_error
                 if not chat or int(chat.id) != wanted_id:
                     raise RuntimeError(
@@ -567,9 +613,24 @@ async def uploadchannel_callbacks(client, callback):
                     title, f"Official episode channel for {title}"
                 )
 
-            # Save aliases only after resolving/creating the real channel.
+            # Persist a durable invite reference for private channels. Unlike a
+            # numeric channel ID, the invite URL can repopulate Pyrogram's peer
+            # cache after a fresh in-memory USER_SESSION on Heroku.
+            if not persistent_invite:
+                try:
+                    invite_obj = await user_client.create_chat_invite_link(
+                        chat.id, name="Anime uploader persistent peer"
+                    )
+                    persistent_invite = invite_obj.invite_link
+                except Exception as invite_error:
+                    raise RuntimeError(
+                        f"Could not create a persistent invite reference for '{title}': {invite_error}"
+                    ) from invite_error
+
+            # Save aliases and invite reference only after the real channel is resolved.
             for name in names:
                 await db.add_anime_channel_mapping(name, chat.id)
+                await db.set_anime_channel_invite_link(name, chat.id, persistent_invite)
             await db.set_anime_channel_selected(title, chat.id)
 
             # USER_SESSION is the channel creator/admin. Verify the bot's status

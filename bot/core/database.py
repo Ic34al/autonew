@@ -330,6 +330,30 @@ class MongoDB:
             upsert=True,
         )
 
+
+    async def set_anime_channel_invite_link(self, anime_name: str, channel_id: int, invite_link: str):
+        key = re.sub(r"\s+", " ", str(anime_name).casefold()).strip()
+        if not key or not invite_link:
+            raise ValueError("Anime name and invite link are required")
+        await self.__anime_channels.update_one(
+            {"anime_name": key},
+            {"$set": {"anime_name": key, "channel_id": int(channel_id), "invite_link": str(invite_link)}},
+            upsert=True,
+        )
+        await self.__db.selected_anime_channels.update_one(
+            {"_id": key},
+            {"$set": {"anime_name": key, "channel_id": int(channel_id), "invite_link": str(invite_link), "enabled": True}},
+            upsert=True,
+        )
+
+    async def get_anime_channel_invite_link(self, anime_name: str):
+        key = re.sub(r"\s+", " ", str(anime_name).casefold()).strip()
+        record = await self.__anime_channels.find_one({"anime_name": key})
+        if record and record.get("invite_link"):
+            return record["invite_link"]
+        selected = await self.__db.selected_anime_channels.find_one({"_id": key})
+        return (selected or {}).get("invite_link")
+
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
         query = {"anime_name": anime_name.lower()}
         if channel is not None:
