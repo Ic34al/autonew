@@ -114,8 +114,11 @@ def _selection_keyboard(items, selected):
     return InlineKeyboardMarkup(rows)
 
 
-@bot.on_message(filters.command("uploadchannel") & filters.private & filters.user(Var.ADMINS))
+@bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
+    # Respond explicitly to non-admins instead of silently filtering the command.
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
     if not getattr(Var, "USER_SESSION", None):
         return await message.reply(
             "⚠️ USER_SESSION is not configured. Add your Telegram user session to the deployment environment first."
@@ -188,7 +191,18 @@ async def uploadchannel_callbacks(client, callback):
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
+            # Reuse an existing mapping instead of creating duplicate channels.
+            existing_channel = await db.get_anime_channel(title)
+            if existing_channel:
+                try:
+                    existing_chat = await user_client.get_chat(int(existing_channel))
+                    created.append((title + " (already mapped)", existing_chat.id, True))
+                    continue
+                except Exception:
+                    pass  # Stale mapping: replace it with a fresh channel.
+
             chat = await user_client.create_channel(title, f"Official episode channel for {title}")
+            await user_client.add_chat_members(chat.id, bot_me.id)
             await user_client.promote_chat_member(
                 chat.id,
                 bot_me.id,
