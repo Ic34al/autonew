@@ -332,7 +332,7 @@ class MongoDB:
 
 
     async def set_anime_channel_invite_link(self, anime_name: str, channel_id: int, invite_link: str):
-        key = re.sub(r"\\s+", " ", str(anime_name).casefold()).strip()
+        key = re.sub(r"\s+", " ", str(anime_name).casefold()).strip()
         if not key or not invite_link:
             raise ValueError("Anime name and invite link are required")
         await self.__anime_channels.update_one(
@@ -347,7 +347,7 @@ class MongoDB:
         )
 
     async def get_anime_channel_invite_link(self, anime_name: str):
-        key = re.sub(r"\\s+", " ", str(anime_name).casefold()).strip()
+        key = re.sub(r"\s+", " ", str(anime_name).casefold()).strip()
         record = await self.__anime_channels.find_one({"anime_name": key})
         if record and record.get("invite_link"):
             return record["invite_link"]
