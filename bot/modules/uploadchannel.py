@@ -30,6 +30,9 @@ query ($page: Int, $perPage: Int) {
     media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC) {
       id
       title { english romaji native }
+      bannerImage
+      season
+      seasonYear
       description(asHtml: false)
       type
       format
@@ -255,10 +258,8 @@ async def uploadchannel_callbacks(client, callback):
             start = media.get("startDate") or {}
             end = media.get("endDate") or {}
             studios = (media.get("studios") or {}).get("nodes") or []
-            # Match the requested channel post layout: thumbnail first, then
-            # one compact title quote and one expandable synopsis quote.
-            # AniList descriptions sometimes contain literal HTML <br> tags even
-            # when asHtml=false; normalize them before escaping for Telegram HTML.
+
+            # Keep the expandable synopsis format unchanged and restore all metadata.
             raw_synopsis = str(media.get("description") or "Synopsis unavailable.")
             raw_synopsis = re.sub(r"(?i)<br\s*/?>", "\n\n", raw_synopsis)
             raw_synopsis = re.sub(r"(?i)</(?:p|div|li)\s*>", "\n\n", raw_synopsis)
@@ -274,24 +275,60 @@ async def uploadchannel_callbacks(client, callback):
                 if romaji_title and romaji_title.casefold() != english_title.casefold()
                 else f"❝ <b>{_escape(english_title)}</b> ❞"
             )
+            score = media.get("averageScore")
+            first_aired = "-".join(
+                str(start.get(key, "")).zfill(2) for key in ("year", "month", "day")
+            ) if start.get("year") else "N/A"
+            last_aired = "-".join(
+                str(end.get(key, "")).zfill(2) for key in ("year", "month", "day")
+            ) if end.get("year") else "Ongoing"
+            studios_text = ", ".join(
+                studio.get("name", "") for studio in studios if studio.get("name")
+            ) or "N/A"
+            metadata_text = (
+                f"<b>Genres:</b> {_escape(', '.join(media.get('genres') or []) or 'N/A')}\n"
+                f"<b>Type:</b> {_escape(media.get('format') or media.get('type') or 'N/A')}\n"
+                f"<b>Average Rating:</b> {_escape(f'{score / 10:.1f}/10' if score else 'N/A')}\n"
+                f"<b>Status:</b> {_escape(media.get('status') or 'N/A')}\n"
+                f"<b>First aired:</b> {_escape(first_aired)}\n"
+                f"<b>Last aired:</b> {_escape(last_aired)}\n"
+                f"<b>Runtime:</b> {_escape(str(media.get('duration') or 'N/A'))} minutes\n"
+                f"<b>No. of episodes:</b> {_escape(media.get('episodes') or 'N/A')}\n"
+                f"<b>Studio:</b> {_escape(studios_text)}"
+            )
             details = (
                 f"<blockquote>{title_line}</blockquote>\n\n"
+                f"{metadata_text}\n\n"
                 f"<blockquote expandable>▸ <b>Synopsis :</b> <i>{_escape(synopsis)}</i></blockquote>"
             )
-            image_url = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
-            if image_url:
+
+            # Generate the ANIME SOUL landscape dashboard thumbnail for the series.
+            image_url = (
+                media.get("bannerImage")
+                or (media.get("coverImage") or {}).get("extraLarge")
+                or (media.get("coverImage") or {}).get("large")
+            )
+            from bot.core.anime_thumbnail import create_anime_thumbnail
+            thumbnail_path = await create_anime_thumbnail(
+                image_url, title, None,
+                output_name=f"channel_{media.get('id') or chat.id}.jpg",
+                metadata=media,
+            )
+            if thumbnail_path:
+                await user_client.send_photo(chat.id, thumbnail_path)
+            elif image_url:
                 await user_client.send_photo(chat.id, image_url)
             await user_client.send_message(chat.id, details, disable_web_page_preview=True)
             sticker_ok = await send_sticker_to_channel(
                 chat.id, getattr(Var, "STICKER_ID", None), client=user_client
             )
-            created.append((title, chat.id, sticker_ok))
+            created.append((title, chat.id, sticker_ok, reused))
             await asyncio.sleep(1)
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
-        summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _ in created)
+        summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
         await callback.message.edit(
-            f"✅ Created {len(created)} anime channel(s), saved their anime mappings, and posted the metadata cards.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
+            f"✅ Processed {len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
         )
     except Exception as exc:
         await rep.report(f"Automatic anime channel creation failed: {type(exc).__name__}: {exc}", "error")
