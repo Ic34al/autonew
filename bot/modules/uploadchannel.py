@@ -213,8 +213,30 @@ async def uploadchannel_callbacks(client, callback):
                 except Exception:
                     pass  # Stale mapping: replace it with a fresh channel.
 
-            chat = await user_client.create_channel(title, f"Official episode channel for {title}")
-            await user_client.add_chat_members(chat.id, bot_user.id)
+            # A previous run may have created the channel but failed while
+            # adding the bot. Reuse an exact-title channel owned by this session.
+            chat = None
+            async for dialog in user_client.get_dialogs():
+                candidate = dialog.chat
+                if (
+                    getattr(candidate, "title", None)
+                    and candidate.title.casefold() == title.casefold()
+                    and str(getattr(candidate, "type", "")).lower().endswith("channel")
+                ):
+                    chat = candidate
+                    break
+            if chat is None:
+                chat = await user_client.create_channel(
+                    title, f"Official episode channel for {title}"
+                )
+
+            # Resolve membership first so retries are safe when the bot was
+            # successfully added during an earlier partial attempt.
+            try:
+                await user_client.get_chat_member(chat.id, bot_user.id)
+            except Exception:
+                await user_client.add_chat_members(chat.id, bot_user.id)
+
             await user_client.promote_chat_member(
                 chat.id,
                 bot_user.id,
