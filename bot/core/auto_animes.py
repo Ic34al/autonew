@@ -274,6 +274,17 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
     if not video_files:
         await rep.report(f"No video files found in batch for {anime_name}", "error")
         return False
+    expected_episodes = aniInfo.adata.get("episodes")
+    if expected_episodes:
+        try:
+            expected_episodes = int(expected_episodes)
+        except (TypeError, ValueError):
+            expected_episodes = None
+        if expected_episodes and episode_count != expected_episodes:
+            raise RuntimeError(
+                f"Season pack for {anime_name} contains {episode_count} video(s), "
+                f"but AniList lists {expected_episodes} episodes. Refusing to publish an incomplete range."
+            )
 
     aniInfo.pdata["audio_type"] = audio
     aniInfo.pdata["quality_label"] = "720p"
@@ -330,6 +341,12 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
             except Exception:
                 pass
 
+        if len(qual_msg_ids) != episode_count:
+            raise RuntimeError(
+                f"720p archive upload incomplete for {anime_name}: "
+                f"{len(qual_msg_ids)}/{episode_count} episodes reached FILE_STORE. "
+                "No range button or channel post was published."
+            )
         if qual_msg_ids:
             first_id = min(qual_msg_ids)
             last_id = max(qual_msg_ids)
@@ -360,7 +377,7 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
         logging.info(f"[CLEANUP] Removing batch_dir: {batch_dir}")
         shutil.rmtree(batch_dir, ignore_errors=True)
     await rep.report(f"Batch processing done and cleaned for {anime_name}", "info")
-    return True
+    return bool(batch_buttons)
 
 def download_image(url, filename):
     try:
