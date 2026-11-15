@@ -554,6 +554,7 @@ async def uploadchannel_callbacks(client, callback):
                         pack_title, pack["link"], audio,
                         destination_channel=destination_id,
                         send_completion_sticker=False,
+                        send_main_announcement=False,
                     )
                     if not result:
                         await db.set_anime_archive_batch(
