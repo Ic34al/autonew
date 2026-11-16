@@ -587,12 +587,37 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
         shutil.copy2(source, quality_source)
+        encode_status = await bot.send_message(
+            Var.LOG_CHANNEL,
+            f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p",
+        )
         encoded_path = await FFEncoder(
-            await bot.send_message(Var.LOG_CHANNEL, f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"),
-            quality_source, upload_name, quality
+            encode_status, quality_source, upload_name, quality
         ).start_encode()
+
+        # A custom per-anime FFmpeg command can fail on a particular source
+        # (e.g. missing subtitle/audio streams). Retry once with the repository's
+        # known default quality command; preserve all earlier successful quality
+        # uploads and do not restart the episode.
         if not encoded_path or not os.path.exists(encoded_path):
-            raise RuntimeError(f"Encoding failed for S{season_number}E{episode_number} at {quality}.")
+            partial_output = os.path.join("encode", "ffanimeadvout.mkv")
+            if os.path.exists(partial_output):
+                os.remove(partial_output)
+            await rep.report(
+                f"Custom FFmpeg encode failed for S{season_number}E{episode_number} at {quality}; "
+                "retrying once with the safe default FFmpeg profile.",
+                "warning",
+                log=False,
+            )
+            encoded_path = await FFEncoder(
+                encode_status, quality_source, upload_name, quality, force_default=True
+            ).start_encode()
+
+        if not encoded_path or not os.path.exists(encoded_path):
+            raise RuntimeError(
+                f"Encoding failed for S{season_number}E{episode_number} at {quality}, "
+                "including the safe default FFmpeg retry. Earlier uploaded qualities remain saved."
+            )
         uploaded = await TgUploader(await bot.send_message(
             Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
         )).upload(encoded_path, quality)
