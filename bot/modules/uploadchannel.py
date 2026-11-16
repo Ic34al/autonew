@@ -18,7 +18,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
+from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -1178,89 +1178,98 @@ async def uploadchannel_callbacks(client, callback):
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
 
-        # Hold the scheduler lock for the entire archive backlog so a new
-        # episode cannot interleave between Season 1/Season 2 or selected channels.
-        channel_stage = "acquiring upload priority lock"
-        await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-        try:
-            # Process one selected anime completely before starting the next.
-            # Older seasons first, then the currently airing season.
-            for selected_media, destination_id in archive_jobs:
-                selected_title = _display_title(selected_media)
-                prequels = _prequel_seasons(selected_media)
-                season_jobs = [(index, item, int(item.get("episodes") or 0))
-                               for index, item in enumerate(prequels, start=1)]
-                current_episode_count = max(0, int((selected_media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
-                if current_episode_count:
-                    season_jobs.append((len(season_jobs) + 1, selected_media, current_episode_count))
-                if not season_jobs:
-                    raise RuntimeError(f"No released episodes are known for {selected_title}; no upload was started.")
-                for season_index, prequel, available_episodes in season_jobs:
-                    season_title = _display_title(prequel)
-                    archive_id = int(prequel.get("id") or 0)
-                    if not archive_id:
-                        raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
-                    previous = await db.get_anime_archive_batch(
-                        archive_id, season_index, destination_id
+        # Scheduled ongoing releases have priority over the archive backlog.
+        # Lock only one archive episode at a time, then yield to any scheduled
+        # upload that became pending while this episode was being processed.
+        channel_stage = "processing archive episodes with scheduled-release priority"
+        # Process one selected anime completely before starting the next.
+        # Older seasons first, then the currently airing season.
+        for selected_media, destination_id in archive_jobs:
+            selected_title = _display_title(selected_media)
+            prequels = _prequel_seasons(selected_media)
+            season_jobs = [(index, item, int(item.get("episodes") or 0))
+                           for index, item in enumerate(prequels, start=1)]
+            current_episode_count = max(0, int((selected_media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
+            if current_episode_count:
+                season_jobs.append((len(season_jobs) + 1, selected_media, current_episode_count))
+            if not season_jobs:
+                raise RuntimeError(f"No released episodes are known for {selected_title}; no upload was started.")
+            for season_index, prequel, available_episodes in season_jobs:
+                season_title = _display_title(prequel)
+                archive_id = int(prequel.get("id") or 0)
+                if not archive_id:
+                    raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
+                previous = await db.get_anime_archive_batch(
+                    archive_id, season_index, destination_id
+                )
+                previous_status = (previous or {}).get("status")
+                # Resume safely from the channel history; a stale DB status must not
+                # suppress uploads when the destination channel is actually empty.
+                # Check the destination channel's history; existing episodes are skipped.
+                existing_episodes = set()
+                channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
+                async for channel_message in user_client.get_chat_history(destination_id, limit=500):
+                    body = " ".join(str(x or "") for x in (
+                        getattr(channel_message, "text", ""),
+                        getattr(channel_message, "caption", ""),
+                    ))
+                    match = re.search(
+                        rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
                     )
-                    previous_status = (previous or {}).get("status")
-                    # Resume safely from the channel history; a stale DB status must not
-                    # suppress uploads when the destination channel is actually empty.
-                    # Check the destination channel's history; existing episodes are skipped.
-                    existing_episodes = set()
-                    channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
-                    async for channel_message in user_client.get_chat_history(destination_id, limit=500):
-                        body = " ".join(str(x or "") for x in (
-                            getattr(channel_message, "text", ""),
-                            getattr(channel_message, "caption", ""),
-                        ))
-                        match = re.search(
-                            rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
-                        )
-                        if match:
-                            existing_episodes.add(int(match.group(1)))
-                    season_year = prequel.get("seasonYear") or "N/A"
-                    episode_total = available_episodes or "Unknown"
-                    season_format = prequel.get("format") or "TV"
-                    season_status = prequel.get("status") or "N/A"
-                    season_info = (
-                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
-                        f"<b>Season title:</b> {_escape(season_title)}\n"
-                        f"<b>Year:</b> {_escape(season_year)}\n"
-                        f"<b>Episodes:</b> {_escape(episode_total)}\n"
-                        f"<b>Format:</b> {_escape(season_format)}\n"
-                        f"<b>Status:</b> {_escape(season_status)}\n"
-                        f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
+                    if match:
+                        existing_episodes.add(int(match.group(1)))
+                season_year = prequel.get("seasonYear") or "N/A"
+                episode_total = available_episodes or "Unknown"
+                season_format = prequel.get("format") or "TV"
+                season_status = prequel.get("status") or "N/A"
+                season_info = (
+                    f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
+                    f"<b>Season title:</b> {_escape(season_title)}\n"
+                    f"<b>Year:</b> {_escape(season_year)}\n"
+                    f"<b>Episodes:</b> {_escape(episode_total)}\n"
+                    f"<b>Format:</b> {_escape(season_format)}\n"
+                    f"<b>Status:</b> {_escape(season_status)}\n"
+                    f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
+                )
+                # No standalone season-info or sticker posts. Each episode
+                # will publish one final ANIME SOUL card after all qualities finish.
+                if not available_episodes:
+                    raise RuntimeError(
+                        f"AniList has no released episode count for {season_title}; refusing to guess."
                     )
-                    # No standalone season-info or sticker posts. Each episode
-                    # will publish one final ANIME SOUL card after all qualities finish.
-                    if not available_episodes:
-                        raise RuntimeError(
-                            f"AniList has no released episode count for {season_title}; refusing to guess."
-                        )
-                    await db.set_anime_archive_batch(
-                        archive_id, season_index, destination_id, "in_progress",
-                        "", f"episode-by-episode S{season_index} 4-quality",
+                await db.set_anime_archive_batch(
+                    archive_id, season_index, destination_id, "in_progress",
+                    "", f"episode-by-episode S{season_index} 4-quality",
+                )
+                for episode_number in range(1, available_episodes + 1):
+                    if episode_number in existing_episodes:
+                        continue
+                    await rep.report(
+                        f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
+                        f"to dedicated channel {destination_id}.",
+                        "info", log=False,
                     )
-                    for episode_number in range(1, available_episodes + 1):
-                        if episode_number in existing_episodes:
-                            continue
-                        await rep.report(
-                            f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
-                            f"to dedicated channel {destination_id}.",
-                            "info", log=False,
-                        )
-                        channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
+                    channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
+                    # Let a newly detected scheduled release run before
+                    # the next archive episode. The current episode finishes
+                    # atomically; scheduled uploads take the lock at this boundary.
+                    while AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                        await asyncio.sleep(1)
+                    channel_stage = (
+                        f"acquiring upload priority lock before archive "
+                        f"S{season_index}E{episode_number}"
+                    )
+                    await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+                    try:
                         await _upload_single_episode(
                             prequel, destination_id, season_index, episode_number, user_client
                         )
-                    await db.set_anime_archive_batch(
-                        archive_id, season_index, destination_id, "complete",
-                        "", f"episode-by-episode S{season_index} 4-quality",
-                    )
-    
-        finally:
-            AUTO_UPLOAD_PRIORITY_LOCK.release()
+                    finally:
+                        AUTO_UPLOAD_PRIORITY_LOCK.release()
+                await db.set_anime_archive_batch(
+                    archive_id, season_index, destination_id, "complete",
+                    "", f"episode-by-episode S{season_index} 4-quality",
+                )
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
