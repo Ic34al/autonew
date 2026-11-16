@@ -18,7 +18,8 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
+import bot.core.auto_animes as auto_anime_core
+from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -1256,7 +1257,7 @@ async def uploadchannel_callbacks(client, callback):
                     # atomically; scheduled uploads take the lock at this boundary.
                     while (
                         AUTO_UPLOAD_PRIORITY_PENDING.is_set()
-                        or time.monotonic() < AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+                        or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
                     ):
                         await asyncio.sleep(5)
                     channel_stage = (
