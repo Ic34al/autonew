@@ -41,6 +41,7 @@ query ($page: Int, $perPage: Int) {
     media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC) {
       id
       title { english romaji native }
+      synonyms
       bannerImage
       season
       seasonYear
@@ -62,6 +63,7 @@ query ($page: Int, $perPage: Int) {
           node {
             id
             title { english romaji native }
+            synonyms
             format
             status
             episodes
@@ -269,69 +271,152 @@ async def _find_720p_season_pack(media, season_number):
 
 
 async def _find_episode_torrent(media, season_number, episode_number):
-    """Find one exact 720p source torrent for the requested anime season/episode."""
+    """Search Nyaa RSS using AniList titles/synonyms and return only an exact episode match."""
     titles = media.get("title") or {}
-    aliases = [_plain_title(titles.get(k)) for k in ("english", "romaji", "native") if titles.get(k)]
-    aliases = [a for a in aliases if a]
+    raw_aliases = [
+        titles.get(key) for key in ("english", "romaji", "native")
+        if titles.get(key)
+    ]
+    # AniList's synonyms often contain the short Japanese/romanized title
+    # used by release groups when the English title is long.
+    raw_aliases.extend(media.get("synonyms") or [])
+    aliases = []
+    for value in raw_aliases:
+        value = str(value or "").strip()
+        normalized = _plain_title(value)
+        if value and normalized and normalized not in {
+            _plain_title(existing) for existing in aliases
+        }:
+            aliases.append(value)
     if not aliases:
+        await rep.report(
+            f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.",
+            "warning", log=False,
+        )
         return None
+
     season = int(season_number)
     episode = int(episode_number)
     queries = []
-    for key in ("english", "romaji", "native"):
-        title = titles.get(key)
-        if not title:
-            continue
+    for alias in aliases:
+        # Avoid quoted-only searches: Nyaa title punctuation and release-group
+        # formatting varies. Keep each query title-specific and episode-specific.
         queries.extend([
-            f'"{title}" S{season:02d}E{episode:02d} 720p',
-            f'"{title}" Season {season} Episode {episode} 720p',
-            f'"{title}" {season}x{episode:02d} 720p',
+            f"{alias} S{season:02d}E{episode:02d} 720p",
+            f"{alias} S{season}E{episode:02d} 720p",
+            f"{alias} Season {season} Episode {episode} 720p",
+            f"{alias} {episode:02d} 720p",
         ])
     feeds = [
-        f"https://nyaa.si/?page=rss&q={quote_plus(q)}&c=1_2&f=0"
-        for q in queries
+        f"https://nyaa.si/?page=rss&q={quote_plus(query)}&c=1_2&f=0"
+        for query in queries
     ]
     feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
     feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
-    for feed_url in dict.fromkeys(x for x in feeds if x):
+
+    seen_entries = set()
+    scanned = 0
+    for feed_url in dict.fromkeys(url for url in feeds if url):
         try:
             entries = await getfeeds(feed_url)
         except Exception as exc:
-            await rep.report(f"Episode RSS scan failed: {exc}", "warning", log=False)
+            await rep.report(
+                f"Episode RSS scan failed for {feed_url}: {type(exc).__name__}: {exc}",
+                "warning", log=False,
+            )
             continue
+
         for entry in entries or []:
             title = str(getattr(entry, "title", "") or "")
-            normalized = _plain_title(title)
-            if not normalized or not any(a == normalized or a in normalized for a in aliases):
+            link = getattr(entry, "link", None)
+            entry_key = (title.casefold(), str(link or ""))
+            if entry_key in seen_entries:
                 continue
+            seen_entries.add(entry_key)
+            scanned += 1
+
+            normalized_release = _plain_title(title)
+            # First prefer a full normalized alias match. For abbreviated
+            # release titles, permit a strong token overlap only (>=75% of
+            # a meaningful alias and at least four matching words).
+            title_match = any(
+                _plain_title(alias) in normalized_release
+                for alias in aliases
+                if _plain_title(alias)
+            )
+            if not title_match:
+                release_tokens = set(normalized_release.split())
+                for alias in aliases:
+                    alias_tokens = {
+                        token for token in _plain_title(alias).split()
+                        if len(token) > 2 and token not in {
+                            "the", "and", "for", "with", "from", "that", "this",
+                            "her", "his", "their", "you", "your", "into",
+                        }
+                    }
+                    if len(alias_tokens) >= 4:
+                        overlap = len(alias_tokens & release_tokens)
+                        if overlap >= 4 and overlap / len(alias_tokens) >= 0.75:
+                            title_match = True
+                            break
+            if not title_match:
+                continue
+
             ep_patterns = (
                 rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
                 rf"(?i)\b{season}x0*{episode}\b",
+                rf"(?i)\bSeason[\s._-]*0*{season}[\s._-]*Episode[\s._-]*0*{episode}\b",
                 rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
                 rf"(?i)\bEp[\s._-]*0*{episode}\b",
             )
-            if not any(re.search(p, title) for p in ep_patterns):
+            episode_match = any(re.search(pattern, title) for pattern in ep_patterns)
+            # Many Season 1 releases are numbered simply "- 01". Accept that
+            # format only for S1 and only after a strong anime-title match.
+            if season == 1 and not episode_match:
+                episode_match = bool(re.search(
+                    rf"(?i)(?:^|[\s._\-\[])0*{episode}(?:[\s._\-\]\[]|$)",
+                    title,
+                ))
+            if not episode_match:
                 continue
+
             detected_season = _season_number_from_release(title)
             if detected_season is not None and detected_season != season:
                 continue
             if season > 1 and detected_season != season:
                 continue
-            link = None
+
+            torrent_link = None
             for candidate in (getattr(entry, "links", None) or []):
                 href = candidate.get("href") if isinstance(candidate, dict) else None
                 rel = str(candidate.get("rel") or "").lower() if isinstance(candidate, dict) else ""
-                typ = str(candidate.get("type") or "").lower() if isinstance(candidate, dict) else ""
-                if href and (rel == "enclosure" or "bittorrent" in typ or "x-bittorrent" in typ):
-                    link = href
+                content_type = str(candidate.get("type") or "").lower() if isinstance(candidate, dict) else ""
+                if href and (
+                    rel == "enclosure"
+                    or "bittorrent" in content_type
+                    or "x-bittorrent" in content_type
+                ):
+                    torrent_link = href
                     break
-            link = link or getattr(entry, "link", None)
-            if not link:
+            torrent_link = torrent_link or link
+            if not torrent_link:
                 continue
-            match = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)", str(link), re.I)
+
+            match = re.match(
+                r"^https?://(?:www\.)?nyaa\.si/view/(\d+)",
+                str(torrent_link), re.I,
+            )
             if match:
-                link = f"https://nyaa.si/download/{match.group(1)}.torrent"
-            return {"title": title, "link": str(link)}
+                torrent_link = f"https://nyaa.si/download/{match.group(1)}.torrent"
+            return {"title": title, "link": str(torrent_link)}
+
+    await rep.report(
+        f"No exact RSS torrent match for AniList anime {media.get('id')} "
+        f"Season {season} Episode {episode}; searched {len(aliases)} title aliases "
+        f"across {len(dict.fromkeys(url for url in feeds if url))} feeds "
+        f"and inspected {scanned} unique entries. No upload was started.",
+        "warning", log=False,
+    )
     return None
 
 
