@@ -433,15 +433,6 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{media.get('id')}_{season_number}_{episode_number}")
     workdir = os.path.join("downloads", "uc_episode_" + safe)
     os.makedirs(workdir, exist_ok=True)
-    downloaded = await TorDownloader(workdir).download(episode["link"])
-    if not downloaded or not os.path.exists(downloaded):
-        raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
-    video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
-    if len(video_files) != 1:
-        raise RuntimeError(
-            f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
-        )
-    source = video_files[0]
     info = TextEditor(title)
     await info.load_info()
     info.pdata["episode_number"] = str(episode_number).zfill(2)
@@ -459,7 +450,75 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         raise RuntimeError("The bot authenticated by BOT_TOKEN has no username; cannot create file links.")
     quality_order = ("HDRi", "1080", "720", "480")
     buttons_by_quality = {}
+
+    # Reuse already-uploaded files from FILE_STORE before downloading or
+    # encoding anything. Exact normalized upload filenames include anime,
+    # season, episode and quality, avoiding cross-episode/quality collisions.
+    def _storage_filename_key(value):
+        value = os.path.basename(str(value or "")).casefold()
+        value = re.sub(r"\.(mkv|mp4|avi|webm)$", "", value)
+        return re.sub(r"[^a-z0-9]+", "", value)
+
+    existing_storage = {}
+    try:
+        async for stored in bot.get_chat_history(Var.FILE_STORE, limit=5000):
+            media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
+            stored_name = getattr(media_obj, "file_name", None) if media_obj else None
+            if stored_name:
+                existing_storage.setdefault(_storage_filename_key(stored_name), int(stored.id))
+    except Exception as storage_error:
+        await rep.report(
+            f"Could not scan FILE_STORE for reusable {title} S{season_number}E{episode_number} files; "
+            f"will continue with fresh uploads: {storage_error}",
+            "warning",
+            log=False,
+        )
+
+    missing_qualities = []
     for quality in quality_order:
+        upload_name = await info.get_upname(quality)
+        stored_id = existing_storage.get(_storage_filename_key(upload_name))
+        if stored_id:
+            try:
+                stored_msg = await bot.get_messages(Var.FILE_STORE, message_ids=stored_id)
+                if stored_msg and not getattr(stored_msg, "empty", False):
+                    token = hashlib.sha256(
+                        f"{stored_id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
+                    ).hexdigest()[:24]
+                    await db.set_batch_file_link(token, [stored_id])
+                    start_payload = f"getbatch-{token}"
+                    url = f"https://t.me/{live_bot_username}?start={await encode(start_payload)}"
+                    buttons_by_quality[quality] = InlineKeyboardButton(
+                        f"{quality}p" if quality != "HDRi" else "HDRip", url=url
+                    )
+                    await rep.report(
+                        f"Reusing existing {quality} for {title} S{season_number}E{episode_number}; "
+                        "skipping download/encode/upload.",
+                        "info",
+                        log=False,
+                    )
+                    continue
+            except Exception as verify_error:
+                await rep.report(
+                    f"Existing {quality} file {stored_id} could not be verified; it will be re-uploaded: {verify_error}",
+                    "warning",
+                    log=False,
+                )
+        missing_qualities.append(quality)
+
+    source = None
+    if missing_qualities:
+        downloaded = await TorDownloader(workdir).download(episode["link"])
+        if not downloaded or not os.path.exists(downloaded):
+            raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
+        video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
+        if len(video_files) != 1:
+            raise RuntimeError(
+                f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
+            )
+        source = video_files[0]
+
+    for quality in missing_qualities:
         upload_name = await info.get_upname(quality)
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
