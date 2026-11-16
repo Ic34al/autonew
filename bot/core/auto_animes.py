@@ -586,9 +586,33 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
             _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
 
         sender = client or bot
+        sticker_to_send = _ONGOING_PRIORITY_STICKER_FILE_ID
+        # Bot API file_ids are bot-account scoped. When the channel creator
+        # USER_SESSION posts to its private channel, download the sticker bytes
+        # through the Bot API and upload those bytes through the user session.
+        if sender is not bot:
+            get_file_endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getFile"
+            async with httpx.AsyncClient(timeout=25.0) as session:
+                file_response = await session.get(
+                    get_file_endpoint,
+                    params={"file_id": _ONGOING_PRIORITY_STICKER_FILE_ID},
+                )
+                file_response.raise_for_status()
+                file_payload = file_response.json()
+                if not file_payload.get("ok"):
+                    raise RuntimeError(file_payload.get("description", "Telegram getFile failed"))
+                file_path = (file_payload.get("result") or {}).get("file_path")
+                if not file_path:
+                    raise RuntimeError("Telegram getFile returned no file_path for priority sticker")
+                download_url = f"https://api.telegram.org/file/bot{Var.BOT_TOKEN}/{file_path}"
+                sticker_response = await session.get(download_url)
+                sticker_response.raise_for_status()
+            sticker_to_send = io.BytesIO(sticker_response.content)
+            sticker_to_send.name = "priority_sticker.webp"
+
         sent_message = await sender.send_sticker(
             chat_id=channel,
-            sticker=_ONGOING_PRIORITY_STICKER_FILE_ID
+            sticker=sticker_to_send
         )
         if not sent_message:
             raise RuntimeError("Telegram did not confirm the priority sticker message")
