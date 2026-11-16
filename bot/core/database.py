@@ -2,13 +2,11 @@ from motor.motor_asyncio import AsyncIOMotorClient
 from bot import Var
 import datetime 
 import asyncio
-import os
 import re
 
 class MongoDB:
     def __init__(self, uri, database_name):
         self.__client = AsyncIOMotorClient(uri)
-        self.__file_share_client = None
         self.__db = self.__client[database_name]
         self.__animes = self.__db.animes[Var.BOT_TOKEN.split(':')[0]]
         self.__anime_channels = self.__db.anime_channels
@@ -456,47 +454,6 @@ class MongoDB:
         key = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
         await self.__db.selected_anime_channels.update_one(
             {"_id": key}, {"$set": {"anime_name": key, "channel_id": int(channel_id), "enabled": True}}, upsert=True
-        )
-
-    async def save_monkey_file_share_link(
-        self, token: str, file_id: str, unique_id: str,
-        storage_chat_id: int, message_id: int, protect: bool = False,
-    ):
-        """Register a stored Telegram message in Monkey bot's existing FileDB.
-
-        The share bot uses DATABASE_NAME (default file_share_bot) and the
-        files collection. Its own bot account then copies the storage message,
-        avoiding cross-bot file_id incompatibility.
-        """
-        share_uri = (
-            os.getenv("FILE_SHARE_MONGO_URI")
-            or os.getenv("MONGODB_URI")
-            or Var.MONGO_URI
-        )
-        share_db_name = (
-            os.getenv("FILE_SHARE_DB_NAME")
-            or os.getenv("DATABASE_NAME")
-            or "file_share_bot"
-        )
-        if share_uri == Var.MONGO_URI:
-            share_client = self.__client
-        else:
-            if self.__file_share_client is None:
-                self.__file_share_client = AsyncIOMotorClient(share_uri)
-            share_client = self.__file_share_client
-        files = share_client[share_db_name]["files"]
-        await files.update_one(
-            {"token": str(token)},
-            {"$set": {
-                "token": str(token),
-                "file_id": str(file_id or ""),
-                "unique_id": str(unique_id or f"{int(storage_chat_id)}:{int(message_id)}"),
-                "protect": bool(protect),
-                "storage_chat_id": int(storage_chat_id),
-                "message_id": int(message_id),
-                "updated_at": datetime.datetime.utcnow(),
-            }},
-            upsert=True,
         )
 
     async def set_batch_file_link(self, token: str, message_ids):
