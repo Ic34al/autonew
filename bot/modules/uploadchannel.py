@@ -450,6 +450,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
         else "Sub"
     )
+    # Build file deep-links from the live BOT_TOKEN identity, not the
+    # legacy BOT_USERNAME config (which may still name an older bot).
+    live_bot = await bot.get_me()
+    live_bot_username = str(getattr(live_bot, "username", "") or "").strip().lstrip("@")
+    if not live_bot_username:
+        raise RuntimeError("The bot authenticated by BOT_TOKEN has no username; cannot create file links.")
     quality_order = ("HDRi", "1080", "720", "480")
     buttons = []
     for quality in quality_order:
@@ -473,7 +479,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         ).hexdigest()[:24]
         await db.set_batch_file_link(token, [uploaded.id])
         start_payload = f"getbatch-{token}"
-        url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
+        url = f"https://t.me/{live_bot_username}?start={await encode(start_payload)}"
         buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
     caption = (
         f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\n"
