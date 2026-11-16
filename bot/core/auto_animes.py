@@ -26,6 +26,7 @@ import os
 import feedparser
 from fpdf import FPDF
 import httpx
+import io
 import subprocess
 from PIL import Image
 import shutil
