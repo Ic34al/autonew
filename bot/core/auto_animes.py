@@ -37,6 +37,10 @@ from json import loads as jloads
 # Scheduled releases take priority over manual /search queues.
 AUTO_UPLOAD_PRIORITY_LOCK = asyncio.Lock()
 AUTO_UPLOAD_PRIORITY_PENDING = asyncio.Event()
+# After each successful scheduled upload, give the scanner a 30-minute quiet
+# window to discover and process any newly released ongoing episodes before
+# the /uploadchannel archive backlog resumes.
+AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL = 0.0
 # Set while an admin-selected /search batch is being uploaded.
 MANUAL_SEARCH_HOLD = asyncio.Event()
 
@@ -8108,6 +8112,15 @@ async def fetch_animes():
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
                         retry_after.pop(link, None)
+                        if result == "uploaded":
+                            global AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+                            AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL = time.monotonic() + 30 * 60
+                            await rep.report(
+                                "Scheduled ongoing episode uploaded. Holding /uploadchannel for a 30-minute "
+                                "quiet window; any newly detected release will upload first and restart this window.",
+                                "info",
+                                log=False,
+                            )
                         await rep.report(
                             f"Scheduled anime processed: {scheduled_title} | {title}",
                             "success",
