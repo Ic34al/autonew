@@ -716,6 +716,12 @@ async def uploadchannel_callbacks(client, callback):
                 value = aliases.get(key)
                 if value and value not in names:
                     names.append(value)
+            # Persist AniList synonyms too, so the scheduled RSS resolver can
+            # recognize release-group/alternate titles and route them back to
+            # this exact automatically created channel.
+            for value in (media.get("synonyms") or []):
+                if value and value not in names:
+                    names.append(value)
             names.append(title)
             names = list(dict.fromkeys(names))
 
