@@ -18,7 +18,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
+from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -26,6 +26,7 @@ from bot.core.tguploader import TgUploader
 from bot.core.text_utils import TextEditor
 import os
 import shutil
+import time
 from bot.core.reporter import rep
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
@@ -497,7 +498,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"but BOT_USERNAME is @{share_bot_username or 'not configured'}. "
             "Episode quality buttons were not created to avoid sending users to the wrong bot."
         )
-    quality_order = ("HDRi", "1080", "720", "480")
+    quality_order = ("720", "1080", "480", "HDRi")
     buttons_by_quality = {}
 
     # Recover files by parsed season/episode/quality/title rather than exact
@@ -1253,8 +1254,11 @@ async def uploadchannel_callbacks(client, callback):
                     # Let a newly detected scheduled release run before
                     # the next archive episode. The current episode finishes
                     # atomically; scheduled uploads take the lock at this boundary.
-                    while AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                        await asyncio.sleep(1)
+                    while (
+                        AUTO_UPLOAD_PRIORITY_PENDING.is_set()
+                        or time.monotonic() < AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+                    ):
+                        await asyncio.sleep(5)
                     channel_stage = (
                         f"acquiring upload priority lock before archive "
                         f"S{season_index}E{episode_number}"
