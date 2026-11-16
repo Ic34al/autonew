@@ -829,8 +829,14 @@ async def uploadchannel_callbacks(client, callback):
                         destination_id, getattr(Var, "STICKER_ID", None), client=user_client
                     )
                     if not sticker_ok:
-                        raise RuntimeError(
-                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
+                        # A decorative sticker failure must never cancel the
+                        # actual episode backfill. The helper logs the Telegram
+                        # exception; continue with the season information and uploads.
+                        await rep.report(
+                            f"Priority sticker could not be posted for {selected_title} "
+                            f"Season {season_index} in {destination_id}; continuing episode uploads.",
+                            "warning",
+                            log=False,
                         )
                     if not available_episodes:
                         raise RuntimeError(
