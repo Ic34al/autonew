@@ -552,14 +552,31 @@ async def uploadchannel_callbacks(client, callback):
         # Resolve the bot through its public username in the USER session.
         # A bot-session numeric ID is not necessarily an input peer known to this
         # separate MTProto session and can raise PEER_ID_INVALID.
-        bot_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
-        if not bot_username:
-            bot_username = (await bot.get_me()).username or ""
-        if not bot_username:
-            raise RuntimeError("BOT_USERNAME is missing; set the public bot username in Heroku config.")
+        # The bot account authenticated by BOT_TOKEN is the only account we
+        # are allowed to promote. Never let a stale BOT_USERNAME config promote
+        # a different bot into every newly created channel.
+        token_bot = await bot.get_me()
+        token_bot_username = str(getattr(token_bot, "username", "") or "").strip().lstrip("@")
+        configured_bot_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
+        if not token_bot_username:
+            raise RuntimeError("The account authenticated by BOT_TOKEN has no public username; cannot promote it by username.")
+        if configured_bot_username and configured_bot_username.casefold() != token_bot_username.casefold():
+            raise RuntimeError(
+                f"BOT_USERNAME config is @{configured_bot_username}, but BOT_TOKEN authenticates "
+                f"@{token_bot_username}. Correct Heroku BOT_USERNAME before channel setup; "
+                "no other bot will be promoted."
+            )
+        bot_username = token_bot_username
         bot_user = await user_client.get_users(bot_username)
         if not bot_user or not getattr(bot_user, "id", None):
-            raise RuntimeError(f"Could not resolve public bot username @{bot_username} in USER_SESSION.")
+            raise RuntimeError(
+                f"Could not resolve the actual BOT_TOKEN account @{bot_username} in USER_SESSION."
+            )
+        if int(bot_user.id) != int(token_bot.id):
+            raise RuntimeError(
+                f"Bot identity mismatch: BOT_TOKEN is user {token_bot.id}, but USER_SESSION resolved "
+                f"@{bot_username} as {bot_user.id}. Refusing to promote the wrong account."
+            )
 
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
@@ -731,6 +748,11 @@ async def uploadchannel_callbacks(client, callback):
                     raise RuntimeError(
                         f"Bot promotion could not be confirmed for '{title}' ({chat.id}). "
                         "No episode upload was started."
+                    )
+                if getattr(confirmed_member, "can_post_messages", True) is False:
+                    raise RuntimeError(
+                        f"@{bot_username} is an admin in '{title}' ({chat.id}) but Telegram denied "
+                        "can_post_messages. Episode uploads cannot start until posting permission is granted."
                     )
             # Each archive season gets its own info -> sticker -> episode-batch sequence.
             created.append((title, chat.id, None, reused))
