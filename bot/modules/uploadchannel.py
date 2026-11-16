@@ -18,7 +18,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import send_sticker_to_channel, process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_watch_markup
+from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -445,10 +445,11 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     info = TextEditor(title)
     await info.load_info()
     info.pdata["episode_number"] = str(episode_number).zfill(2)
+    info.pdata["anime_season"] = str(season_number).zfill(2)
     info.pdata["audio_type"] = (
         "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
         else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
-        else "Sub"
+        else "Japanese [English Sub]"
     )
     # Build file deep-links from the live BOT_TOKEN identity, not the
     # legacy BOT_USERNAME config (which may still name an older bot).
@@ -457,7 +458,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     if not live_bot_username:
         raise RuntimeError("The bot authenticated by BOT_TOKEN has no username; cannot create file links.")
     quality_order = ("HDRi", "1080", "720", "480")
-    buttons = []
+    buttons_by_quality = {}
     for quality in quality_order:
         upload_name = await info.get_upname(quality)
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
@@ -480,18 +481,49 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         await db.set_batch_file_link(token, [uploaded.id])
         start_payload = f"getbatch-{token}"
         url = f"https://t.me/{live_bot_username}?start={await encode(start_payload)}"
-        buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
-    caption = (
-        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\n"
-        f"<b>Release:</b> {_escape(episode['title'])}\n"
-        f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
+        buttons_by_quality[quality] = InlineKeyboardButton(f"{quality}p" if quality != "HDRi" else "HDRip", url=url)
+
+    available_qualities = {quality: True for quality in buttons_by_quality}
+    caption = await build_main_channel_announcement_caption(
+        info, title, str(episode_number).zfill(2), available_qualities
     )
-    await destination_client.send_message(
-        chat_id=destination_id,
-        text=caption,
-        reply_markup=InlineKeyboardMarkup([buttons]),
-        disable_web_page_preview=True,
+    keyboard = InlineKeyboardMarkup([
+        [buttons_by_quality[q] for q in ("480", "720") if q in buttons_by_quality],
+        [buttons_by_quality[q] for q in ("1080", "HDRi") if q in buttons_by_quality],
+    ])
+
+    # Generate the same ANIME SOUL 16:9 episode artwork used by the normal
+    # uploader. Do not post progress, season-info, or sticker messages in the
+    # anime channel: publish exactly one final photo/caption/buttons per episode,
+    # and only after every configured quality has finished uploading.
+    poster_path = os.path.join(workdir, f"anime_soul_s{season_number}e{episode_number}.jpg")
+    poster = await build_anime_soul_poster(
+        info, title, poster_path, episode_label=str(episode_number).zfill(2)
     )
+    if poster and os.path.exists(poster):
+        with open(poster, "rb") as photo_file:
+            published = await destination_client.send_photo(
+                chat_id=destination_id,
+                photo=photo_file,
+                caption=caption,
+                reply_markup=keyboard,
+            )
+    else:
+        cover = (info.adata.get("coverImage") or {}).get("extraLarge") or (info.adata.get("coverImage") or {}).get("large")
+        if not cover:
+            raise RuntimeError(
+                f"Could not generate episode poster or find fallback artwork for {title} S{season_number}E{episode_number}."
+            )
+        published = await destination_client.send_photo(
+            chat_id=destination_id,
+            photo=cover,
+            caption=caption,
+            reply_markup=keyboard,
+        )
+    if not published or not getattr(published, "id", None):
+        raise RuntimeError(
+            f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
+        )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
 
@@ -908,31 +940,8 @@ async def uploadchannel_callbacks(client, callback):
                         f"<b>Status:</b> {_escape(season_status)}\n"
                         f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
                     )
-                    channel_stage = f"posting Season {season_index} information to {destination_id} via USER_SESSION"
-                    info_message = await user_client.send_message(
-                        chat_id=destination_id,
-                        text=season_info,
-                        disable_web_page_preview=True,
-                    )
-                    if not info_message:
-                        raise RuntimeError(
-                            f"Could not publish Season {season_index} information for {selected_title}; "
-                            "the season batch was not started."
-                        )
-                    channel_stage = f"posting Season {season_index} sticker to {destination_id} via USER_SESSION"
-                    sticker_ok = await send_sticker_to_channel(
-                        destination_id, getattr(Var, "STICKER_ID", None), client=user_client
-                    )
-                    if not sticker_ok:
-                        # A decorative sticker failure must never cancel the
-                        # actual episode backfill. The helper logs the Telegram
-                        # exception; continue with the season information and uploads.
-                        await rep.report(
-                            f"Priority sticker could not be posted for {selected_title} "
-                            f"Season {season_index} in {destination_id}; continuing episode uploads.",
-                            "warning",
-                            log=False,
-                        )
+                    # No standalone season-info or sticker posts. Each episode
+                    # will publish one final ANIME SOUL card after all qualities finish.
                     if not available_episodes:
                         raise RuntimeError(
                             f"AniList has no released episode count for {season_title}; refusing to guess."
