@@ -19,14 +19,13 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 from bot import bot, Var, LOGS
 from bot.core.database import db
 from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
-from bot.core.func_utils import getfeeds
+from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
 from bot.core.tguploader import TgUploader
 from bot.core.text_utils import TextEditor
 import os
 import shutil
-import secrets
 from bot.core.reporter import rep
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
@@ -644,26 +643,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             try:
                 stored_msg = await destination_client.get_messages(storage_chat_id, message_ids=int(stored_id))
                 if stored_msg and not getattr(stored_msg, "empty", False):
-                    stored_media = (
-                        getattr(stored_msg, "document", None)
-                        or getattr(stored_msg, "video", None)
-                        or getattr(stored_msg, "audio", None)
-                        or getattr(stored_msg, "animation", None)
-                    )
-                    if not stored_media:
-                        raise RuntimeError(
-                            f"Storage message {stored_id} has no reusable media object."
-                        )
-                    token = secrets.token_urlsafe(12)
-                    await db.save_monkey_file_share_link(
-                        token,
-                        stored_media.file_id,
-                        getattr(stored_media, "file_unique_id", ""),
-                        storage_chat_id,
-                        int(stored_id),
-                        bool(getattr(stored_msg, "protect_content", False)),
-                    )
-                    url = f"https://t.me/{share_bot_username}?start={token}"
+                    # Match the proven /addanime selected-channel workflow:
+                    # Monkey receives the standard get-<message_id * FILE_STORE>
+                    # payload and copies the original storage message with its
+                    # existing Share URL markup.
+                    start_payload = f"get-{int(stored_id) * abs(int(Var.FILE_STORE))}"
+                    url = f"https://t.me/{share_bot_username}?start={await encode(start_payload)}"
                     buttons_by_quality[quality] = InlineKeyboardButton(
                         f"{quality}p" if quality != "HDRi" else "HDRip", url=url
                     )
@@ -742,34 +727,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )).upload(encoded_path, quality)
         if not uploaded:
             raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at {quality}.")
-        stored_msg = await destination_client.get_messages(
-            storage_chat_id, message_ids=int(uploaded.id)
-        )
-        if not stored_msg or getattr(stored_msg, "empty", False):
-            raise RuntimeError(
-                f"Could not verify uploaded {quality} storage message {uploaded.id}; "
-                "refusing to create a broken Monkey share link."
-            )
-        stored_media = (
-            getattr(stored_msg, "document", None)
-            or getattr(stored_msg, "video", None)
-            or getattr(stored_msg, "audio", None)
-            or getattr(stored_msg, "animation", None)
-        )
-        if not stored_media:
-            raise RuntimeError(
-                f"Uploaded storage message {uploaded.id} contains no shareable media."
-            )
-        token = secrets.token_urlsafe(12)
-        await db.save_monkey_file_share_link(
-            token,
-            stored_media.file_id,
-            getattr(stored_media, "file_unique_id", ""),
-            storage_chat_id,
-            int(uploaded.id),
-            bool(getattr(stored_msg, "protect_content", False)),
-        )
-        url = f"https://t.me/{share_bot_username}?start={token}"
+        # Use the same single-file deep-link format as /addanime. Monkey
+        # already has access to FILE_STORE and resolves this scaled message ID.
+        start_payload = f"get-{int(uploaded.id) * abs(int(Var.FILE_STORE))}"
+        url = f"https://t.me/{share_bot_username}?start={await encode(start_payload)}"
         buttons_by_quality[quality] = InlineKeyboardButton(f"{quality}p" if quality != "HDRi" else "HDRip", url=url)
 
     available_qualities = {quality: True for quality in buttons_by_quality}
