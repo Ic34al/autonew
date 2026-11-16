@@ -793,16 +793,23 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         client=destination_client,
     )
     if not sticker_sent:
-        raise RuntimeError(
-            f"Episode card was published, but the mandatory Ongoing Anime Time sticker "
-            f"failed for {title} S{season_number}E{episode_number}."
+        # The episode card and all four file links are already live. A sticker
+        # API/session error must never mark the episode upload as failed or stop
+        # the remaining scheduled episodes; report it separately for retry.
+        await rep.report(
+            f"Episode card published successfully for {title} S{season_number}E{episode_number}, "
+            "but the Ongoing Anime Time sticker could not be sent. "
+            "The episode remains successful; check sticker diagnostics and retry the sticker only.",
+            "warning",
+            log=False,
         )
-    await rep.report(
-        f"Published {title} S{season_number}E{episode_number} with four quality buttons, "
-        "AniList-ID-verified artwork/synopsis, and the mandatory Ongoing Anime Time sticker.",
-        "info",
-        log=False,
-    )
+    else:
+        await rep.report(
+            f"Published {title} S{season_number}E{episode_number} with four quality buttons, "
+            "AniList-ID-verified artwork/synopsis, and the Ongoing Anime Time sticker.",
+            "info",
+            log=False,
+        )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
 
