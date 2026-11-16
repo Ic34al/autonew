@@ -590,17 +590,41 @@ async def uploadchannel_callbacks(client, callback):
                 # channels.GetChannels / CHANNEL_INVALID.
                 saved_invite = await db.get_anime_channel_invite_link(title)
                 persistent_invite = saved_invite
+                resolve_error = None
                 try:
-                    # An invite URL carries a resolvable Telegram peer even after
-                    # Heroku restarts and the in-memory Pyrogram peer cache is lost.
-                    chat = await user_client.get_chat(saved_invite) if saved_invite else await user_client.get_chat(wanted_id)
-                except Exception as resolve_error:
+                    # First use the persisted invite if present; otherwise try the
+                    # numeric peer directly (works when this session has its hash).
+                    chat = (
+                        await user_client.get_chat(saved_invite)
+                        if saved_invite else await user_client.get_chat(wanted_id)
+                    )
+                except Exception as exc:
+                    resolve_error = exc
+                    chat = None
+
+                if chat is None:
+                    # Automatic recovery for old mappings created before invite
+                    # persistence: rebuild this session's peer cache from dialogs.
+                    # A malformed/stale dialog can itself raise CHANNEL_INVALID,
+                    # so keep any target peer already found and never let one bad
+                    # dialog abort the scan.
+                    try:
+                        async for dialog in user_client.get_dialogs(limit=500):
+                            dialog_chat = getattr(dialog, "chat", None)
+                            if dialog_chat and int(getattr(dialog_chat, "id", 0)) == wanted_id:
+                                chat = dialog_chat
+                                break
+                    except Exception as dialog_error:
+                        if chat is None:
+                            resolve_error = dialog_error
+
+                if chat is None:
                     raise RuntimeError(
-                        f"Saved channel '{title}' ({wanted_id}) has no usable persisted invite link "
-                        f"and its numeric peer cannot be resolved: "
+                        f"Could not automatically recover saved channel '{title}' ({wanted_id}). "
+                        f"Telegram rejected both direct peer lookup and dialog recovery: "
                         f"{type(resolve_error).__name__}: {resolve_error}. "
-                        "Run /setchannelinvite Anime Title | https://t.me/+INVITE_LINK once for this "
-                        "existing channel. The mapping was kept; no duplicate was created."
+                        "The mapping was kept and no duplicate channel was created. "
+                        "The USER_SESSION account must still have this channel in its Telegram dialogs."
                     ) from resolve_error
                 if not chat or int(chat.id) != wanted_id:
                     raise RuntimeError(
