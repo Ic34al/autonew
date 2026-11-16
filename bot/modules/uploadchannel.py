@@ -505,7 +505,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     storage_records = []
     try:
-        async for stored in bot.get_chat_history(Var.FILE_STORE, limit=5000):
+        async for stored in destination_client.get_chat_history(Var.FILE_STORE, limit=5000):
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
             media_name = getattr(media_obj, "file_name", None) if media_obj else None
             parsed = _parse_storage_record(media_name) or _parse_storage_record(
@@ -543,7 +543,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         stored_id = _find_stored_quality(quality)
         if stored_id:
             try:
-                stored_msg = await bot.get_messages(Var.FILE_STORE, message_ids=int(stored_id))
+                stored_msg = await destination_client.get_messages(Var.FILE_STORE, message_ids=int(stored_id))
                 if stored_msg and not getattr(stored_msg, "empty", False):
                     token = hashlib.sha256(
                         f"{stored_id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
