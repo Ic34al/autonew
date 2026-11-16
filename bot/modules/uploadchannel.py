@@ -560,11 +560,15 @@ async def uploadchannel_callbacks(client, callback):
         configured_bot_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
         if not token_bot_username:
             raise RuntimeError("The account authenticated by BOT_TOKEN has no public username; cannot promote it by username.")
+        # BOT_USERNAME may be stale from an older deployment. It is not an
+        # authority for channel permissions: always use the identity returned
+        # by the live BOT_TOKEN client. A mismatch is diagnostic only.
         if configured_bot_username and configured_bot_username.casefold() != token_bot_username.casefold():
-            raise RuntimeError(
-                f"BOT_USERNAME config is @{configured_bot_username}, but BOT_TOKEN authenticates "
-                f"@{token_bot_username}. Correct Heroku BOT_USERNAME before channel setup; "
-                "no other bot will be promoted."
+            await rep.report(
+                f"Ignoring stale BOT_USERNAME=@{configured_bot_username}; "
+                f"BOT_TOKEN authenticates as @{token_bot_username}. "
+                "Only the BOT_TOKEN account will be promoted in anime channels.",
+                "warning",
             )
         bot_username = token_bot_username
         bot_user = await user_client.get_users(bot_username)
