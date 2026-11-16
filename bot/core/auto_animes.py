@@ -8095,10 +8095,15 @@ async def fetch_animes():
                         await asleep(2)
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
+                        # Pass the resolved destination through the parameter
+                        # get_animes actually supports. Mapped releases go to their
+                        # /addanime channel; unmapped releases explicitly go to Main.
                         result = await get_animes(
-                            title, link,
-                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None,
-                            mapped_channel=None if route_to_main else selected_channel
+                            title,
+                            link,
+                            destination_channel=(
+                                Var.MAIN_CHANNEL if route_to_main else int(selected_channel)
+                            ),
                         )
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
