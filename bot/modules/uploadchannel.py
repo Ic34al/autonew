@@ -643,19 +643,27 @@ async def uploadchannel_callbacks(client, callback):
                         resolve_error = raw_error
 
                 if chat is None:
-                    raise RuntimeError(
-                        f"Could not automatically recover saved channel '{title}' ({wanted_id}). "
-                        f"Raw Telegram dialog lookup failed: "
-                        f"{type(resolve_error).__name__}: {resolve_error}. "
-                        "The mapping was kept and no duplicate channel was created. "
-                        "Confirm the USER_SESSION account still owns or can see this channel."
-                    ) from resolve_error
-                if not chat or int(chat.id) != wanted_id:
+                    # The saved peer is irrecoverable for this USER_SESSION.
+                    # Do not abort the whole selection or keep retrying the same
+                    # invalid ID forever. Create a replacement channel and update
+                    # every title alias below after Telegram confirms creation.
+                    await rep.report(
+                        f"Saved channel mapping for {title} ({wanted_id}) is not accessible "
+                        f"({type(resolve_error).__name__}: {resolve_error}). Creating a replacement channel; "
+                        "the old channel is left untouched.",
+                        "warning",
+                    )
+                    chat = await user_client.create_channel(
+                        title, f"Official episode channel for {title}"
+                    )
+                    reused = False
+                elif not chat or int(chat.id) != wanted_id:
                     raise RuntimeError(
                         f"Saved mapping for '{title}' points to {wanted_id}, but Telegram "
-                        "returned a different channel. No duplicate was created."
+                        "returned a different channel. Refusing to overwrite the mapping."
                     )
-                reused = True
+                else:
+                    reused = True
             else:
                 chat = await user_client.create_channel(
                     title, f"Official episode channel for {title}"
