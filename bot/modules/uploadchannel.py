@@ -451,59 +451,123 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     quality_order = ("HDRi", "1080", "720", "480")
     buttons_by_quality = {}
 
-    # Reuse already-uploaded files from FILE_STORE before downloading or
-    # encoding anything. Exact normalized upload filenames include anime,
-    # season, episode and quality, avoiding cross-episode/quality collisions.
-    def _storage_filename_key(value):
-        value = os.path.basename(str(value or "")).casefold()
-        value = re.sub(r"\.(mkv|mp4|avi|webm)$", "", value)
-        return re.sub(r"[^a-z0-9]+", "", value)
+    # Recover files by parsed season/episode/quality/title rather than exact
+    # generated filenames. The regular uploader stores names such as
+    # [S01-07] Anime Title [480p] ... which do not exactly equal TextEditor
+    # upload names used by this channel workflow.
+    import difflib
 
-    existing_storage = {}
+    def _plain_storage_name(value):
+        value = html.unescape(str(value or ""))
+        value = re.sub(r"<[^>]+>", "", value)
+        return os.path.basename(value).strip()
+
+    def _normal_storage_title(value):
+        value = _plain_storage_name(value).casefold()
+        value = re.sub(r"\[[^\]]*\]", " ", value)
+        value = re.sub(r"\b(?:480|720|1080|144|240)p\b|\bhdrip\b|\bhdr[iI]\b", " ", value)
+        value = re.sub(r"\bs\d{1,2}e\d{1,3}\b|\bs\d{1,2}\s*[- ]\s*e?\d{1,3}\b", " ", value)
+        value = re.sub(r"\bs\d{1,2}[- ]\d{1,3}\b", " ", value)
+        value = re.sub(r"@[^\s]+", " ", value)
+        value = re.sub(r"\.(mkv|mp4|avi|webm)$", " ", value)
+        return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+    def _parse_storage_record(value):
+        raw = _plain_storage_name(value)
+        ep_match = re.search(r"\[?s(\d{1,2})\s*[- ]\s*e?(\d{1,3})\]?", raw, re.I)
+        if not ep_match:
+            return None
+        stored_season, stored_episode = int(ep_match.group(1)), int(ep_match.group(2))
+        if re.search(r"\bhdrip\b|\[hdri\]", raw, re.I):
+            stored_quality = "HDRi"
+        else:
+            quality_match = re.search(r"\[(144|240|480|720|1080)p\]", raw, re.I)
+            if not quality_match:
+                return None
+            stored_quality = quality_match.group(1)
+        stored_title = raw[ep_match.end():]
+        stored_title = re.split(
+            r"\[(?:144|240|480|720|1080)p\]|\[hdrip\]|\[hdri\]",
+            stored_title,
+            flags=re.I,
+        )[0]
+        return stored_season, stored_episode, stored_quality, _normal_storage_title(stored_title)
+
+    title_aliases = [title]
+    metadata_titles = media.get("title") or {}
+    if isinstance(metadata_titles, dict):
+        title_aliases.extend(metadata_titles.get(key) for key in ("english", "romaji", "native"))
+    title_aliases.extend(media.get("synonyms") or [])
+    target_titles = {_normal_storage_title(value) for value in title_aliases if value}
+    target_titles.discard("")
+    target_season = int(season_number)
+    target_episode = int(episode_number)
+
+    storage_records = []
     try:
         async for stored in bot.get_chat_history(Var.FILE_STORE, limit=5000):
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
-            stored_name = getattr(media_obj, "file_name", None) if media_obj else None
-            if stored_name:
-                existing_storage.setdefault(_storage_filename_key(stored_name), int(stored.id))
+            media_name = getattr(media_obj, "file_name", None) if media_obj else None
+            parsed = _parse_storage_record(media_name) or _parse_storage_record(
+                getattr(stored, "caption", None)
+            )
+            if parsed:
+                storage_records.append((parsed, int(stored.id)))
     except Exception as storage_error:
-        await rep.report(
-            f"Could not scan FILE_STORE for reusable {title} S{season_number}E{episode_number} files; "
-            f"will continue with fresh uploads: {storage_error}",
-            "warning",
-            log=False,
-        )
+        # Do not blindly upload again when we cannot inspect the storage channel.
+        raise RuntimeError(
+            f"Cannot safely check FILE_STORE for existing {title} "
+            f"S{target_season:02d}E{target_episode:02d}; refusing duplicate uploads: {storage_error}"
+        ) from storage_error
+
+    def _find_stored_quality(quality):
+        wanted_quality = "HDRi" if quality.casefold() in ("hdri", "hdrip") else re.sub(r"p$", "", quality.casefold())
+        for (stored_season, stored_episode, stored_quality, stored_title), stored_id in storage_records:
+            if (stored_season, stored_episode) != (target_season, target_episode):
+                continue
+            if stored_quality.casefold() != wanted_quality.casefold() or not stored_title:
+                continue
+            for wanted_title in target_titles:
+                if stored_title == wanted_title:
+                    return stored_id
+                wanted_tokens = set(wanted_title.split())
+                stored_tokens = set(stored_title.split())
+                overlap = len(wanted_tokens & stored_tokens) / max(1, min(len(wanted_tokens), len(stored_tokens)))
+                similarity = difflib.SequenceMatcher(None, wanted_title, stored_title).ratio()
+                if overlap >= 0.75 or similarity >= 0.82:
+                    return stored_id
+        return None
 
     missing_qualities = []
     for quality in quality_order:
-        upload_name = await info.get_upname(quality)
-        stored_id = existing_storage.get(_storage_filename_key(upload_name))
+        stored_id = _find_stored_quality(quality)
         if stored_id:
             try:
-                stored_msg = await bot.get_messages(Var.FILE_STORE, message_ids=stored_id)
+                stored_msg = await bot.get_messages(Var.FILE_STORE, message_ids=int(stored_id))
                 if stored_msg and not getattr(stored_msg, "empty", False):
                     token = hashlib.sha256(
                         f"{stored_id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
                     ).hexdigest()[:24]
-                    await db.set_batch_file_link(token, [stored_id])
+                    await db.set_batch_file_link(token, [int(stored_id)])
                     start_payload = f"getbatch-{token}"
                     url = f"https://t.me/{live_bot_username}?start={await encode(start_payload)}"
                     buttons_by_quality[quality] = InlineKeyboardButton(
                         f"{quality}p" if quality != "HDRi" else "HDRip", url=url
                     )
                     await rep.report(
-                        f"Reusing existing {quality} for {title} S{season_number}E{episode_number}; "
+                        f"Reusing existing {quality} for {title} "
+                        f"S{target_season:02d}E{target_episode:02d} from FILE_STORE message {stored_id}; "
                         "skipping download/encode/upload.",
                         "info",
                         log=False,
                     )
                     continue
             except Exception as verify_error:
-                await rep.report(
-                    f"Existing {quality} file {stored_id} could not be verified; it will be re-uploaded: {verify_error}",
-                    "warning",
-                    log=False,
-                )
+                raise RuntimeError(
+                    f"Found existing {quality} file {stored_id} for {title} "
+                    f"S{target_season:02d}E{target_episode:02d}, but could not verify it; "
+                    f"refusing a duplicate upload: {verify_error}"
+                ) from verify_error
         missing_qualities.append(quality)
 
     source = None
