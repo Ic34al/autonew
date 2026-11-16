@@ -505,7 +505,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     storage_records = []
     storage_chat_id = None
-    storage_link = str(getattr(Var, "FILE_STORE_LINK", "") or "").strip()
+    # Explicit storage invite supplied by the owner; do not silently scan a stale FILE_STORE_LINK from Heroku.
+    storage_link = "https://t.me/+Rn-HvMOx3ho5ZWVl"
     try:
         # FILE_STORE is a separate channel from the per-anime destination.
         # A fresh in-memory USER_SESSION may not know its numeric peer ID, and
@@ -543,14 +544,22 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             storage_chat = await destination_client.get_chat(int(Var.FILE_STORE))
             storage_chat_id = int(storage_chat.id)
 
+        scanned_storage_messages = 0
         async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
+            scanned_storage_messages += 1
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
             media_name = getattr(media_obj, "file_name", None) if media_obj else None
-            parsed = _parse_storage_record(media_name) or _parse_storage_record(
-                getattr(stored, "caption", None)
-            )
+            # Captions contain the canonical [Sxx-yy] title [quality] tags in
+            # this storage channel; prefer them over shortened/truncated names.
+            parsed = _parse_storage_record(getattr(stored, "caption", None)) or _parse_storage_record(media_name)
             if parsed:
                 storage_records.append((parsed, int(stored.id)))
+        await rep.report(
+            f"FILE_STORE reuse scan resolved channel {storage_chat_id}; "
+            f"scanned {scanned_storage_messages} messages and indexed {len(storage_records)} episode-quality files.",
+            "info",
+            log=False,
+        )
     except Exception as storage_error:
         # Do not blindly upload again when the USER_SESSION cannot join/read
         # the actual storage channel: duplicate prevention must fail closed.
@@ -610,6 +619,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     f"S{target_season:02d}E{target_episode:02d}, but could not verify it; "
                     f"refusing a duplicate upload: {verify_error}"
                 ) from verify_error
+        await rep.report(
+            f"No reusable {quality} match found in FILE_STORE for {title} "
+            f"S{target_season:02d}E{target_episode:02d}; this quality will be uploaded.",
+            "warning",
+            log=False,
+        )
         missing_qualities.append(quality)
 
     source = None
