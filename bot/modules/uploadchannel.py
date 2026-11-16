@@ -603,28 +603,42 @@ async def uploadchannel_callbacks(client, callback):
                     chat = None
 
                 if chat is None:
-                    # Automatic recovery for old mappings created before invite
-                    # persistence: rebuild this session's peer cache from dialogs.
-                    # A malformed/stale dialog can itself raise CHANNEL_INVALID,
-                    # so keep any target peer already found and never let one bad
-                    # dialog abort the scan.
+                    # Recover a legacy channel peer through raw messages.GetDialogs.
+                    # Unlike Pyrogram's high-level iterator, this does not try to
+                    # resolve each dialog's offset peer through channels.GetChannels.
                     try:
-                        async for dialog in user_client.get_dialogs(limit=500):
-                            dialog_chat = getattr(dialog, "chat", None)
-                            if dialog_chat and int(getattr(dialog_chat, "id", 0)) == wanted_id:
-                                chat = dialog_chat
+                        from pyrogram.raw.functions.messages import GetDialogs
+                        from pyrogram.raw.types import InputPeerEmpty
+                        raw_dialogs = await user_client.invoke(
+                            GetDialogs(
+                                offset_date=0,
+                                offset_id=0,
+                                offset_peer=InputPeerEmpty(),
+                                limit=100,
+                                hash=0,
+                            )
+                        )
+                        for raw_chat in getattr(raw_dialogs, "chats", []) or []:
+                            raw_id = getattr(raw_chat, "id", None)
+                            raw_hash = getattr(raw_chat, "access_hash", None)
+                            if raw_id is None or raw_hash is None:
+                                continue
+                            # Pyrogram's internal peer cache stores the access hash;
+                            # seed it before using the normal high-level API.
+                            await user_client.storage.update_peers([raw_chat])
+                            if int(raw_id) == wanted_id:
+                                chat = await user_client.get_chat(wanted_id)
                                 break
-                    except Exception as dialog_error:
-                        if chat is None:
-                            resolve_error = dialog_error
+                    except Exception as raw_error:
+                        resolve_error = raw_error
 
                 if chat is None:
                     raise RuntimeError(
                         f"Could not automatically recover saved channel '{title}' ({wanted_id}). "
-                        f"Telegram rejected both direct peer lookup and dialog recovery: "
+                        f"Raw Telegram dialog lookup failed: "
                         f"{type(resolve_error).__name__}: {resolve_error}. "
                         "The mapping was kept and no duplicate channel was created. "
-                        "The USER_SESSION account must still have this channel in its Telegram dialogs."
+                        "Confirm the USER_SESSION account still owns or can see this channel."
                     ) from resolve_error
                 if not chat or int(chat.id) != wanted_id:
                     raise RuntimeError(
