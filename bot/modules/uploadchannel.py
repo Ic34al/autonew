@@ -485,12 +485,19 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
         else "Japanese [English Sub]"
     )
-    # Build file deep-links from the live BOT_TOKEN identity, not the
-    # legacy BOT_USERNAME config (which may still name an older bot).
-    live_bot = await bot.get_me()
-    live_bot_username = str(getattr(live_bot, "username", "") or "").strip().lstrip("@")
-    if not live_bot_username:
-        raise RuntimeError("The bot authenticated by BOT_TOKEN has no username; cannot create file links.")
+    # Episode cards are posted by the uploader, but all file-sharing deep
+    # links must open the existing Monkey file-share bot. Do not derive this
+    # username from BOT_TOKEN: that token belongs to Auto Anime Uploader.
+    share_bot_username = str(
+        getattr(Var, "BOT_USERNAME", "Orewa_Monkey_D_Kaizuko_Bot") or ""
+    ).strip().lstrip("@")
+    expected_share_bot = "Orewa_Monkey_D_Kaizuko_Bot"
+    if share_bot_username.casefold() != expected_share_bot.casefold():
+        raise RuntimeError(
+            "File-share bot mismatch: expected @Orewa_Monkey_D_Kaizuko_Bot "
+            f"but BOT_USERNAME is @{share_bot_username or 'not configured'}. "
+            "Episode quality buttons were not created to avoid sending users to the wrong bot."
+        )
     quality_order = ("HDRi", "1080", "720", "480")
     buttons_by_quality = {}
 
@@ -582,47 +589,9 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     log=False,
                 )
 
-        # The /start getbatch handler runs as BOT_TOKEN and copies messages
-        # from FILE_STORE. USER_SESSION being an admin alone is insufficient:
-        # promote and verify the actual BOT_TOKEN account in the storage channel.
-        bot_identity = await bot.get_me()
-        try:
-            storage_bot_member = await destination_client.get_chat_member(
-                storage_chat_id, int(bot_identity.id)
-            )
-            storage_bot_status = str(getattr(storage_bot_member, "status", "")).lower()
-        except Exception:
-            storage_bot_status = ""
-        if not any(role in storage_bot_status for role in ("administrator", "owner", "creator")):
-            await destination_client.promote_chat_member(
-                storage_chat_id,
-                int(bot_identity.id),
-                privileges=ChatPrivileges(
-                    can_manage_chat=True,
-                    can_post_messages=True,
-                    can_edit_messages=True,
-                    can_delete_messages=True,
-                    can_invite_users=True,
-                    can_change_info=True,
-                    can_pin_messages=True,
-                ),
-            )
-            storage_bot_member = await destination_client.get_chat_member(
-                storage_chat_id, int(bot_identity.id)
-            )
-            storage_bot_status = str(getattr(storage_bot_member, "status", "")).lower()
-            if not any(role in storage_bot_status for role in ("administrator", "owner", "creator")):
-                raise RuntimeError(
-                    f"USER_SESSION could not confirm @"
-                    f"{getattr(bot_identity, 'username', 'bot')} as an administrator in FILE_STORE; "
-                    "quality buttons would not be able to deliver stored files."
-                )
-        else:
-            # Without a link, the USER_SESSION has no reliable way to import a
-            # private/unseen peer from a numeric ID alone.
-            storage_chat = await destination_client.get_chat(int(Var.FILE_STORE))
-            storage_chat_id = int(storage_chat.id)
-
+        # The existing Monkey file-share bot is already an administrator
+        # in this storage channel. Do not promote Auto Anime Uploader here:
+        # its BOT_TOKEN is only used to publish episode cards, not to serve files.
         scanned_storage_messages = 0
         async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
             scanned_storage_messages += 1
@@ -680,7 +649,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     ).hexdigest()[:24]
                     await db.set_batch_file_link(token, [int(stored_id)])
                     start_payload = f"getbatch-{token}"
-                    url = f"https://t.me/{live_bot_username}?start={await encode(start_payload)}"
+                    url = f"https://t.me/{share_bot_username}?start={await encode(start_payload)}"
                     buttons_by_quality[quality] = InlineKeyboardButton(
                         f"{quality}p" if quality != "HDRi" else "HDRip", url=url
                     )
@@ -764,7 +733,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         ).hexdigest()[:24]
         await db.set_batch_file_link(token, [uploaded.id])
         start_payload = f"getbatch-{token}"
-        url = f"https://t.me/{live_bot_username}?start={await encode(start_payload)}"
+        url = f"https://t.me/{share_bot_username}?start={await encode(start_payload)}"
         buttons_by_quality[quality] = InlineKeyboardButton(f"{quality}p" if quality != "HDRi" else "HDRip", url=url)
 
     available_qualities = {quality: True for quality in buttons_by_quality}
