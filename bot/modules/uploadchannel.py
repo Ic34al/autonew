@@ -623,10 +623,20 @@ async def uploadchannel_callbacks(client, callback):
                             raw_hash = getattr(raw_chat, "access_hash", None)
                             if raw_id is None or raw_hash is None:
                                 continue
-                            # Pyrogram's internal peer cache stores the access hash;
-                            # seed it before using the normal high-level API.
-                            await user_client.storage.update_peers([raw_chat])
-                            if int(raw_id) == wanted_id:
+                            # Pyrogram storage.update_peers expects normalized
+                            # (marked_id, access_hash, type, username, phone) tuples.
+                            marked_id = int(f"-100{int(raw_id)}")
+                            peer_type = "channel" if getattr(raw_chat, "broadcast", False) else "supergroup"
+                            await user_client.storage.update_peers([
+                                (
+                                    marked_id,
+                                    int(raw_hash),
+                                    peer_type,
+                                    getattr(raw_chat, "username", None),
+                                    None,
+                                )
+                            ])
+                            if marked_id == wanted_id:
                                 chat = await user_client.get_chat(wanted_id)
                                 break
                     except Exception as raw_error:
