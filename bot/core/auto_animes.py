@@ -608,7 +608,15 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
                 sticker_response = await session.get(download_url)
                 sticker_response.raise_for_status()
             sticker_to_send = io.BytesIO(sticker_response.content)
-            sticker_to_send.name = "priority_sticker.webp"
+            # Preserve the real Telegram sticker format (.webp, .tgs or .webm).
+            # Renaming animated/video sticker bytes to .webp makes Pyrogram's
+            # upload parser reject an otherwise valid sticker.
+            sticker_extension = os.path.splitext(str(file_path))[1].lower() or ".webp"
+            if sticker_extension not in (".webp", ".tgs", ".webm"):
+                raise RuntimeError(
+                    f"Unsupported priority sticker file format: {sticker_extension or 'unknown'}"
+                )
+            sticker_to_send.name = f"priority_sticker{sticker_extension}"
 
         sent_message = await sender.send_sticker(
             chat_id=channel,
