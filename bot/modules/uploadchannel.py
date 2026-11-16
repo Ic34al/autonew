@@ -535,6 +535,8 @@ async def uploadchannel_callbacks(client, callback):
     user_client = None
     created = []
     archive_jobs = []
+    channel_stage = "starting USER_SESSION"
+    current_anime_title = "unknown"
     try:
         user_client = __import__("pyrogram").Client(
             "autonew_channel_creator",
@@ -544,7 +546,9 @@ async def uploadchannel_callbacks(client, callback):
             in_memory=True,
             parse_mode=ParseMode.HTML,
         )
+        channel_stage = "starting USER_SESSION client"
         await user_client.start()
+        channel_stage = "resolving bot account in USER_SESSION"
         # Resolve the bot through its public username in the USER session.
         # A bot-session numeric ID is not necessarily an input peer known to this
         # separate MTProto session and can raise PEER_ID_INVALID.
@@ -560,6 +564,8 @@ async def uploadchannel_callbacks(client, callback):
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
+            current_anime_title = title
+            channel_stage = f"reading saved channel mapping for {title}"
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
@@ -594,6 +600,7 @@ async def uploadchannel_callbacks(client, callback):
                 try:
                     # First use the persisted invite if present; otherwise try the
                     # numeric peer directly (works when this session has its hash).
+                    channel_stage = f"opening saved channel peer for {title}"
                     chat = (
                         await user_client.get_chat(saved_invite)
                         if saved_invite else await user_client.get_chat(wanted_id)
@@ -609,6 +616,7 @@ async def uploadchannel_callbacks(client, callback):
                     try:
                         from pyrogram.raw.functions.messages import GetDialogs
                         from pyrogram.raw.types import InputPeerEmpty
+                        channel_stage = f"recovering legacy peer from raw Telegram dialogs for {title}"
                         raw_dialogs = await user_client.invoke(
                             GetDialogs(
                                 offset_date=0,
@@ -674,6 +682,7 @@ async def uploadchannel_callbacks(client, callback):
             # cache after a fresh in-memory USER_SESSION on Heroku.
             if not persistent_invite:
                 try:
+                    channel_stage = f"creating persistent invite link for {title}"
                     invite_obj = await user_client.create_chat_invite_link(
                         chat.id, name="Anime uploader persistent peer"
                     )
@@ -692,12 +701,14 @@ async def uploadchannel_callbacks(client, callback):
             # USER_SESSION is the channel creator/admin. Verify the bot's status
             # through this session, and repair missing admin rights automatically.
             try:
+                channel_stage = f"checking bot admin rights for {title}"
                 current_member = await user_client.get_chat_member(chat.id, bot_user.id)
                 current_status = str(getattr(current_member, "status", "")).lower()
             except Exception:
                 current_status = ""
 
             if not any(role in current_status for role in ("administrator", "owner", "creator")):
+                channel_stage = f"promoting bot administrator for {title}"
                 await user_client.promote_chat_member(
                     chat.id,
                     bot_user.id,
@@ -712,6 +723,7 @@ async def uploadchannel_callbacks(client, callback):
                     ),
                 )
                 # Confirm the promotion before any season/episode upload begins.
+                channel_stage = f"verifying bot administrator rights for {title}"
                 confirmed_member = await user_client.get_chat_member(chat.id, bot_user.id)
                 confirmed_status = str(getattr(confirmed_member, "status", "")).lower()
                 if not any(role in confirmed_status for role in ("administrator", "owner", "creator")):
@@ -726,6 +738,7 @@ async def uploadchannel_callbacks(client, callback):
 
         # Hold the scheduler lock for the entire archive backlog so a new
         # episode cannot interleave between Season 1/Season 2 or selected channels.
+        channel_stage = "acquiring upload priority lock"
         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
         try:
             # Process one selected anime completely before starting the next.
@@ -826,9 +839,15 @@ async def uploadchannel_callbacks(client, callback):
             f"✅ Processed {len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
         )
     except Exception as exc:
-        await rep.report(f"Automatic anime channel creation failed: {type(exc).__name__}: {exc}", "error")
+        await rep.report(
+            f"Automatic anime channel creation failed at stage '{channel_stage}' "
+            f"for '{current_anime_title}': {type(exc).__name__}: {exc}",
+            "error",
+        )
         await callback.message.edit(
-            f"⚠️ Channel creation stopped. {len(created)} channel(s) were created before the error.\n<code>{_escape(exc)}</code>"
+            f"⚠️ Channel setup stopped at <b>{_escape(channel_stage)}</b> for "
+            f"<b>{_escape(current_anime_title)}</b>. {len(created)} channel(s) were completed before the error.\n"
+            f"<code>{_escape(exc)}</code>"
         )
     finally:
         if user_client:
