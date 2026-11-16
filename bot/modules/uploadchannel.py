@@ -504,8 +504,46 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     target_episode = int(episode_number)
 
     storage_records = []
+    storage_chat_id = None
+    storage_link = str(getattr(Var, "FILE_STORE_LINK", "") or "").strip()
     try:
-        async for stored in destination_client.get_chat_history(Var.FILE_STORE, limit=5000):
+        # FILE_STORE is a separate channel from the per-anime destination.
+        # A fresh in-memory USER_SESSION may not know its numeric peer ID, and
+        # it cannot read channel history until it has joined the storage channel.
+        # Resolve/join it through the configured public username or invite link.
+        if storage_link:
+            try:
+                storage_chat = await destination_client.join_chat(storage_link)
+            except Exception as join_error:
+                join_text = str(join_error).casefold()
+                if "user_already_participant" in join_text or "already a participant" in join_text:
+                    storage_chat = await destination_client.get_chat(storage_link)
+                else:
+                    # If already joined, get_chat(link) succeeds; if not, surface
+                    # the original join failure rather than silently using a stale ID.
+                    try:
+                        storage_chat = await destination_client.get_chat(storage_link)
+                    except Exception:
+                        raise join_error
+            if not storage_chat or not getattr(storage_chat, "id", None):
+                raise RuntimeError("FILE_STORE_LINK did not resolve to a Telegram channel.")
+            storage_chat_id = int(storage_chat.id)
+            configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
+            if configured_storage_id and storage_chat_id != configured_storage_id:
+                await rep.report(
+                    f"FILE_STORE_LINK resolved to {storage_chat_id}, while FILE_STORE is "
+                    f"{configured_storage_id}. Using the channel resolved from FILE_STORE_LINK "
+                    "for safe existing-file reuse.",
+                    "warning",
+                    log=False,
+                )
+        else:
+            # Without a link, the USER_SESSION has no reliable way to import a
+            # private/unseen peer from a numeric ID alone.
+            storage_chat = await destination_client.get_chat(int(Var.FILE_STORE))
+            storage_chat_id = int(storage_chat.id)
+
+        async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
             media_name = getattr(media_obj, "file_name", None) if media_obj else None
             parsed = _parse_storage_record(media_name) or _parse_storage_record(
@@ -514,10 +552,14 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             if parsed:
                 storage_records.append((parsed, int(stored.id)))
     except Exception as storage_error:
-        # Do not blindly upload again when we cannot inspect the storage channel.
+        # Do not blindly upload again when the USER_SESSION cannot join/read
+        # the actual storage channel: duplicate prevention must fail closed.
         raise RuntimeError(
-            f"Cannot safely check FILE_STORE for existing {title} "
-            f"S{target_season:02d}E{target_episode:02d}; refusing duplicate uploads: {storage_error}"
+            f"USER_SESSION could not join or read FILE_STORE "
+            f"({storage_link or Var.FILE_STORE}) for {title} "
+            f"S{target_season:02d}E{target_episode:02d}; refusing duplicate uploads. "
+            f"Check that FILE_STORE_LINK is the real storage channel invite/public link "
+            f"and that this USER_SESSION account is allowed to join it: {storage_error}"
         ) from storage_error
 
     def _find_stored_quality(quality):
@@ -543,7 +585,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         stored_id = _find_stored_quality(quality)
         if stored_id:
             try:
-                stored_msg = await destination_client.get_messages(Var.FILE_STORE, message_ids=int(stored_id))
+                stored_msg = await destination_client.get_messages(storage_chat_id, message_ids=int(stored_id))
                 if stored_msg and not getattr(stored_msg, "empty", False):
                     token = hashlib.sha256(
                         f"{stored_id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
