@@ -581,6 +581,42 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     "warning",
                     log=False,
                 )
+
+        # The /start getbatch handler runs as BOT_TOKEN and copies messages
+        # from FILE_STORE. USER_SESSION being an admin alone is insufficient:
+        # promote and verify the actual BOT_TOKEN account in the storage channel.
+        bot_identity = await bot.get_me()
+        try:
+            storage_bot_member = await destination_client.get_chat_member(
+                storage_chat_id, int(bot_identity.id)
+            )
+            storage_bot_status = str(getattr(storage_bot_member, "status", "")).lower()
+        except Exception:
+            storage_bot_status = ""
+        if not any(role in storage_bot_status for role in ("administrator", "owner", "creator")):
+            await destination_client.promote_chat_member(
+                storage_chat_id,
+                int(bot_identity.id),
+                privileges=ChatPrivileges(
+                    can_manage_chat=True,
+                    can_post_messages=True,
+                    can_edit_messages=True,
+                    can_delete_messages=True,
+                    can_invite_users=True,
+                    can_change_info=True,
+                    can_pin_messages=True,
+                ),
+            )
+            storage_bot_member = await destination_client.get_chat_member(
+                storage_chat_id, int(bot_identity.id)
+            )
+            storage_bot_status = str(getattr(storage_bot_member, "status", "")).lower()
+            if not any(role in storage_bot_status for role in ("administrator", "owner", "creator")):
+                raise RuntimeError(
+                    f"USER_SESSION could not confirm @"
+                    f"{getattr(bot_identity, 'username', 'bot')} as an administrator in FILE_STORE; "
+                    "quality buttons would not be able to deliver stored files."
+                )
         else:
             # Without a link, the USER_SESSION has no reliable way to import a
             # private/unseen peer from a numeric ID alone.
