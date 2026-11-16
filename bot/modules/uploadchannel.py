@@ -474,7 +474,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     def _parse_storage_record(value):
         raw = _plain_storage_name(value)
-        ep_match = re.search(r"\[?s(\d{1,2})\s*[- ]\s*e?(\d{1,3})\]?", raw, re.I)
+        ep_match = re.search(r"\[?s(\d{1,2})\s*[- _]\s*e?(\d{1,3})\]?", raw, re.I)
         if not ep_match:
             return None
         stored_season, stored_episode = int(ep_match.group(1)), int(ep_match.group(2))
