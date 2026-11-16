@@ -661,6 +661,7 @@ async def uploadchannel_callbacks(client, callback):
                         "the old channel is left untouched.",
                         "warning",
                     )
+                    channel_stage = f"creating replacement channel for {title}"
                     chat = await user_client.create_channel(
                         title, f"Official episode channel for {title}"
                     )
