@@ -335,7 +335,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     from bot import Var
     episode = await _find_episode_torrent(media, season_number, episode_number)
@@ -395,7 +395,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         f"<b>Release:</b> {_escape(episode['title'])}\n"
         f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
     )
-    await bot.send_message(
+    await destination_client.send_message(
         chat_id=destination_id,
         text=caption,
         reply_markup=InlineKeyboardMarkup([buttons]),
@@ -767,6 +767,7 @@ async def uploadchannel_callbacks(client, callback):
                     # suppress uploads when the destination channel is actually empty.
                     # Check the destination channel's history; existing episodes are skipped.
                     existing_episodes = set()
+                    channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
                     async for channel_message in user_client.get_chat_history(destination_id, limit=500):
                         body = " ".join(str(x or "") for x in (
                             getattr(channel_message, "text", ""),
@@ -790,7 +791,8 @@ async def uploadchannel_callbacks(client, callback):
                         f"<b>Status:</b> {_escape(season_status)}\n"
                         f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
                     )
-                    info_message = await bot.send_message(
+                    channel_stage = f"posting Season {season_index} information to {destination_id} via USER_SESSION"
+                    info_message = await user_client.send_message(
                         chat_id=destination_id,
                         text=season_info,
                         disable_web_page_preview=True,
@@ -800,8 +802,9 @@ async def uploadchannel_callbacks(client, callback):
                             f"Could not publish Season {season_index} information for {selected_title}; "
                             "the season batch was not started."
                         )
+                    channel_stage = f"posting Season {season_index} sticker to {destination_id} via USER_SESSION"
                     sticker_ok = await send_sticker_to_channel(
-                        destination_id, getattr(Var, "STICKER_ID", None)
+                        destination_id, getattr(Var, "STICKER_ID", None), client=user_client
                     )
                     if not sticker_ok:
                         raise RuntimeError(
@@ -823,8 +826,9 @@ async def uploadchannel_callbacks(client, callback):
                             f"to dedicated channel {destination_id}.",
                             "info", log=False,
                         )
+                        channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
                         await _upload_single_episode(
-                            prequel, destination_id, season_index, episode_number
+                            prequel, destination_id, season_index, episode_number, user_client
                         )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "complete",
