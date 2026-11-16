@@ -18,7 +18,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption
+from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -434,7 +434,50 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     workdir = os.path.join("downloads", "uc_episode_" + safe)
     os.makedirs(workdir, exist_ok=True)
     info = TextEditor(title)
-    await info.load_info()
+    # The archive relation objects in AniList contain only partial metadata.
+    # Fetch the exact media by AniList ID instead of searching by title again;
+    # this prevents a similarly named season/remake from supplying the artwork
+    # or synopsis for the wrong anime.
+    details_query = """
+    query ($id: Int) {
+      Media(id: $id, type: ANIME) {
+        id
+        title { english romaji native }
+        description(asHtml: false)
+        coverImage { extraLarge large }
+        bannerImage
+        genres
+        status
+        format
+        season
+        seasonYear
+        episodes
+        averageScore
+        duration
+        startDate { year month day }
+        endDate { year month day }
+        studios(isMain: true) { nodes { name } }
+      }
+    }
+    """
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as metadata_client:
+            metadata_response = await metadata_client.post(
+                ANILIST_URL,
+                json={"query": details_query, "variables": {"id": int(media.get("id") or 0)}},
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+            )
+            metadata_response.raise_for_status()
+            exact_metadata = (metadata_response.json().get("data") or {}).get("Media") or {}
+        if not exact_metadata or int(exact_metadata.get("id") or 0) != int(media.get("id") or 0):
+            raise RuntimeError("AniList did not return the exact requested media ID.")
+        info.adata = exact_metadata
+    except Exception as metadata_error:
+        raise RuntimeError(
+            f"Could not retrieve exact AniList artwork/synopsis for {title} "
+            f"(AniList ID {media.get('id')}): {metadata_error}. Refusing to publish an unverified thumbnail."
+        ) from metadata_error
+    info.pdata["anime_title"] = title
     info.pdata["episode_number"] = str(episode_number).zfill(2)
     info.pdata["anime_season"] = str(season_number).zfill(2)
     info.pdata["audio_type"] = (
@@ -692,10 +735,17 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     caption = await build_main_channel_announcement_caption(
         info, title, str(episode_number).zfill(2), available_qualities
     )
-    keyboard = InlineKeyboardMarkup([
+    keyboard_rows = [
         [buttons_by_quality[q] for q in ("480", "720") if q in buttons_by_quality],
         [buttons_by_quality[q] for q in ("1080", "HDRi") if q in buttons_by_quality],
-    ])
+    ]
+    keyboard_rows = [row for row in keyboard_rows if row]
+    if len(buttons_by_quality) != 4 or not keyboard_rows:
+        raise RuntimeError(
+            f"Refusing to publish {title} S{season_number}E{episode_number}: "
+            f"only {len(buttons_by_quality)}/4 quality buttons were prepared."
+        )
+    keyboard = InlineKeyboardMarkup(keyboard_rows)
 
     # Generate the same ANIME SOUL 16:9 episode artwork used by the normal
     # uploader. Do not post progress, season-info, or sticker messages in the
@@ -707,7 +757,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     )
     if poster and os.path.exists(poster):
         with open(poster, "rb") as photo_file:
-            published = await destination_client.send_photo(
+            # Inline keyboards are a Bot API feature. USER_SESSION creates
+            # channels and manages their permissions, but the actual episode
+            # card must be posted by the promoted BOT_TOKEN account.
+            published = await bot.send_photo(
                 chat_id=destination_id,
                 photo=photo_file,
                 caption=caption,
@@ -719,7 +772,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             raise RuntimeError(
                 f"Could not generate episode poster or find fallback artwork for {title} S{season_number}E{episode_number}."
             )
-        published = await destination_client.send_photo(
+        published = await bot.send_photo(
             chat_id=destination_id,
             photo=cover,
             caption=caption,
@@ -729,6 +782,25 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         raise RuntimeError(
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
         )
+
+    # The requested Ongoing Anime Time pack sticker is mandatory and is sent
+    # exactly once after the final episode card (not before, not per quality).
+    sticker_sent = await send_sticker_to_channel(
+        destination_id,
+        getattr(Var, "STICKER_ID", None),
+        client=destination_client,
+    )
+    if not sticker_sent:
+        raise RuntimeError(
+            f"Episode card was published, but the mandatory Ongoing Anime Time sticker "
+            f"failed for {title} S{season_number}E{episode_number}."
+        )
+    await rep.report(
+        f"Published {title} S{season_number}E{episode_number} with four quality buttons, "
+        "AniList-ID-verified artwork/synopsis, and the mandatory Ongoing Anime Time sticker.",
+        "info",
+        log=False,
+    )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
 
