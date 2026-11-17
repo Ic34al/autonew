@@ -856,7 +856,45 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     return True
 
 
+async def _upload_episode_with_priority_retry(media, destination_id, season_number,
+                                               episode_number, destination_client,
+                                               context="archive"):
+    """Keep the current episode durable; yield between retries to new ongoing releases."""
+    attempt = 0
+    while True:
+        while (
+            AUTO_UPLOAD_PRIORITY_PENDING.is_set()
+            or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+        ):
+            await asyncio.sleep(5)
 
+        await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+        try:
+            await _upload_single_episode(
+                media, destination_id, season_number, episode_number, destination_client
+            )
+            return True
+        except asyncio.CancelledError:
+            raise
+        except Exception as episode_error:
+            attempt += 1
+            await rep.report(
+                f"{context}: Season {season_number} Episode {episode_number} failed "
+                f"on attempt {attempt}; the queue will retain this exact episode and retry "
+                f"without skipping ahead. New ongoing releases can take priority meanwhile. "
+                f"{type(episode_error).__name__}: {episode_error}",
+                "error",
+            )
+        finally:
+            AUTO_UPLOAD_PRIORITY_LOCK.release()
+
+        # Back off in short intervals rather than sleeping in one long block.
+        # This lets the priority scanner interrupt archive work as soon as a
+        # scheduled episode is detected.
+        for _ in range(12):
+            if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
+                break
+            await asyncio.sleep(5)
 
 
 ARCHIVE_RESUME_LOCK = asyncio.Lock()
@@ -964,15 +1002,11 @@ async def resume_archive_batches():
                         for episode_number in range(1, episode_total + 1):
                             if episode_number in existing_episodes:
                                 continue
-                            while (
-                                AUTO_UPLOAD_PRIORITY_PENDING.is_set()
-                                or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
-                            ):
-                                await asyncio.sleep(5)
-                            async with auto_anime_core.AUTO_UPLOAD_PRIORITY_LOCK:
-                                await _upload_single_episode(
-                                    media, destination_id, season_index, episode_number, user_client
-                                )
+                            await _upload_episode_with_priority_retry(
+                                media, destination_id, season_index, episode_number,
+                                user_client, context="Restart-recovered /uploadchannel batch",
+                            )
+                            existing_episodes.add(episode_number)
                         await db.set_anime_archive_batch(
                             anime_id, season_index, destination_id, "complete",
                             "", f"restart-recovered S{season_index} 4-quality",
@@ -1465,25 +1499,19 @@ async def uploadchannel_callbacks(client, callback):
                         "info", log=False,
                     )
                     channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
-                    # Let a newly detected scheduled release run before
-                    # the next archive episode. The current episode finishes
-                    # atomically; scheduled uploads take the lock at this boundary.
-                    while (
-                        AUTO_UPLOAD_PRIORITY_PENDING.is_set()
-                        or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
-                    ):
-                        await asyncio.sleep(5)
+                    # Never abandon an archive batch because one source/encode/
+                    # Telegram attempt fails. Retry this same episode and yield the
+                    # shared priority lock between attempts so new ongoing releases
+                    # are published first.
                     channel_stage = (
-                        f"acquiring upload priority lock before archive "
-                        f"S{season_index}E{episode_number}"
+                        f"uploading Season {season_index} Episode {episode_number} "
+                        f"with ongoing-release priority"
                     )
-                    await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-                    try:
-                        await _upload_single_episode(
-                            prequel, destination_id, season_index, episode_number, user_client
-                        )
-                    finally:
-                        AUTO_UPLOAD_PRIORITY_LOCK.release()
+                    await _upload_episode_with_priority_retry(
+                        prequel, destination_id, season_index, episode_number,
+                        user_client, context="Active /uploadchannel batch",
+                    )
+                    existing_episodes.add(episode_number)
                 await db.set_anime_archive_batch(
                     archive_id, season_index, destination_id, "complete",
                     "", f"episode-by-episode S{season_index} 4-quality",
