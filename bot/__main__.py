@@ -15,6 +15,7 @@ from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
 from bot.core.auto_animes import fetch_animes
+from bot.modules.uploadchannel import resume_archive_batches
 
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
@@ -162,6 +163,7 @@ async def main():
         tasks = [
             create_task(queue_loop()),
             create_task(fetch_animes()),
+            create_task(resume_archive_batches()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')
