@@ -32,6 +32,7 @@ query ($search: String!) {
         romaji
         native
       }
+      synonyms
     }
   }
 }
