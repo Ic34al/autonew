@@ -39,6 +39,7 @@ LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 SCHEDULE_QUERY = """
 query ($page: Int, $perPage: Int) {
   Page(page: $page, perPage: $perPage) {
+    pageInfo { hasNextPage }
     media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC) {
       id
       title { english romaji native }
@@ -110,26 +111,33 @@ def _display_title(media):
 
 
 async def _fetch_currently_airing():
+    """Fetch every AniList RELEASING page, not only the first 50 popular titles."""
     timeout = httpx.Timeout(25.0, connect=10.0)
+    media = []
     async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            ANILIST_URL,
-            json={"query": SCHEDULE_QUERY, "variables": {"page": 1, "perPage": 50}},
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    if payload.get("errors"):
-        raise RuntimeError("; ".join(str(e.get("message", "AniList error")) for e in payload["errors"]))
-    media = (payload.get("data") or {}).get("Page", {}).get("media") or []
+        for page in range(1, 21):
+            response = await client.post(
+                ANILIST_URL,
+                json={"query": SCHEDULE_QUERY, "variables": {"page": page, "perPage": 50}},
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("errors"):
+                raise RuntimeError("; ".join(str(e.get("message", "AniList error")) for e in payload["errors"]))
+            page_data = (payload.get("data") or {}).get("Page") or {}
+            media.extend(page_data.get("media") or [])
+            if not (page_data.get("pageInfo") or {}).get("hasNextPage"):
+                break
     result = []
     seen = set()
     for item in media:
         day = _airing_day(item)
         title = _display_title(item)
-        if not day or not title or item.get("id") in seen:
+        media_id = item.get("id")
+        if not day or not title or not media_id or media_id in seen:
             continue
-        seen.add(item.get("id"))
+        seen.add(media_id)
         item["_weekday"] = day
         result.append(item)
     return result
