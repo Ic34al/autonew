@@ -1079,20 +1079,20 @@ def _build_channel_intro_caption(media):
     studios = (media.get("studios") or {}).get("nodes") or []
     studio = ", ".join(str(x.get("name")) for x in studios if x.get("name")) or "Not listed"
     description = re.sub(r"<[^>]+>", "", str(media.get("description") or ""))
-    description = re.sub(r"\\s+", " ", description).strip()
+    description = re.sub(r"\s+", " ", description).strip()
     if len(description) > 1200:
         description = description[:1197].rsplit(" ", 1)[0] + "..."
     synopsis = _escape(description) if description else "Synopsis unavailable"
     # Invisible marker lets later runs detect the one-time intro card without
     # adding visible control text to the channel caption.
-    marker = "\\u2063AS_CHANNEL_INTRO\\u2063"
+    marker = "\u2063AS_CHANNEL_INTRO\u2063"
     return (
-        f"<b>{_escape(title)}</b>\\n\\n"
-        f"<b>Genres:</b> {_escape(genres)}\\n<b>Type:</b> {_escape(media_type)}\\n"
-        f"<b>Average Rating:</b> {_escape(rating)}\\n<b>Status:</b> {_escape(status)}\\n"
-        f"<b>First aired:</b> {_escape(first_aired)}\\n<b>Last aired:</b> {_escape(last_aired)}\\n"
-        f"<b>Runtime:</b> {_escape(runtime)}\\n<b>No. of episodes:</b> {_escape(episodes)}\\n"
-        f"<b>Studio:</b> {_escape(studio)}\\n\\n"
+        f"<b>{_escape(title)}</b>\n\n"
+        f"<b>Genres:</b> {_escape(genres)}\n<b>Type:</b> {_escape(media_type)}\n"
+        f"<b>Average Rating:</b> {_escape(rating)}\n<b>Status:</b> {_escape(status)}\n"
+        f"<b>First aired:</b> {_escape(first_aired)}\n<b>Last aired:</b> {_escape(last_aired)}\n"
+        f"<b>Runtime:</b> {_escape(runtime)}\n<b>No. of episodes:</b> {_escape(episodes)}\n"
+        f"<b>Studio:</b> {_escape(studio)}\n\n"
         f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{synopsis}</i></blockquote>{marker}"
     )
 
