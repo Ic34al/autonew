@@ -1061,6 +1061,42 @@ def _build_anime_info_caption(info, title, season_number, episode_number, qualit
     )
 
 
+def _build_channel_intro_caption(media):
+    """Metadata-only ANIME SOUL welcome card; deliberately has no episode number."""
+    titles = media.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or titles.get("native") or "Unknown anime"
+    genres = ", ".join(str(x) for x in (media.get("genres") or [])[:8]) or "Not listed"
+    media_type = media.get("format") or media.get("type") or "Anime"
+    score = media.get("averageScore")
+    rating = f"{float(score) / 10:.1f}/10" if score is not None else "Not rated"
+    status = str(media.get("status") or "Unknown").replace("_", " ")
+    start = media.get("startDate") or {}
+    end = media.get("endDate") or {}
+    first_aired = "-".join(str(start.get(k)).zfill(2) for k in ("year", "month", "day") if start.get(k)) or "Unknown"
+    last_aired = "Ongoing" if status.upper() == "RELEASING" else ("-".join(str(end.get(k)).zfill(2) for k in ("year", "month", "day") if end.get(k)) or "Unknown")
+    runtime = f"{media.get('duration')} minutes" if media.get("duration") else "Unknown"
+    episodes = media.get("episodes") or "Unknown"
+    studios = (media.get("studios") or {}).get("nodes") or []
+    studio = ", ".join(str(x.get("name")) for x in studios if x.get("name")) or "Not listed"
+    description = re.sub(r"<[^>]+>", "", str(media.get("description") or ""))
+    description = re.sub(r"\\s+", " ", description).strip()
+    if len(description) > 1200:
+        description = description[:1197].rsplit(" ", 1)[0] + "..."
+    synopsis = _escape(description) if description else "Synopsis unavailable"
+    # Invisible marker lets later runs detect the one-time intro card without
+    # adding visible control text to the channel caption.
+    marker = "\\u2063AS_CHANNEL_INTRO\\u2063"
+    return (
+        f"<b>{_escape(title)}</b>\\n\\n"
+        f"<b>Genres:</b> {_escape(genres)}\\n<b>Type:</b> {_escape(media_type)}\\n"
+        f"<b>Average Rating:</b> {_escape(rating)}\\n<b>Status:</b> {_escape(status)}\\n"
+        f"<b>First aired:</b> {_escape(first_aired)}\\n<b>Last aired:</b> {_escape(last_aired)}\\n"
+        f"<b>Runtime:</b> {_escape(runtime)}\\n<b>No. of episodes:</b> {_escape(episodes)}\\n"
+        f"<b>Studio:</b> {_escape(studio)}\\n\\n"
+        f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{synopsis}</i></blockquote>{marker}"
+    )
+
+
 def _selection_keyboard(items, selected):
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     rows = []
@@ -1420,7 +1456,89 @@ async def uploadchannel_callbacks(client, callback):
                         f"@{bot_username} is an admin in '{title}' ({chat.id}) but Telegram denied "
                         "can_post_messages. Episode uploads cannot start until posting permission is granted."
                     )
-            # Each archive season gets its own info -> sticker -> episode-batch sequence.
+            # Publish one ANIME SOUL channel introduction before any episode cards.
+            # Existing channels are checked first so rerunning /uploadchannel never
+            # duplicates the welcome post or its sticker.
+            intro_exists = False
+            try:
+                async for old_message in user_client.get_chat_history(chat.id, limit=1000):
+                    old_caption = str(getattr(old_message, "caption", "") or "")
+                    if (
+                        "AS_CHANNEL_INTRO" in old_caption
+                        or (
+                            getattr(old_message, "photo", None)
+                            and "Genres:" in old_caption
+                            and "Synopsis:" in old_caption
+                            and "Episode:" not in old_caption
+                        )
+                    ):
+                        intro_exists = True
+                        break
+            except Exception as history_error:
+                raise RuntimeError(
+                    f"Could not verify whether the ANIME SOUL intro already exists for {title}; "
+                    f"refusing to create a possible duplicate: {history_error}"
+                ) from history_error
+
+            if not intro_exists:
+                intro_info = TextEditor(title)
+                intro_info.adata = media
+                intro_info.pdata["anime_season"] = "01"
+                intro_path = os.path.join(
+                    "downloads", f"anime_soul_channel_intro_{int(chat.id)}.jpg"
+                )
+                os.makedirs(os.path.dirname(intro_path), exist_ok=True)
+                intro_poster = await build_anime_soul_poster(
+                    intro_info, title, intro_path, episode_label="CHANNEL"
+                )
+                intro_caption = _build_channel_intro_caption(media)
+                cover = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
+                if intro_poster and os.path.exists(intro_poster):
+                    with open(intro_poster, "rb") as intro_photo:
+                        intro_post = await bot.send_photo(
+                            chat_id=chat.id, photo=intro_photo, caption=intro_caption
+                        )
+                elif cover:
+                    intro_post = await bot.send_photo(
+                        chat_id=chat.id, photo=cover, caption=intro_caption
+                    )
+                else:
+                    raise RuntimeError(
+                        f"No verified artwork was available for the ANIME SOUL channel intro: {title}."
+                    )
+                if not intro_post or not getattr(intro_post, "id", None):
+                    raise RuntimeError(
+                        f"Telegram did not confirm the ANIME SOUL intro post for {title}."
+                    )
+                try:
+                    sticker_ok = await send_sticker_to_channel(
+                        chat.id, getattr(Var, "STICKER_ID", None), client=user_client
+                    )
+                    if not sticker_ok:
+                        await rep.report(
+                            f"ANIME SOUL intro posted for {title}, but its Ongoing Anime Time sticker failed.",
+                            "warning", log=False,
+                        )
+                except Exception as sticker_error:
+                    await rep.report(
+                        f"ANIME SOUL intro posted for {title}, but sticker delivery failed: {sticker_error}",
+                        "warning", log=False,
+                    )
+                try:
+                    os.remove(intro_path)
+                except OSError:
+                    pass
+                await rep.report(
+                    f"Published one-time ANIME SOUL channel intro for {title} in {chat.id}.",
+                    "success", log=False,
+                )
+            else:
+                await rep.report(
+                    f"ANIME SOUL channel intro already exists for {title}; skipping duplicate welcome post.",
+                    "info", log=False,
+                )
+
+            # Episode posts start only after the intro card is confirmed.
             created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
