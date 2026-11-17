@@ -946,9 +946,9 @@ async def resume_archive_batches():
                             body = " ".join(str(x or "") for x in (
                                 getattr(message, "text", ""), getattr(message, "caption", "")
                             ))
-                            season_match = re.search(r"(?i)\\bSeason\\s*0*(\\d+)\\b", body)
-                            episode_match = re.search(r"(?i)\\bEpisode\\s*[:#-]?\\s*0*(\\d+)\\b", body)
-                            compact_match = re.search(r"(?i)\\[S0*(\\d+)[-_]0*(\\d+)\\]", body)
+                            season_match = re.search(r"(?i)\bSeason\s*0*(\d+)\b", body)
+                            episode_match = re.search(r"(?i)\bEpisode\s*[:#-]?\s*0*(\d+)\b", body)
+                            compact_match = re.search(r"(?i)\[S0*(\d+)[-_]0*(\d+)\]", body)
                             if season_match and episode_match and int(season_match.group(1)) == season_index:
                                 existing_episodes.add(int(episode_match.group(1)))
                             elif compact_match and int(compact_match.group(1)) == season_index:
@@ -1009,7 +1009,7 @@ def _build_anime_info_caption(info, title, season_number, episode_number, qualit
     studios = (data.get("studios") or {}).get("nodes") or []
     studio = ", ".join(str(x.get("name")) for x in studios if x.get("name")) or "Not listed"
     description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
-    description = re.sub(r"\\s+", " ", description).strip()
+    description = re.sub(r"\s+", " ", description).strip()
     if len(description) > 150:
         description = description[:147].rsplit(" ", 1)[0] + "..."
     qualities_text = ", ".join(label for key, label in (("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("HDRi", "HDRip")) if key in (qualities or {}))
