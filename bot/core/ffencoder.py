@@ -54,6 +54,7 @@ class FFEncoder:
         }
         self.dl_path = path
         self.__total_time = None
+        self.__active_input_path = None
         self.__temp_token = uuid.uuid4().hex[:12]
         self.out_path = ospath.join("encode", name)
         self.__prog_file = ospath.join("encode", f"prog_{self.__temp_token}.txt")
@@ -63,7 +64,7 @@ class FFEncoder:
         self.is_movie = is_movie
 
     async def progress(self):
-        self.__total_time = await mediainfo(self.dl_path, get_duration=True)
+        self.__total_time = await mediainfo(self.__active_input_path or self.dl_path, get_duration=True)
         try:
             self.__total_time = float(self.__total_time)
         except (ValueError, TypeError):
@@ -373,6 +374,7 @@ class FFEncoder:
         dl_npath = ospath.join("encode", f"ffanimeadvin_{self.__temp_token}.mkv")
         out_npath = ospath.join("encode", f"ffanimeadvout_{self.__temp_token}.mkv")
         await aiorename(self.dl_path, dl_npath)
+        self.__active_input_path = dl_npath
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
 
@@ -488,6 +490,11 @@ class FFEncoder:
             pass
 
         await aiorename(dl_npath, self.dl_path)
+        self.__active_input_path = None
+
+        if return_code == 0 and (not ospath.exists(out_npath) or ospath.getsize(out_npath) <= 0):
+            return_code = 1
+            stderr_tail = (stderr_tail + "\\nFFmpeg returned success but created no usable output file.").strip()
 
         if self.is_cancelled:
             LOGS.info("Encoding was cancelled.")
@@ -515,7 +522,14 @@ class FFEncoder:
                     "warning",
                 )
                 return await self.start_encode()
-            error_message = f"FFmpeg exited with return code {return_code}"
+            if ospath.exists(out_npath):
+                await aioremove(out_npath)
+            if ospath.exists(self.__prog_file):
+                await aioremove(self.__prog_file)
+            error_message = (
+                f"FFmpeg was terminated by SIGTERM (return code {return_code})"
+                if return_code == -15 else f"FFmpeg exited with return code {return_code}"
+            )
             if stderr_tail:
                 # Keep reports readable while preserving the useful final diagnostics.
                 diagnostic = stderr_tail[-3500:]
