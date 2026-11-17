@@ -115,7 +115,8 @@ async def _fetch_currently_airing():
     timeout = httpx.Timeout(25.0, connect=10.0)
     media = []
     async with httpx.AsyncClient(timeout=timeout) as client:
-        for page in range(1, 21):
+        page = 1
+        while True:
             response = await client.post(
                 ANILIST_URL,
                 json={"query": SCHEDULE_QUERY, "variables": {"page": page, "perPage": 50}},
@@ -129,6 +130,7 @@ async def _fetch_currently_airing():
             media.extend(page_data.get("media") or [])
             if not (page_data.get("pageInfo") or {}).get("hasNextPage"):
                 break
+            page += 1
     result = []
     seen = set()
     for item in media:
