@@ -137,13 +137,16 @@ class FFEncoder:
                 crf = {"1080": 28, "720": 29, "480": 30, "HDRi": 30}.get(self.__qual, 30)
                 audio_bitrate = {"1080": "128k", "720": "96k", "480": "80k", "HDRi": "96k"}.get(self.__qual, "96k")
                 return (
-                    f"ffmpeg -hide_banner -loglevel warning -analyzeduration 100M -probesize 100M "
-                    f"-filter_threads 1 -filter_complex_threads 1 "
+                    f"ffmpeg -hide_banner -loglevel warning -analyzeduration 200M -probesize 200M "
+                    f"-ignore_unknown -filter_threads 1 -filter_complex_threads 1 "
                     f"-i {shell_quote(dl_npath)} "
+                    # Explicitly map playable streams only. Matroska font attachments,
+                    # data streams and unknown codec streams must never be fed to the
+                    # output muxer; this is the safe retry path for mixed MKV releases.
                     f"-map 0:v:0 -map 0:a? -map 0:s? -map_metadata 0 -map_chapters 0 -dn "
                     f"-c:v libx264 -preset veryfast -s {resolution} -pix_fmt yuv420p -crf {crf} "
                     f"-c:a aac -b:a {audio_bitrate} -c:s copy "
-                    f"-max_muxing_queue_size 2048 -threads 1 "
+                    f"-max_muxing_queue_size 4096 -max_interleave_delta 0 -threads 1 "
                     f"-progress {shell_quote(self.__prog_file)} -nostats "
                     f"{shell_quote(out_npath)} -y"
                 )
