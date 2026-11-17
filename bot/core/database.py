@@ -472,6 +472,13 @@ class MongoDB:
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         return await self.__db.anime_archive_batches.find_one({"_id": key})
 
+    async def get_in_progress_anime_archive_batches(self):
+        """Return unfinished /uploadchannel seasons for automatic restart recovery."""
+        cursor = self.__db.anime_archive_batches.find(
+            {"status": "in_progress"}
+        ).sort("updated_at", 1)
+        return await cursor.to_list(length=100)
+
     async def set_anime_archive_batch(
         self, anime_id: int, season_number: int, channel_id: int,
         status: str, torrent_url: str = "", release_title: str = "",
