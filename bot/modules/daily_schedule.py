@@ -98,19 +98,24 @@ async def get_english_title(session, original_title, cache):
             cache[key] = original_title
             return original_title
 
-        normalized = original_title.casefold().strip()
+        def title_key(value):
+            return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+        normalized = title_key(original_title)
         match = next(
             (
                 anime for anime in results
-                if any(
-                    (anime.get("title", {}).get(field) or "")
-                    .casefold().strip() == normalized
+                if normalized and normalized in {
+                    title_key((anime.get("title") or {}).get(field))
                     for field in ("english", "romaji", "native")
-                )
+                } | {title_key(value) for value in (anime.get("synonyms") or [])}
             ),
-            results[0],
+            None,
         )
-        titles = match.get("title") or {}
+        # Never substitute an unrelated AniList search result just because it
+        # ranked first. If the exact title/alias is not verified, retain the
+        # provider title rather than publishing incorrect metadata.
+        titles = (match or {}).get("title") or {}
 
         resolved = (
             titles.get("english")
