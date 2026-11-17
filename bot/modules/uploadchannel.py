@@ -1015,12 +1015,12 @@ def _build_anime_info_caption(info, title, season_number, episode_number, qualit
     qualities_text = ", ".join(label for key, label in (("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("HDRi", "HDRip")) if key in (qualities or {}))
     synopsis = _escape(description) if description else "Synopsis unavailable"
     return (
-        f"<b>{_escape(display_title)} Season {int(season_number)}</b>\\n\\n"
-        f"<b>Genres:</b> {_escape(genres)}\\n<b>Type:</b> {_escape(media_type)}\\n"
-        f"<b>Average Rating:</b> {_escape(rating)}\\n<b>Status:</b> {_escape(status)}\\n"
-        f"<b>First aired:</b> {_escape(first_aired)}\\n<b>Last aired:</b> {_escape(last_aired)}\\n"
-        f"<b>Runtime:</b> {_escape(runtime)}\\n<b>No. of episodes:</b> {_escape(episodes)}\\n"
-        f"<b>Studio:</b> {_escape(studio)}\\n<b>Episode:</b> {str(episode_number).zfill(2)}  |  <b>Quality:</b> {_escape(qualities_text)}\\n\\n"
+        f"<b>{_escape(display_title)} Season {int(season_number)}</b>\n\n"
+        f"<b>Genres:</b> {_escape(genres)}\n<b>Type:</b> {_escape(media_type)}\n"
+        f"<b>Average Rating:</b> {_escape(rating)}\n<b>Status:</b> {_escape(status)}\n"
+        f"<b>First aired:</b> {_escape(first_aired)}\n<b>Last aired:</b> {_escape(last_aired)}\n"
+        f"<b>Runtime:</b> {_escape(runtime)}\n<b>No. of episodes:</b> {_escape(episodes)}\n"
+        f"<b>Studio:</b> {_escape(studio)}\n<b>Episode:</b> {str(episode_number).zfill(2)}  |  <b>Quality:</b> {_escape(qualities_text)}\n\n"
         f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{synopsis}</i></blockquote>"
     )
 
