@@ -8386,14 +8386,16 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
 
     season = clean_value(anime_info.pdata.get("anime_season"), "01")
     episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    is_channel_intro = str(episode).strip().upper() == "CHANNEL"
     try:
         season = str(int(season))
     except Exception:
         pass
-    try:
-        episode = str(int(episode)).zfill(2)
-    except Exception:
-        pass
+    if not is_channel_intro:
+        try:
+            episode = str(int(episode)).zfill(2)
+        except Exception:
+            pass
 
     cover_data = data.get("coverImage") or {}
     cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
@@ -8522,7 +8524,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         draw.text((42, left_title_y), title_line, font=left_title_font,
                   fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
         left_title_y += left_title_font.size + 8
-    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+    left_label = "ONGOING SERIES" if is_channel_intro else f"EPISODE {episode}"
+    draw.text((48, 850), f"SEASON {season}   •   {left_label}",
               font=font(23, True), fill=(255,220,70))
 
     # Right-side streaming dashboard header and content geometry.
@@ -8553,7 +8556,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
     draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
     draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
-    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    right_label = "ONGOING" if is_channel_intro else f"EPISODE {episode}"
+    draw.text((rx+238, pill_y+13), right_label, font=font(23, True), fill=(18,20,28))
     draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
     draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
 
