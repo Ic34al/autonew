@@ -1080,8 +1080,8 @@ def _build_channel_intro_caption(media):
     studio = ", ".join(str(x.get("name")) for x in studios if x.get("name")) or "Not listed"
     description = re.sub(r"<[^>]+>", "", str(media.get("description") or ""))
     description = re.sub(r"\s+", " ", description).strip()
-    if len(description) > 1200:
-        description = description[:1197].rsplit(" ", 1)[0] + "..."
+    if len(description) > 150:
+        description = description[:147].rsplit(" ", 1)[0] + "..."
     synopsis = _escape(description) if description else "Synopsis unavailable"
     # Invisible marker lets later runs detect the one-time intro card without
     # adding visible control text to the channel caption.
