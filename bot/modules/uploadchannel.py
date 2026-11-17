@@ -856,6 +856,140 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
 
 
+
+ARCHIVE_RESUME_LOCK = asyncio.Lock()
+ARCHIVE_RESUME_STARTED = False
+
+
+async def resume_archive_batches():
+    """Resume persisted /uploadchannel season batches after a dyno restart."""
+    global ARCHIVE_RESUME_STARTED
+    if ARCHIVE_RESUME_STARTED:
+        return
+    ARCHIVE_RESUME_STARTED = True
+    pending = await db.get_in_progress_anime_archive_batches()
+    if not pending:
+        return
+    if not getattr(Var, "USER_SESSION", None):
+        await rep.report("Archive recovery is waiting: USER_SESSION is not configured.", "error")
+        return
+
+    user_client = __import__("pyrogram").Client(
+        "autonew_archive_recovery",
+        api_id=int(Var.API_ID),
+        api_hash=Var.API_HASH,
+        session_string=Var.USER_SESSION,
+        in_memory=True,
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await user_client.start()
+        await rep.report(
+            f"Restart recovery found {len(pending)} unfinished /uploadchannel season batch(es).",
+            "info",
+        )
+        query = """
+        query ($id: Int) {
+          Media(id: $id, type: ANIME) {
+            id
+            title { english romaji native }
+            synonyms
+            episodes
+            seasonYear
+            format
+            status
+          }
+        }
+        """
+        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0)) as session:
+            for batch in pending:
+                anime_id = int(batch.get("anime_id") or 0)
+                season_index = int(batch.get("season_number") or 0)
+                destination_id = int(batch.get("channel_id") or 0)
+                if not anime_id or not season_index or not destination_id:
+                    continue
+                key = f"{anime_id}:{season_index}:{destination_id}"
+                if ARCHIVE_RESUME_LOCK.locked():
+                    await ARCHIVE_RESUME_LOCK.acquire()
+                    ARCHIVE_RESUME_LOCK.release()
+                async with ARCHIVE_RESUME_LOCK:
+                    try:
+                        response = await session.post(
+                            ANILIST_URL,
+                            json={"query": query, "variables": {"id": anime_id}},
+                            headers={"Accept": "application/json", "Content-Type": "application/json"},
+                        )
+                        response.raise_for_status()
+                        payload = response.json()
+                        media = (payload.get("data") or {}).get("Media") or {}
+                        if int(media.get("id") or 0) != anime_id:
+                            raise RuntimeError(f"AniList did not return exact media ID {anime_id}.")
+                        episode_total = int(media.get("episodes") or 0)
+                        if episode_total < 1:
+                            raise RuntimeError(f"AniList episode count is unavailable for archive ID {anime_id}.")
+                        title = _display_title(media)
+                        invite = await db.get_anime_channel_invite_link(title)
+                        if invite:
+                            try:
+                                chat = await user_client.get_chat(invite)
+                            except Exception:
+                                chat = await user_client.join_chat(invite)
+                        else:
+                            chat = await user_client.get_chat(destination_id)
+                        if not chat or int(chat.id) != destination_id:
+                            raise RuntimeError(
+                                f"Saved channel reference for {title} resolved to the wrong destination."
+                            )
+
+                        existing_episodes = set()
+                        async for message in user_client.get_chat_history(destination_id, limit=5000):
+                            body = " ".join(str(x or "") for x in (
+                                getattr(message, "text", ""), getattr(message, "caption", "")
+                            ))
+                            season_match = re.search(r"(?i)\\bSeason\\s*0*(\\d+)\\b", body)
+                            episode_match = re.search(r"(?i)\\bEpisode\\s*[:#-]?\\s*0*(\\d+)\\b", body)
+                            compact_match = re.search(r"(?i)\\[S0*(\\d+)[-_]0*(\\d+)\\]", body)
+                            if season_match and episode_match and int(season_match.group(1)) == season_index:
+                                existing_episodes.add(int(episode_match.group(1)))
+                            elif compact_match and int(compact_match.group(1)) == season_index:
+                                existing_episodes.add(int(compact_match.group(2)))
+
+                        await rep.report(
+                            f"Resuming {title} Season {season_index} in {destination_id}; "
+                            f"{len(existing_episodes)} episode card(s) already exist.",
+                            "info",
+                        )
+                        for episode_number in range(1, episode_total + 1):
+                            if episode_number in existing_episodes:
+                                continue
+                            while (
+                                AUTO_UPLOAD_PRIORITY_PENDING.is_set()
+                                or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+                            ):
+                                await asyncio.sleep(5)
+                            async with auto_anime_core.AUTO_UPLOAD_PRIORITY_LOCK:
+                                await _upload_single_episode(
+                                    media, destination_id, season_index, episode_number, user_client
+                                )
+                        await db.set_anime_archive_batch(
+                            anime_id, season_index, destination_id, "complete",
+                            "", f"restart-recovered S{season_index} 4-quality",
+                        )
+                        await rep.report(f"Restart recovery completed {title} Season {season_index}.", "success")
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception as error:
+                        await rep.report(
+                            f"Archive recovery will retry after the next restart for batch {key}: {error}",
+                            "error",
+                        )
+    finally:
+        try:
+            await user_client.stop()
+        except Exception:
+            pass
+
+
 def _build_anime_info_caption(info, title, season_number, episode_number, qualities):
     """Rich expandable anime metadata caption matching the approved info-card layout."""
     data = getattr(info, "adata", {}) or {}
