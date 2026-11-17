@@ -482,7 +482,7 @@ class FFEncoder:
             stderr_text = stderr_output.decode("utf-8", errors="replace")
         else:
             stderr_text = str(stderr_output or "")
-        stderr_tail = "\\n".join(stderr_text.splitlines()[-35:]).strip()
+        stderr_tail = "\n".join(stderr_text.splitlines()[-35:]).strip()
 
         try:
             ffpids_cache.remove(proc_pid)
@@ -494,7 +494,7 @@ class FFEncoder:
 
         if return_code == 0 and (not ospath.exists(out_npath) or ospath.getsize(out_npath) <= 0):
             return_code = 1
-            stderr_tail = (stderr_tail + "\\nFFmpeg returned success but created no usable output file.").strip()
+            stderr_tail = (stderr_tail + "\nFFmpeg returned success but created no usable output file.").strip()
 
         if self.is_cancelled:
             LOGS.info("Encoding was cancelled.")
@@ -535,11 +535,11 @@ class FFEncoder:
                 diagnostic = stderr_tail[-3500:]
                 LOGS.error(
                     f"Encoding failed for {self.__name} ({self.__qual}p): "
-                    f"{error_message}\\n{diagnostic}"
+                    f"{error_message}\n{diagnostic}"
                 )
                 await rep.report(
                     f"{self.__qual}p encoding failed for {self.__name}. "
-                    f"{error_message}\\n<pre>{diagnostic}</pre>",
+                    f"{error_message}\n<pre>{diagnostic}</pre>",
                     "error",
                 )
             else:
