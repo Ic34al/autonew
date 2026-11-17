@@ -1421,7 +1421,7 @@ async def uploadchannel_callbacks(client, callback):
                 # Check the destination channel's history; existing episodes are skipped.
                 existing_episodes = set()
                 channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
-                async for channel_message in user_client.get_chat_history(destination_id, limit=500):
+                async for channel_message in user_client.get_chat_history(destination_id, limit=5000):
                     body = " ".join(str(x or "") for x in (
                         getattr(channel_message, "text", ""),
                         getattr(channel_message, "caption", ""),
