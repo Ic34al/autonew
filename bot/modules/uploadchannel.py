@@ -19,7 +19,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 from bot import bot, Var, LOGS
 from bot.core.database import db
 import bot.core.auto_animes as auto_anime_core
-from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
+from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, build_anime_watch_markup, send_sticker_to_channel
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -736,8 +736,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         buttons_by_quality[quality] = InlineKeyboardButton(f"{quality}p" if quality != "HDRi" else "HDRip", url=url)
 
     available_qualities = {quality: True for quality in buttons_by_quality}
-    caption = await build_main_channel_announcement_caption(
-        info, title, str(episode_number).zfill(2), available_qualities
+    caption = _build_anime_info_caption(
+        info, title, season_number, episode_number, available_qualities
     )
     keyboard_rows = [
         [buttons_by_quality[q] for q in ("480", "720") if q in buttons_by_quality],
@@ -787,13 +787,43 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
         )
 
-    # The requested Ongoing Anime Time pack sticker is mandatory and is sent
-    # exactly once after the final episode card (not before, not per quality).
+    # Publish the matching Main Channel announcement for each dedicated-channel episode.
+    main_post = None
+    if int(destination_id) != int(Var.MAIN_CHANNEL):
+        try:
+            watch_markup = await build_anime_watch_markup(destination_id)
+            if poster and os.path.exists(poster):
+                with open(poster, "rb") as photo_file:
+                    main_post = await bot.send_photo(
+                        chat_id=Var.MAIN_CHANNEL, photo=photo_file,
+                        caption=caption, reply_markup=watch_markup,
+                    )
+            else:
+                main_post = await bot.send_photo(
+                    chat_id=Var.MAIN_CHANNEL, photo=cover,
+                    caption=caption, reply_markup=watch_markup,
+                )
+            if not main_post or not getattr(main_post, "id", None):
+                raise RuntimeError("Telegram did not confirm the Main Channel announcement.")
+        except Exception as main_post_error:
+            await rep.report(
+                f"Dedicated episode card was published, but Main Channel announcement failed "
+                f"for {title} S{season_number}E{episode_number}: {main_post_error}",
+                "error",
+            )
+
+    # The priority Ongoing Anime Time sticker follows both episode posts.
     sticker_sent = await send_sticker_to_channel(
-        destination_id,
-        getattr(Var, "STICKER_ID", None),
-        client=destination_client,
+        destination_id, getattr(Var, "STICKER_ID", None), client=destination_client,
     )
+    if main_post:
+        await asyncio.sleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+        main_sticker_sent = await send_sticker_to_channel(Var.MAIN_CHANNEL, getattr(Var, "STICKER_ID", None))
+        if not main_sticker_sent:
+            await rep.report(
+                f"Main Channel priority sticker failed for {title} S{season_number}E{episode_number}.",
+                "warning", log=False,
+            )
     if not sticker_sent:
         # The episode card and all four file links are already live. A sticker
         # API/session error must never mark the episode upload as failed or stop
@@ -814,6 +844,43 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
+
+
+
+
+def _build_anime_info_caption(info, title, season_number, episode_number, qualities):
+    """Rich expandable anime metadata caption matching the approved info-card layout."""
+    data = getattr(info, "adata", {}) or {}
+    titles = data.get("title") or {}
+    display_title = titles.get("english") or titles.get("romaji") or title
+    genres = ", ".join(str(x) for x in (data.get("genres") or [])[:8]) or "Not listed"
+    media_type = data.get("format") or data.get("type") or "Anime"
+    score = data.get("averageScore")
+    rating = f"{float(score) / 10:.1f}/10" if score is not None else "Not rated"
+    status = str(data.get("status") or "Unknown").replace("_", " ")
+    start = data.get("startDate") or {}
+    end = data.get("endDate") or {}
+    first_aired = "-".join(str(start.get(k)).zfill(2) for k in ("year", "month", "day") if start.get(k)) or "Unknown"
+    last_aired = "Ongoing" if status.upper() == "RELEASING" else ("-".join(str(end.get(k)).zfill(2) for k in ("year", "month", "day") if end.get(k)) or "Unknown")
+    runtime = f"{data.get('duration')} minutes" if data.get("duration") else "Unknown"
+    episodes = data.get("episodes") or "Unknown"
+    studios = (data.get("studios") or {}).get("nodes") or []
+    studio = ", ".join(str(x.get("name")) for x in studios if x.get("name")) or "Not listed"
+    description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
+    description = re.sub(r"\\s+", " ", description).strip()
+    if len(description) > 150:
+        description = description[:147].rsplit(" ", 1)[0] + "..."
+    qualities_text = ", ".join(label for key, label in (("480", "480p"), ("720", "720p"), ("1080", "1080p"), ("HDRi", "HDRip")) if key in (qualities or {}))
+    synopsis = _escape(description) if description else "Synopsis unavailable"
+    return (
+        f"<b>{_escape(display_title)} Season {int(season_number)}</b>\\n\\n"
+        f"<b>Genres:</b> {_escape(genres)}\\n<b>Type:</b> {_escape(media_type)}\\n"
+        f"<b>Average Rating:</b> {_escape(rating)}\\n<b>Status:</b> {_escape(status)}\\n"
+        f"<b>First aired:</b> {_escape(first_aired)}\\n<b>Last aired:</b> {_escape(last_aired)}\\n"
+        f"<b>Runtime:</b> {_escape(runtime)}\\n<b>No. of episodes:</b> {_escape(episodes)}\\n"
+        f"<b>Studio:</b> {_escape(studio)}\\n<b>Episode:</b> {str(episode_number).zfill(2)}  |  <b>Quality:</b> {_escape(qualities_text)}\\n\\n"
+        f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{synopsis}</i></blockquote>"
+    )
 
 
 def _selection_keyboard(items, selected):
@@ -1215,11 +1282,13 @@ async def uploadchannel_callbacks(client, callback):
                         getattr(channel_message, "text", ""),
                         getattr(channel_message, "caption", ""),
                     ))
-                    match = re.search(
-                        rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
-                    )
-                    if match:
-                        existing_episodes.add(int(match.group(1)))
+                    season_match = re.search(r"(?i)\\bSeason\\s*0*(\\d+)\\b", body)
+                    episode_match = re.search(r"(?i)\\bEpisode\\s*[:#-]?\\s*0*(\\d+)\\b", body)
+                    compact_match = re.search(r"(?i)\\[S0*(\\d+)[-_]0*(\\d+)\\]", body)
+                    if season_match and episode_match and int(season_match.group(1)) == int(season_index):
+                        existing_episodes.add(int(episode_match.group(1)))
+                    elif compact_match and int(compact_match.group(1)) == int(season_index):
+                        existing_episodes.add(int(compact_match.group(2)))
                 season_year = prequel.get("seasonYear") or "N/A"
                 episode_total = available_episodes or "Unknown"
                 season_format = prequel.get("format") or "TV"
