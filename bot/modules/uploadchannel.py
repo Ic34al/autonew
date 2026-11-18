@@ -36,7 +36,7 @@ LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
 UPLOADCHANNEL_PAUSED = False
 UPLOADCHANNEL_ACTIVE_TASKS = set()
-LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
+LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
 query ($page: Int, $perPage: Int) {
@@ -297,8 +297,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     for value in raw_aliases:
         value = str(value or "").strip()
         normalized = _plain_title(value)
-        if value and normalized and normalized not in {
-            _plain_title(existing) for existing in aliases
+        if value and normalized and normalized not in {            _plain_title(existing) for existing in aliases
         }:            aliases.append(value)
     if not aliases:
         await rep.report(
@@ -597,8 +596,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     f"FILE_STORE_LINK resolved to {storage_chat_id}, while FILE_STORE is "
                     f"{configured_storage_id}. Using the channel resolved from FILE_STORE_LINK "
                     "for safe existing-file reuse.",
-                    "warning",
-                    log=False,                )
+                    "warning",                    log=False,                )
 
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
@@ -899,7 +897,6 @@ async def _upload_episode_with_priority_retry(media, destination_id, season_numb
 
 ARCHIVE_RESUME_LOCK = asyncio.Lock()ARCHIVE_RESUME_STARTED = False
 
-
 async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
     if UPLOADCHANNEL_PAUSED:
@@ -1197,8 +1194,7 @@ async def uploadchannel_command(client, message):
     # Respond explicitly to non-admins instead of silently filtering the command.
     if not message.from_user or message.from_user.id not in Var.ADMINS:
         return await message.reply("⛔ This command is restricted to bot administrators.")
-    if not getattr(Var, "USER_SESSION", None):
-        return await message.reply(
+    if not getattr(Var, "USER_SESSION", None):        return await message.reply(
             "⚠️ USER_SESSION is not configured. Add your Telegram user session to the deployment environment first."
         )
     status = await message.reply("Fetching currently airing anime and their release weekdays…")
@@ -1497,8 +1493,7 @@ async def uploadchannel_callbacks(client, callback):
             try:
                 async for old_message in user_client.get_chat_history(chat.id, limit=1000):
                     old_caption = str(getattr(old_message, "caption", "") or "")
-                    if (
-                        "AS_CHANNEL_INTRO" in old_caption
+                    if (                        "AS_CHANNEL_INTRO" in old_caption
                         or (
                             getattr(old_message, "photo", None)
                             and "Genres:" in old_caption
