@@ -1154,8 +1154,9 @@ async def uploadchannel_command(client, message):
             "items": items,
             "selected": set(),
             "created": [],
+            "page": 0,
         }
-        keyboard = _selection_keyboard(items, set())
+        keyboard = _selection_keyboard(items, set(), 0)
         await status.edit(
             "<b>Choose ongoing anime</b>\nSelect as many titles as you want. The weekday is based on the next scheduled episode in India time.",
             reply_markup=keyboard,
@@ -1180,10 +1181,12 @@ async def uploadchannel_callbacks(client, callback):
             page = int(data.rsplit(":", 1)[1])
         except (TypeError, ValueError):
             return await callback.answer("Invalid page.", show_alert=True)
+        page_count = max(1, (len(state["items"]) + 23) // 24)
+        state["page"] = max(0, min(page, page_count - 1))
         await callback.message.edit_reply_markup(
-            _selection_keyboard(state["items"], state["selected"], page)
+            _selection_keyboard(state["items"], state["selected"], state["page"])
         )
-        return await callback.answer(f"Page {page + 1}")
+        return await callback.answer(f"Page {state['page'] + 1}")
     if data == "uc:cancel":
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         return await callback.message.edit("Channel creation cancelled.")
@@ -1196,7 +1199,7 @@ async def uploadchannel_callbacks(client, callback):
         else:
             state["selected"].add(index)
         await callback.message.edit_reply_markup(
-            _selection_keyboard(state["items"], state["selected"])
+            _selection_keyboard(state["items"], state["selected"], state.get("page", 0))
         )
         return await callback.answer(f"{len(state['selected'])} selected")
 
