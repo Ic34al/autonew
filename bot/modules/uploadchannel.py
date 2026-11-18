@@ -297,7 +297,12 @@ async def _find_episode_torrent(media, season_number, episode_number):
     for value in raw_aliases:
         value = str(value or "").strip()
         normalized = _plain_title(value)
-        if value and normalized and normalized not in {            _plain_title(existing) for existing in aliases        }:            aliases.append(value)    if not aliases:        await rep.report(
+        if value and normalized and normalized not in {
+            _plain_title(existing) for existing in aliases
+        }:
+            aliases.append(value)
+    if not aliases:
+        await rep.report(
             f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.",
             "warning", log=False,
         )
@@ -593,10 +598,14 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     f"FILE_STORE_LINK resolved to {storage_chat_id}, while FILE_STORE is "
                     f"{configured_storage_id}. Using the channel resolved from FILE_STORE_LINK "
                     "for safe existing-file reuse.",
-                    "warning",                    log=False,                )
+                    "warning",
+                    log=False,
+                
         # The existing Monkey file-share bot is already an administrator
-        # in this storage channel. Do not promote Auto Anime Uploader here:        # its BOT_TOKEN is only used to publish episode cards, not to serve files.
-        scanned_storage_messages = 0        async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
+        # in this storage channel. Do not promote Auto Anime Uploader here:
+        # its BOT_TOKEN is only used to publish episode cards, not to serve files.
+        scanned_storage_messages = 0
+        async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
             scanned_storage_messages += 1
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
             media_name = getattr(media_obj, "file_name", None) if media_obj else None
@@ -1188,14 +1197,18 @@ async def uploadchannel_command(client, message):
     # Respond explicitly to non-admins instead of silently filtering the command.
     if not message.from_user or message.from_user.id not in Var.ADMINS:
         return await message.reply("⛔ This command is restricted to bot administrators.")
-    if not getattr(Var, "USER_SESSION", None):        return await message.reply(
+    if not getattr(Var, "USER_SESSION", None):
+        return await message.reply(
             "⚠️ USER_SESSION is not configured. Add your Telegram user session to the deployment environment first."
         )
-    status = await message.reply("Fetching currently airing anime and their release weekdays…")    try:
+    status = await message.reply("Fetching currently airing anime and their release weekdays…")
+    try:
         items = await _fetch_currently_airing()
-        if not items:            return await status.edit("AniList did not return any currently airing anime with a known next-episode day.")
+        if not items:
+            return await status.edit("AniList did not return any currently airing anime with a known next-episode day.")
         UPLOAD_CHANNEL_SESSIONS[message.from_user.id] = {
-            "items": items,            "selected": set(),
+            "items": items,
+            "selected": set(),
             "created": [],
         }
         keyboard = _selection_keyboard(items, set())
@@ -1484,17 +1497,21 @@ async def uploadchannel_callbacks(client, callback):
             try:
                 async for old_message in user_client.get_chat_history(chat.id, limit=1000):
                     old_caption = str(getattr(old_message, "caption", "") or "")
-                    if (                        "AS_CHANNEL_INTRO" in old_caption
+                    if (
+                        "AS_CHANNEL_INTRO" in old_caption
                         or (
                             getattr(old_message, "photo", None)
                             and "Genres:" in old_caption
-                            and "Synopsis:" in old_caption                            and "Episode:" not in old_caption
+                            and "Synopsis:" in old_caption
+                            and "Episode:" not in old_caption
                         )
                     ):
-                        intro_exists = True                        break
+                        intro_exists = True
+                        break
             except Exception as history_error:
                 raise RuntimeError(
-                    f"Could not verify whether the ANIME SOUL intro already exists for {title}; "                    f"refusing to create a possible duplicate: {history_error}"
+                    f"Could not verify whether the ANIME SOUL intro already exists for {title}; "
+                    f"refusing to create a possible duplicate: {history_error}"
                 ) from history_error
 
             if not intro_exists:
