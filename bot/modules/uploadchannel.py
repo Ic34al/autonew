@@ -34,6 +34,8 @@ from bot.core.reporter import rep
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
+UPLOADCHANNEL_PAUSED = False
+UPLOADCHANNEL_ACTIVE_TASKS = set()
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -863,6 +865,11 @@ ARCHIVE_RESUME_STARTED = False
 
 async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
+    if UPLOADCHANNEL_PAUSED:
+        return
+    recovery_task = asyncio.current_task()
+    if recovery_task:
+        UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     global ARCHIVE_RESUME_STARTED
     if ARCHIVE_RESUME_STARTED:
         return
@@ -984,6 +991,8 @@ async def resume_archive_batches():
                             "error",
                         )
     finally:
+        if recovery_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
         try:
             await user_client.stop()
         except Exception:
@@ -1050,6 +1059,27 @@ def _selection_keyboard(items, selected):
 
 
 
+@bot.on_message(filters.command("stopuploadchannel") & filters.private)
+async def stopuploadchannel_command(client, message):
+    global UPLOADCHANNEL_PAUSED
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    UPLOADCHANNEL_PAUSED = True
+    tasks = [task for task in list(UPLOADCHANNEL_ACTIVE_TASKS) if task is not asyncio.current_task() and not task.done()]
+    for task in tasks:
+        task.cancel()
+    await message.reply(f"🛑 /uploadchannel paused. Cancelled {len(tasks)} active task(s); new jobs and recovery are blocked.")
+
+
+@bot.on_message(filters.command("resumeuploadchannel") & filters.private)
+async def resumeuploadchannel_command(client, message):
+    global UPLOADCHANNEL_PAUSED
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    UPLOADCHANNEL_PAUSED = False
+    await message.reply("▶️ /uploadchannel resumed. New jobs and recovery are enabled.")
+
+
 @bot.on_message(filters.command("setchannelinvite") & filters.private)
 async def setchannelinvite_command(client, message):
     if not message.from_user or message.from_user.id not in Var.ADMINS:
@@ -1092,6 +1122,8 @@ async def setchannelinvite_command(client, message):
 
 @bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
+    if UPLOADCHANNEL_PAUSED:
+        return await message.reply("🛑 /uploadchannel is temporarily paused by the owner.")
     # Respond explicitly to non-admins instead of silently filtering the command.
     if not message.from_user or message.from_user.id not in Var.ADMINS:
         return await message.reply("⛔ This command is restricted to bot administrators.")
@@ -1147,9 +1179,14 @@ async def uploadchannel_callbacks(client, callback):
 
     if data != "uc:create":
         return await callback.answer()
+    if UPLOADCHANNEL_PAUSED:
+        return await callback.answer("/uploadchannel is paused by the owner.", show_alert=True)
     if not state["selected"]:
         return await callback.answer("Select at least one anime first.", show_alert=True)
 
+    current_task = asyncio.current_task()
+    if current_task:
+        UPLOADCHANNEL_ACTIVE_TASKS.add(current_task)
     await callback.answer("Starting channel creation…")
     await callback.message.edit("Creating selected anime channels. Please keep the bot running…")
     user_client = None
@@ -1504,6 +1541,8 @@ async def uploadchannel_callbacks(client, callback):
             f"<code>{_escape(exc)}</code>"
         )
     finally:
+        if current_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(current_task)
         if user_client:
             try:
                 await user_client.stop()
