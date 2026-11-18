@@ -86,8 +86,9 @@ Monitor `log.txt` for startup messages.
 web: python -m bot
 ```
 
-5. Set buildpacks / stacks as needed. Heroku's default Python buildpack works.
-6. Deploy and open the logs to ensure the bot starts. Set a worker dyno or put bot in `web` dyno to keep it running.
+5. Add the Heroku Apt buildpack **before** the Python buildpack (Buildpacks order matters): `https://github.com/heroku/heroku-buildpack-apt.git`
+6. Keep the Python buildpack after Apt. The repository's `Aptfile` installs `ffmpeg` and `mediainfo` during build; verify the build log shows these packages installed.
+7. Deploy and open the logs to ensure the bot starts. Set a worker dyno or put bot in `web` dyno to keep it running.
 
 Notes:
 - If `GDRIVE_UPLOAD` is used with OAuth (not service account), you must create `token.pickle` before deploying and add it to the app (use config or a secrets store).
