@@ -34,8 +34,6 @@ from bot.core.reporter import rep
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
-UPLOADCHANNEL_PAUSED = False
-UPLOADCHANNEL_ACTIVE_TASKS = set()
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -117,8 +115,7 @@ async def _fetch_currently_airing():
     timeout = httpx.Timeout(25.0, connect=10.0)
     media = []
     async with httpx.AsyncClient(timeout=timeout) as client:
-        page = 1
-        while True:
+        for page in range(1, 21):
             response = await client.post(
                 ANILIST_URL,
                 json={"query": SCHEDULE_QUERY, "variables": {"page": page, "perPage": 50}},
@@ -132,7 +129,6 @@ async def _fetch_currently_airing():
             media.extend(page_data.get("media") or [])
             if not (page_data.get("pageInfo") or {}).get("hasNextPage"):
                 break
-            page += 1
     result = []
     seen = set()
     for item in media:
@@ -601,7 +597,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     "warning",
                     log=False,
                 )
-                
+
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
         # its BOT_TOKEN is only used to publish episode cards, not to serve files.
@@ -858,57 +854,15 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     return True
 
 
-async def _upload_episode_with_priority_retry(media, destination_id, season_number,
-                                               episode_number, destination_client,
-                                               context="archive"):
-    """Keep the current episode durable; yield between retries to new ongoing releases."""
-    attempt = 0
-    while True:
-        while (
-            AUTO_UPLOAD_PRIORITY_PENDING.is_set()
-            or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
-        ):
-            await asyncio.sleep(5)
 
-        await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-        try:
-            await _upload_single_episode(
-                media, destination_id, season_number, episode_number, destination_client
-            )
-            return True
-        except asyncio.CancelledError:
-            raise
-        except Exception as episode_error:
-            attempt += 1
-            await rep.report(
-                f"{context}: Season {season_number} Episode {episode_number} failed "
-                f"on attempt {attempt}; the queue will retain this exact episode and retry "
-                f"without skipping ahead. New ongoing releases can take priority meanwhile. "
-                f"{type(episode_error).__name__}: {episode_error}",
-                "error",
-            )
-        finally:
-            AUTO_UPLOAD_PRIORITY_LOCK.release()
-
-        # Back off in short intervals rather than sleeping in one long block.
-        # This lets the priority scanner interrupt archive work as soon as a
-        # scheduled episode is detected.
-        for _ in range(12):
-            if AUTO_UPLOAD_PRIORITY_PENDING.is_set():
-                break
-            await asyncio.sleep(5)
 
 
 ARCHIVE_RESUME_LOCK = asyncio.Lock()
 ARCHIVE_RESUME_STARTED = False
 
+
 async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
-    if UPLOADCHANNEL_PAUSED:
-        return
-    recovery_task = asyncio.current_task()
-    if recovery_task:
-        UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     global ARCHIVE_RESUME_STARTED
     if ARCHIVE_RESUME_STARTED:
         return
@@ -1008,11 +962,15 @@ async def resume_archive_batches():
                         for episode_number in range(1, episode_total + 1):
                             if episode_number in existing_episodes:
                                 continue
-                            await _upload_episode_with_priority_retry(
-                                media, destination_id, season_index, episode_number,
-                                user_client, context="Restart-recovered /uploadchannel batch",
-                            )
-                            existing_episodes.add(episode_number)
+                            while (
+                                AUTO_UPLOAD_PRIORITY_PENDING.is_set()
+                                or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+                            ):
+                                await asyncio.sleep(5)
+                            async with auto_anime_core.AUTO_UPLOAD_PRIORITY_LOCK:
+                                await _upload_single_episode(
+                                    media, destination_id, season_index, episode_number, user_client
+                                )
                         await db.set_anime_archive_batch(
                             anime_id, season_index, destination_id, "complete",
                             "", f"restart-recovered S{season_index} 4-quality",
@@ -1026,8 +984,6 @@ async def resume_archive_batches():
                             "error",
                         )
     finally:
-        if recovery_task:
-            UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
         try:
             await user_client.stop()
         except Exception:
@@ -1069,42 +1025,6 @@ def _build_anime_info_caption(info, title, season_number, episode_number, qualit
     )
 
 
-def _build_channel_intro_caption(media):
-    """Metadata-only ANIME SOUL welcome card; deliberately has no episode number."""
-    titles = media.get("title") or {}
-    title = titles.get("english") or titles.get("romaji") or titles.get("native") or "Unknown anime"
-    genres = ", ".join(str(x) for x in (media.get("genres") or [])[:8]) or "Not listed"
-    media_type = media.get("format") or media.get("type") or "Anime"
-    score = media.get("averageScore")
-    rating = f"{float(score) / 10:.1f}/10" if score is not None else "Not rated"
-    status = str(media.get("status") or "Unknown").replace("_", " ")
-    start = media.get("startDate") or {}
-    end = media.get("endDate") or {}
-    first_aired = "-".join(str(start.get(k)).zfill(2) for k in ("year", "month", "day") if start.get(k)) or "Unknown"
-    last_aired = "Ongoing" if status.upper() == "RELEASING" else ("-".join(str(end.get(k)).zfill(2) for k in ("year", "month", "day") if end.get(k)) or "Unknown")
-    runtime = f"{media.get('duration')} minutes" if media.get("duration") else "Unknown"
-    episodes = media.get("episodes") or "Unknown"
-    studios = (media.get("studios") or {}).get("nodes") or []
-    studio = ", ".join(str(x.get("name")) for x in studios if x.get("name")) or "Not listed"
-    description = re.sub(r"<[^>]+>", "", str(media.get("description") or ""))
-    description = re.sub(r"\s+", " ", description).strip()
-    if len(description) > 150:
-        description = description[:147].rsplit(" ", 1)[0] + "..."
-    synopsis = _escape(description) if description else "Synopsis unavailable"
-    # Invisible marker lets later runs detect the one-time intro card without
-    # adding visible control text to the channel caption.
-    marker = "\u2063AS_CHANNEL_INTRO\u2063"
-    return (
-        f"<b>{_escape(title)}</b>\n\n"
-        f"<b>Genres:</b> {_escape(genres)}\n<b>Type:</b> {_escape(media_type)}\n"
-        f"<b>Average Rating:</b> {_escape(rating)}\n<b>Status:</b> {_escape(status)}\n"
-        f"<b>First aired:</b> {_escape(first_aired)}\n<b>Last aired:</b> {_escape(last_aired)}\n"
-        f"<b>Runtime:</b> {_escape(runtime)}\n<b>No. of episodes:</b> {_escape(episodes)}\n"
-        f"<b>Studio:</b> {_escape(studio)}\n\n"
-        f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{synopsis}</i></blockquote>{marker}"
-    )
-
-
 def _selection_keyboard(items, selected):
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
     rows = []
@@ -1128,28 +1048,6 @@ def _selection_keyboard(items, selected):
     ])
     return InlineKeyboardMarkup(rows)
 
-
-
-@bot.on_message(filters.command("stopuploadchannel") & filters.private)
-async def stopuploadchannel_command(client, message):
-    global UPLOADCHANNEL_PAUSED
-    if not message.from_user or message.from_user.id not in Var.ADMINS:
-        return await message.reply("⛔ This command is restricted to bot administrators.")
-    UPLOADCHANNEL_PAUSED = True
-    current = asyncio.current_task()
-    tasks = [task for task in list(UPLOADCHANNEL_ACTIVE_TASKS) if task is not current and not task.done()]
-    for task in tasks:
-        task.cancel()
-    await message.reply(f"🛑 /uploadchannel is PAUSED. Cancelled {len(tasks)} active task(s). New jobs and restart recovery are blocked.")
-
-
-@bot.on_message(filters.command("resumeuploadchannel") & filters.private)
-async def resumeuploadchannel_command(client, message):
-    global UPLOADCHANNEL_PAUSED
-    if not message.from_user or message.from_user.id not in Var.ADMINS:
-        return await message.reply("⛔ This command is restricted to bot administrators.")
-    UPLOADCHANNEL_PAUSED = False
-    await message.reply("▶️ /uploadchannel has been resumed. New jobs and recovery may run again.")
 
 
 @bot.on_message(filters.command("setchannelinvite") & filters.private)
@@ -1194,8 +1092,6 @@ async def setchannelinvite_command(client, message):
 
 @bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
-    if UPLOADCHANNEL_PAUSED:
-        return await message.reply("🛑 /uploadchannel is temporarily paused by the owner.")
     # Respond explicitly to non-admins instead of silently filtering the command.
     if not message.from_user or message.from_user.id not in Var.ADMINS:
         return await message.reply("⛔ This command is restricted to bot administrators.")
@@ -1229,6 +1125,7 @@ async def uploadchannel_callbacks(client, callback):
     state = UPLOAD_CHANNEL_SESSIONS.get(owner_id)
     if owner_id not in Var.ADMINS or not state:
         return await callback.answer("This selection has expired. Run /uploadchannel again.", show_alert=True)
+
     data = callback.data
     if data == "uc:noop":
         return await callback.answer()
@@ -1253,11 +1150,6 @@ async def uploadchannel_callbacks(client, callback):
     if not state["selected"]:
         return await callback.answer("Select at least one anime first.", show_alert=True)
 
-    if UPLOADCHANNEL_PAUSED:
-        return await callback.answer("/uploadchannel is paused by the owner.", show_alert=True)
-    current_task = asyncio.current_task()
-    if current_task:
-        UPLOADCHANNEL_ACTIVE_TASKS.add(current_task)
     await callback.answer("Starting channel creation…")
     await callback.message.edit("Creating selected anime channels. Please keep the bot running…")
     user_client = None
@@ -1492,88 +1384,7 @@ async def uploadchannel_callbacks(client, callback):
                         f"@{bot_username} is an admin in '{title}' ({chat.id}) but Telegram denied "
                         "can_post_messages. Episode uploads cannot start until posting permission is granted."
                     )
-            # Publish one ANIME SOUL channel introduction before any episode cards.
-            # Existing channels are checked first so rerunning /uploadchannel never
-            # duplicates the welcome post or its sticker.
-            intro_exists = False
-            try:
-                async for old_message in user_client.get_chat_history(chat.id, limit=1000):
-                    old_caption = str(getattr(old_message, "caption", "") or "")
-                    if (
-                        "AS_CHANNEL_INTRO" in old_caption
-                        or (
-                            getattr(old_message, "photo", None)
-                            and "Genres:" in old_caption
-                            and "Synopsis:" in old_caption
-                            and "Episode:" not in old_caption
-                        )
-                    ):
-                        intro_exists = True
-                        break
-            except Exception as history_error:
-                raise RuntimeError(
-                    f"Could not verify whether the ANIME SOUL intro already exists for {title}; "
-                    f"refusing to create a possible duplicate: {history_error}"
-                ) from history_error
-
-            if not intro_exists:
-                intro_info = TextEditor(title)
-                intro_info.adata = media
-                intro_info.pdata["anime_season"] = "01"
-                intro_path = os.path.join(
-                    "downloads", f"anime_soul_channel_intro_{int(chat.id)}.jpg"
-                )
-                os.makedirs(os.path.dirname(intro_path), exist_ok=True)
-                intro_poster = await build_anime_soul_poster(
-                    intro_info, title, intro_path, episode_label="CHANNEL"
-                )
-                intro_caption = _build_channel_intro_caption(media)
-                cover = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
-                if intro_poster and os.path.exists(intro_poster):
-                    with open(intro_poster, "rb") as intro_photo:
-                        intro_post = await bot.send_photo(
-                            chat_id=chat.id, photo=intro_photo, caption=intro_caption
-                        )                elif cover:
-                    intro_post = await bot.send_photo(
-                        chat_id=chat.id, photo=cover, caption=intro_caption
-                    )
-                else:
-                    raise RuntimeError(
-                        f"No verified artwork was available for the ANIME SOUL channel intro: {title}."
-                    )
-                if not intro_post or not getattr(intro_post, "id", None):
-                    raise RuntimeError(
-                        f"Telegram did not confirm the ANIME SOUL intro post for {title}."
-                    )
-                try:
-                    sticker_ok = await send_sticker_to_channel(
-                        chat.id, getattr(Var, "STICKER_ID", None), client=user_client
-                    )
-                    if not sticker_ok:
-                        await rep.report(
-                            f"ANIME SOUL intro posted for {title}, but its Ongoing Anime Time sticker failed.",
-                            "warning", log=False,
-                        )
-                except Exception as sticker_error:
-                    await rep.report(
-                        f"ANIME SOUL intro posted for {title}, but sticker delivery failed: {sticker_error}",
-                        "warning", log=False,
-                    )
-                try:
-                    os.remove(intro_path)
-                except OSError:
-                    pass
-                await rep.report(
-                    f"Published one-time ANIME SOUL channel intro for {title} in {chat.id}.",
-                    "success", log=False,
-                )
-            else:
-                await rep.report(
-                    f"ANIME SOUL channel intro already exists for {title}; skipping duplicate welcome post.",
-                    "info", log=False,
-                )
-
-            # Episode posts start only after the intro card is confirmed.
+            # Each archive season gets its own info -> sticker -> episode-batch sequence.
             created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
@@ -1608,7 +1419,7 @@ async def uploadchannel_callbacks(client, callback):
                 # Check the destination channel's history; existing episodes are skipped.
                 existing_episodes = set()
                 channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
-                async for channel_message in user_client.get_chat_history(destination_id, limit=5000):
+                async for channel_message in user_client.get_chat_history(destination_id, limit=500):
                     body = " ".join(str(x or "") for x in (
                         getattr(channel_message, "text", ""),
                         getattr(channel_message, "caption", ""),
@@ -1652,19 +1463,25 @@ async def uploadchannel_callbacks(client, callback):
                         "info", log=False,
                     )
                     channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
-                    # Never abandon an archive batch because one source/encode/
-                    # Telegram attempt fails. Retry this same episode and yield the
-                    # shared priority lock between attempts so new ongoing releases
-                    # are published first.
+                    # Let a newly detected scheduled release run before
+                    # the next archive episode. The current episode finishes
+                    # atomically; scheduled uploads take the lock at this boundary.
+                    while (
+                        AUTO_UPLOAD_PRIORITY_PENDING.is_set()
+                        or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
+                    ):
+                        await asyncio.sleep(5)
                     channel_stage = (
-                        f"uploading Season {season_index} Episode {episode_number} "
-                        f"with ongoing-release priority"
+                        f"acquiring upload priority lock before archive "
+                        f"S{season_index}E{episode_number}"
                     )
-                    await _upload_episode_with_priority_retry(
-                        prequel, destination_id, season_index, episode_number,
-                        user_client, context="Active /uploadchannel batch",
-                    )
-                    existing_episodes.add(episode_number)
+                    await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+                    try:
+                        await _upload_single_episode(
+                            prequel, destination_id, season_index, episode_number, user_client
+                        )
+                    finally:
+                        AUTO_UPLOAD_PRIORITY_LOCK.release()
                 await db.set_anime_archive_batch(
                     archive_id, season_index, destination_id, "complete",
                     "", f"episode-by-episode S{season_index} 4-quality",
@@ -1687,8 +1504,6 @@ async def uploadchannel_callbacks(client, callback):
             f"<code>{_escape(exc)}</code>"
         )
     finally:
-        if current_task:
-            UPLOADCHANNEL_ACTIVE_TASKS.discard(current_task)
         if user_client:
             try:
                 await user_client.stop()
