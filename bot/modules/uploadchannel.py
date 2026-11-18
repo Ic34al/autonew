@@ -1574,7 +1574,7 @@ async def uploadchannel_callbacks(client, callback):
         raise
     except Exception as exc:
         await rep.report(
-            f"Automatic anime channel creation failed at stage '{channel_stage}' "{channel_stage}' "
+            f"Automatic anime channel creation failed at stage '{channel_stage}' "
             f"for '{current_anime_title}': {type(exc).__name__}: {exc}",
             "error",
         )
