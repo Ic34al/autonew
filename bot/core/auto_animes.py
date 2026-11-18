@@ -2190,8 +2190,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         if candidate and candidate not in artwork_urls:
             artwork_urls.append(candidate)
     if not artwork_urls:
-        await rep.report(f"ANIME SOUL thumbnail unavailable for '{title}': AniList returned no artwork URL.", "warning")
-        return None
+        await rep.report(f"ANIME SOUL thumbnail for '{title}' has no AniList artwork URL; using branded artwork placeholder.", "warning")
+        artwork_urls = []
 
     art = None
     last_error = None
@@ -2216,8 +2216,12 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     except Exception as exc:
         last_error = exc
     if art is None:
-        await rep.report(f"ANIME SOUL thumbnail unavailable after retries for '{title}': {last_error}", "warning")
-        return None
+        await rep.report(f"AniList artwork download failed for '{title}' ({last_error}); generating branded fallback card instead.", "warning")
+        art = Image.new("RGB", (900, 1400), (10, 8, 12))
+        fallback_draw = ImageDraw.Draw(art)
+        fallback_draw.rectangle((0, 0, 900, 1400), fill=(10, 8, 12))
+        fallback_draw.rectangle((24, 24, 876, 1376), outline=(150, 0, 30), width=10)
+        fallback_draw.text((450, 700), "ANIME SOUL", fill=(230, 20, 45), anchor="mm")
 
     W, H = 1600, 900
     RED = (226, 12, 40)
