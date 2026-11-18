@@ -600,6 +600,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     "for safe existing-file reuse.",
                     "warning",
                     log=False,
+                )
                 
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
