@@ -797,43 +797,13 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
         )
 
-    # Publish the matching Main Channel announcement for each dedicated-channel episode.
-    main_post = None
-    if int(destination_id) != int(Var.MAIN_CHANNEL):
-        try:
-            watch_markup = await build_anime_watch_markup(destination_id)
-            if poster and os.path.exists(poster):
-                with open(poster, "rb") as photo_file:
-                    main_post = await bot.send_photo(
-                        chat_id=Var.MAIN_CHANNEL, photo=photo_file,
-                        caption=caption, reply_markup=watch_markup,
-                    )
-            else:
-                main_post = await bot.send_photo(
-                    chat_id=Var.MAIN_CHANNEL, photo=cover,
-                    caption=caption, reply_markup=watch_markup,
-                )
-            if not main_post or not getattr(main_post, "id", None):
-                raise RuntimeError("Telegram did not confirm the Main Channel announcement.")
-        except Exception as main_post_error:
-            await rep.report(
-                f"Dedicated episode card was published, but Main Channel announcement failed "
-                f"for {title} S{season_number}E{episode_number}: {main_post_error}",
-                "error",
-            )
+    # /uploadchannel is dedicated-channel-only: intentionally no Main Channel
+    # announcements, watch buttons, or Main Channel stickers are sent here.
 
     # The priority Ongoing Anime Time sticker follows both episode posts.
     sticker_sent = await send_sticker_to_channel(
         destination_id, getattr(Var, "STICKER_ID", None), client=destination_client,
     )
-    if main_post:
-        await asyncio.sleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
-        main_sticker_sent = await send_sticker_to_channel(Var.MAIN_CHANNEL, getattr(Var, "STICKER_ID", None))
-        if not main_sticker_sent:
-            await rep.report(
-                f"Main Channel priority sticker failed for {title} S{season_number}E{episode_number}.",
-                "warning", log=False,
-            )
     if not sticker_sent:
         # The episode card and all four file links are already live. A sticker
         # API/session error must never mark the episode upload as failed or stop
