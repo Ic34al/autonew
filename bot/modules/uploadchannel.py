@@ -297,8 +297,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     for value in raw_aliases:
         value = str(value or "").strip()
         normalized = _plain_title(value)
-        if value and normalized and normalized not in {            _plain_title(existing) for existing in aliases
-        }:            aliases.append(value)
+        if value and normalized and normalized not in {            _plain_title(existing) for existing in aliases        }:            aliases.append(value)
     if not aliases:
         await rep.report(
             f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.",
@@ -597,7 +596,6 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     f"{configured_storage_id}. Using the channel resolved from FILE_STORE_LINK "
                     "for safe existing-file reuse.",
                     "warning",                    log=False,                )
-
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
         # its BOT_TOKEN is only used to publish episode cards, not to serve files.
@@ -895,10 +893,10 @@ async def _upload_episode_with_priority_retry(media, destination_id, season_numb
             await asyncio.sleep(5)
 
 
-ARCHIVE_RESUME_LOCK = asyncio.Lock()ARCHIVE_RESUME_STARTED = False
+ARCHIVE_RESUME_LOCK = asyncio.Lock()
+ARCHIVE_RESUME_STARTED = False
 
-async def resume_archive_batches():
-    """Resume persisted /uploadchannel season batches after a dyno restart."""
+async def resume_archive_batches():    """Resume persisted /uploadchannel season batches after a dyno restart."""
     if UPLOADCHANNEL_PAUSED:
         return
     recovery_task = asyncio.current_task()
@@ -1197,8 +1195,7 @@ async def uploadchannel_command(client, message):
     if not getattr(Var, "USER_SESSION", None):        return await message.reply(
             "⚠️ USER_SESSION is not configured. Add your Telegram user session to the deployment environment first."
         )
-    status = await message.reply("Fetching currently airing anime and their release weekdays…")
-    try:
+    status = await message.reply("Fetching currently airing anime and their release weekdays…")    try:
         items = await _fetch_currently_airing()
         if not items:
             return await status.edit("AniList did not return any currently airing anime with a known next-episode day.")
@@ -1497,8 +1494,7 @@ async def uploadchannel_callbacks(client, callback):
                         or (
                             getattr(old_message, "photo", None)
                             and "Genres:" in old_caption
-                            and "Synopsis:" in old_caption
-                            and "Episode:" not in old_caption
+                            and "Synopsis:" in old_caption                            and "Episode:" not in old_caption
                         )
                     ):
                         intro_exists = True
