@@ -1073,6 +1073,18 @@ def _selection_keyboard(items, selected, page=0):
 
 
 
+@bot.on_message(filters.command("canceluploadchannel") & filters.private)
+async def canceluploadchannel_command(client, message):
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    # Cancel active channel creation/backfill task(s), and discard any open selection.
+    UPLOAD_CHANNEL_SESSIONS.pop(message.from_user.id, None)
+    tasks = [task for task in list(UPLOADCHANNEL_ACTIVE_TASKS)
+             if task is not asyncio.current_task() and not task.done()]
+    for task in tasks:
+        task.cancel()
+    await message.reply(f"🛑 /uploadchannel cancellation requested. Cancelled {len(tasks)} active task(s); current episode operations will unwind safely.")
+
 @bot.on_message(filters.command("stopuploadchannel") & filters.private)
 async def stopuploadchannel_command(client, message):
     global UPLOADCHANNEL_PAUSED
@@ -1460,14 +1472,13 @@ async def uploadchannel_callbacks(client, callback):
         # Older seasons first, then the currently airing season.
         for selected_media, destination_id in archive_jobs:
             selected_title = _display_title(selected_media)
-            prequels = _prequel_seasons(selected_media)
-            season_jobs = [(index, item, int(item.get("episodes") or 0))
-                           for index, item in enumerate(prequels, start=1)]
+            # Only the season currently airing is uploaded. Relations are used
+            # solely to determine its season number; previous seasons are never backfilled.
+            season_index = len(_prequel_seasons(selected_media)) + 1
             current_episode_count = max(0, int((selected_media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
-            if current_episode_count:
-                season_jobs.append((len(season_jobs) + 1, selected_media, current_episode_count))
-            if not season_jobs:
-                raise RuntimeError(f"No released episodes are known for {selected_title}; no upload was started.")
+            season_jobs = [(season_index, selected_media, current_episode_count)]
+            if not current_episode_count:
+                raise RuntimeError(f"No released episodes are known for currently airing season of {selected_title}; no upload was started.")
             for season_index, prequel, available_episodes in season_jobs:
                 season_title = _display_title(prequel)
                 archive_id = int(prequel.get("id") or 0)
@@ -1555,9 +1566,15 @@ async def uploadchannel_callbacks(client, callback):
         await callback.message.edit(
             f"✅ Processed {len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
         )
+    except asyncio.CancelledError:
+        try:
+            await callback.message.edit("🛑 /uploadchannel cancelled by owner. Upload process stopped.")
+        except Exception:
+            pass
+        raise
     except Exception as exc:
         await rep.report(
-            f"Automatic anime channel creation failed at stage '{channel_stage}' "
+            f"Automatic anime channel creation failed at stage '{channel_stage}' "{channel_stage}' "
             f"for '{current_anime_title}': {type(exc).__name__}: {exc}",
             "error",
         )
