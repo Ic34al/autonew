@@ -423,6 +423,19 @@ class FFEncoder:
                 ffcode = ffcode.replace(
                     out_npath, f"-threads 1 {out_npath}", 1
                 )
+        # Resolve the bundled FFmpeg executable installed by imageio-ffmpeg.
+        # This avoids relying on system packages/buildpacks on Heroku.
+        try:
+            import imageio_ffmpeg
+            bundled_ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            if ffcode and ffcode.startswith("ffmpeg "):
+                ffcode = ffcode.replace("ffmpeg ", f"\"{bundled_ffmpeg}\" ", 1)
+            elif ffcode and ffcode.startswith("ffmpeg\\t"):
+                ffcode = ffcode.replace("ffmpeg", f"\"{bundled_ffmpeg}\"", 1)
+            LOGS.info("Resolved bundled FFmpeg executable: %s", bundled_ffmpeg)
+        except Exception as ffmpeg_resolve_error:
+            LOGS.error("Bundled FFmpeg resolution failed: %s", ffmpeg_resolve_error)
+            await rep.report("Bundled FFmpeg binary could not be resolved; install imageio-ffmpeg in requirements.", "error")
         LOGS.info(f'Using FFmpeg command: {ffcode}')
         if not ffcode:
             LOGS.error("No FFmpeg command generated")
