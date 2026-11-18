@@ -34,7 +34,9 @@ from bot.core.reporter import rep
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
-LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
+UPLOADCHANNEL_PAUSED = False
+UPLOADCHANNEL_ACTIVE_TASKS = set()
+LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
 query ($page: Int, $perPage: Int) {
@@ -297,8 +299,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
         normalized = _plain_title(value)
         if value and normalized and normalized not in {
             _plain_title(existing) for existing in aliases
-        }:
-            aliases.append(value)
+        }:            aliases.append(value)
     if not aliases:
         await rep.report(
             f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.",
@@ -597,8 +598,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     f"{configured_storage_id}. Using the channel resolved from FILE_STORE_LINK "
                     "for safe existing-file reuse.",
                     "warning",
-                    log=False,
-                )
+                    log=False,                )
 
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
@@ -897,12 +897,16 @@ async def _upload_episode_with_priority_retry(media, destination_id, season_numb
             await asyncio.sleep(5)
 
 
-ARCHIVE_RESUME_LOCK = asyncio.Lock()
-ARCHIVE_RESUME_STARTED = False
+ARCHIVE_RESUME_LOCK = asyncio.Lock()ARCHIVE_RESUME_STARTED = False
 
 
 async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
+    if UPLOADCHANNEL_PAUSED:
+        return
+    recovery_task = asyncio.current_task()
+    if recovery_task:
+        UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     global ARCHIVE_RESUME_STARTED
     if ARCHIVE_RESUME_STARTED:
         return
@@ -1020,6 +1024,8 @@ async def resume_archive_batches():
                             "error",
                         )
     finally:
+        if recovery_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
         try:
             await user_client.stop()
         except Exception:
@@ -1122,6 +1128,28 @@ def _selection_keyboard(items, selected):
 
 
 
+@bot.on_message(filters.command("stopuploadchannel") & filters.private)
+async def stopuploadchannel_command(client, message):
+    global UPLOADCHANNEL_PAUSED
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    UPLOADCHANNEL_PAUSED = True
+    current = asyncio.current_task()
+    tasks = [task for task in list(UPLOADCHANNEL_ACTIVE_TASKS) if task is not current and not task.done()]
+    for task in tasks:
+        task.cancel()
+    await message.reply(f"🛑 /uploadchannel is PAUSED. Cancelled {len(tasks)} active task(s). New jobs and restart recovery are blocked.")
+
+
+@bot.on_message(filters.command("resumeuploadchannel") & filters.private)
+async def resumeuploadchannel_command(client, message):
+    global UPLOADCHANNEL_PAUSED
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    UPLOADCHANNEL_PAUSED = False
+    await message.reply("▶️ /uploadchannel has been resumed. New jobs and recovery may run again.")
+
+
 @bot.on_message(filters.command("setchannelinvite") & filters.private)
 async def setchannelinvite_command(client, message):
     if not message.from_user or message.from_user.id not in Var.ADMINS:
@@ -1164,6 +1192,8 @@ async def setchannelinvite_command(client, message):
 
 @bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
+    if UPLOADCHANNEL_PAUSED:
+        return await message.reply("🛑 /uploadchannel is temporarily paused by the owner.")
     # Respond explicitly to non-admins instead of silently filtering the command.
     if not message.from_user or message.from_user.id not in Var.ADMINS:
         return await message.reply("⛔ This command is restricted to bot administrators.")
@@ -1197,7 +1227,6 @@ async def uploadchannel_callbacks(client, callback):
     state = UPLOAD_CHANNEL_SESSIONS.get(owner_id)
     if owner_id not in Var.ADMINS or not state:
         return await callback.answer("This selection has expired. Run /uploadchannel again.", show_alert=True)
-
     data = callback.data
     if data == "uc:noop":
         return await callback.answer()
@@ -1222,6 +1251,11 @@ async def uploadchannel_callbacks(client, callback):
     if not state["selected"]:
         return await callback.answer("Select at least one anime first.", show_alert=True)
 
+    if UPLOADCHANNEL_PAUSED:
+        return await callback.answer("/uploadchannel is paused by the owner.", show_alert=True)
+    current_task = asyncio.current_task()
+    if current_task:
+        UPLOADCHANNEL_ACTIVE_TASKS.add(current_task)
     await callback.answer("Starting channel creation…")
     await callback.message.edit("Creating selected anime channels. Please keep the bot running…")
     user_client = None
@@ -1497,8 +1531,7 @@ async def uploadchannel_callbacks(client, callback):
                     with open(intro_poster, "rb") as intro_photo:
                         intro_post = await bot.send_photo(
                             chat_id=chat.id, photo=intro_photo, caption=intro_caption
-                        )
-                elif cover:
+                        )                elif cover:
                     intro_post = await bot.send_photo(
                         chat_id=chat.id, photo=cover, caption=intro_caption
                     )
@@ -1652,6 +1685,8 @@ async def uploadchannel_callbacks(client, callback):
             f"<code>{_escape(exc)}</code>"
         )
     finally:
+        if current_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(current_task)
         if user_client:
             try:
                 await user_client.stop()
