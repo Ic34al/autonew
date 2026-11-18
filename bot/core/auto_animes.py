@@ -2565,7 +2565,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -3544,7 +3544,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -4455,7 +4455,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -5348,7 +5348,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -6241,7 +6241,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
