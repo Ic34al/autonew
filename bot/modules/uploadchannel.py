@@ -1482,9 +1482,9 @@ async def uploadchannel_callbacks(client, callback):
                             getattr(channel_message, "text", ""),
                             getattr(channel_message, "caption", ""),
                         ))
-                        season_match = re.search(r"(?i)\bSeason\\s*0*(\\d+)\b", body)
-                        episode_match = re.search(r"(?i)\bEpisode\\s*[:#-]?\\s*0*(\\d+)\b", body)
-                        compact_match = re.search(r"(?i)\\[S0*(\\d+)[-_]0*(\\d+)\\]", body)
+                        season_match = re.search(r"(?i)\bSeason\s*0*(\d+)\b", body)
+                        episode_match = re.search(r"(?i)\bEpisode\s*[:#-]?\s*0*(\d+)\b", body)
+                        compact_match = re.search(r"(?i)\[S0*(\d+)[-_]0*(\d+)\]", body)
                         if season_match and episode_match and int(season_match.group(1)) == int(season_index):
                             existing_episodes.add(int(episode_match.group(1)))
                         elif compact_match and int(compact_match.group(1)) == int(season_index):
