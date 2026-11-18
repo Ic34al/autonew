@@ -906,7 +906,8 @@ async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
     if UPLOADCHANNEL_PAUSED:
         return
-    recovery_task = asyncio.current_task()    if recovery_task:
+    recovery_task = asyncio.current_task()
+    if recovery_task:
         UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     global ARCHIVE_RESUME_STARTED
     if ARCHIVE_RESUME_STARTED:
