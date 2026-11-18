@@ -361,25 +361,20 @@ class MongoDB:
         await self.__anime_channels.delete_many(query)
 
     async def get_anime_channel(self, anime_name: str) -> int | None:
-        """Resolve both legacy and current /addanime records using safe normalized aliases."""
-        def compact(value):
-            return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
-
-        def series_key(value):
+        """Resolve dedicated-channel mapping from release titles using cleaned tokens."""
+        def clean_tokens(value):
             value = str(value or "").casefold()
-            value = re.sub(r"\bseason\s*\d+\b|\bs\s*\d{1,2}\b", " ", value)
-            value = re.sub(r"\b(?:episode|ep)\s*[-._ ]*\d+\b", " ", value)
-            value = re.sub(r"\b(?:part|cour)\s*\d+\b", " ", value)
-            return compact(value)
+            # Remove common release metadata before matching the anime title.
+            value = re.sub(r"\\b(?:s\\d{1,2}e\\d{1,3}|s\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|ep\\s*\\d+)\\b", " ", value)
+            value = re.sub(r"\\b(?:480p|720p|1080p|2160p|4k|8bit|10bit|12bit|web[- ]?dl|web[- ]?rip|bluray|bdrip|hdtv|dual[- ]audio|multi[- ]subs|aac(?:2\\.0)?|h\\.?264|h\\.?265|hevc|avc|x264|x265|v\\d+)\\b", " ", value)
+            value = re.sub(r"\\[[^\\]]*\\]|\\([^)]*\\)", " ", value)
+            tokens = [t for t in re.findall(r"[a-z0-9]+", value) if t not in {"the","a","an","of","and","to","is","wa","wo","na","no","ore","suru"}]
+            return set(tokens)
 
-        target = compact(anime_name)
-        base_target = series_key(anime_name)
-        if not target:
+        target_tokens = clean_tokens(anime_name)
+        if len(target_tokens) < 2:
             return None
-
-        exact_channels, series_channels, token_channels = set(), set(), set()
-        ignored = {"the", "a", "an", "of", "and", "to"}
-        target_tokens = {t for t in re.findall(r"[a-z0-9]+", str(anime_name).casefold()) if t not in ignored}
+        matches = set()
         async for entry in self.__anime_channels.find():
             if not isinstance(entry, dict):
                 continue
@@ -387,30 +382,17 @@ class MongoDB:
             channel_id = entry.get("channel_id") or entry.get("channel") or entry.get("destination")
             if not stored_name or channel_id is None:
                 continue
-            stored_key = compact(stored_name)
-            stored_series = series_key(stored_name)
-            normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id).strip()
-            if stored_key == target:
-                exact_channels.add(normalized_channel)
-            if base_target and stored_series == base_target:
-                series_channels.add(normalized_channel)
-            stored_tokens = {t for t in re.findall(r"[a-z0-9]+", str(stored_name).casefold()) if t not in ignored}
-            if len(target_tokens) >= 3 and len(stored_tokens) >= 3:
-                overlap = len(target_tokens & stored_tokens)
-                if overlap >= 3 and overlap / max(1, min(len(target_tokens), len(stored_tokens))) >= 0.8:
-                    token_channels.add(normalized_channel)
-
-        if len(exact_channels) == 1:
-            return next(iter(exact_channels))
-        if len(exact_channels) > 1:
-            return None
-        if len(series_channels) == 1:
-            return next(iter(series_channels))
-        if len(series_channels) > 1:
-            return None
-        if len(token_channels) == 1:
-            return next(iter(token_channels))
-        return None
+            stored_tokens = clean_tokens(stored_name)
+            if len(stored_tokens) < 2:
+                continue
+            overlap = stored_tokens & target_tokens
+            # Strong title containment or high similarity only; avoid false routing.
+            if (stored_tokens <= target_tokens) or (
+                len(overlap) >= 3 and len(overlap) / max(1, len(stored_tokens)) >= 0.80
+            ):
+                normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id).strip()
+                matches.add(normalized_channel)
+        return next(iter(matches)) if len(matches) == 1 else None
 
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
         try:
