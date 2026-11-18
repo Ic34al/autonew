@@ -297,8 +297,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     for value in raw_aliases:
         value = str(value or "").strip()
         normalized = _plain_title(value)
-        if value and normalized and normalized not in {            _plain_title(existing) for existing in aliases        }:            aliases.append(value)    if not aliases:
-        await rep.report(
+        if value and normalized and normalized not in {            _plain_title(existing) for existing in aliases        }:            aliases.append(value)    if not aliases:        await rep.report(
             f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.",
             "warning", log=False,
         )
@@ -597,8 +596,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     "warning",                    log=False,                )
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:        # its BOT_TOKEN is only used to publish episode cards, not to serve files.
-        scanned_storage_messages = 0
-        async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
+        scanned_storage_messages = 0        async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
             scanned_storage_messages += 1
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
             media_name = getattr(media_obj, "file_name", None) if media_obj else None
@@ -896,9 +894,9 @@ ARCHIVE_RESUME_STARTED = False
 
 async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
-    if UPLOADCHANNEL_PAUSED:        return
-    recovery_task = asyncio.current_task()
-    if recovery_task:
+    if UPLOADCHANNEL_PAUSED:
+        return
+    recovery_task = asyncio.current_task()    if recovery_task:
         UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     global ARCHIVE_RESUME_STARTED
     if ARCHIVE_RESUME_STARTED:
@@ -1197,8 +1195,7 @@ async def uploadchannel_command(client, message):
         items = await _fetch_currently_airing()
         if not items:            return await status.edit("AniList did not return any currently airing anime with a known next-episode day.")
         UPLOAD_CHANNEL_SESSIONS[message.from_user.id] = {
-            "items": items,
-            "selected": set(),
+            "items": items,            "selected": set(),
             "created": [],
         }
         keyboard = _selection_keyboard(items, set())
@@ -1497,8 +1494,7 @@ async def uploadchannel_callbacks(client, callback):
                         intro_exists = True                        break
             except Exception as history_error:
                 raise RuntimeError(
-                    f"Could not verify whether the ANIME SOUL intro already exists for {title}; "
-                    f"refusing to create a possible duplicate: {history_error}"
+                    f"Could not verify whether the ANIME SOUL intro already exists for {title}; "                    f"refusing to create a possible duplicate: {history_error}"
                 ) from history_error
 
             if not intro_exists:
