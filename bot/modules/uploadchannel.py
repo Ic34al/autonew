@@ -1034,11 +1034,18 @@ def _build_anime_info_caption(info, title, season_number, episode_number, qualit
     )
 
 
-def _selection_keyboard(items, selected):
+def _selection_keyboard(items, selected, page=0):
+    """Paginated keyboard: action controls remain visible on every page."""
+    page_size = 24
+    page_count = max(1, (len(items) + page_size - 1) // page_size)
+    page = max(0, min(int(page), page_count - 1))
+    start = page * page_size
+    end = min(len(items), start + page_size)
+    page_items = range(start, end)
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-    rows = []
+    rows = [[InlineKeyboardButton(f"Page {page + 1}/{page_count} • {len(selected)} selected", callback_data="uc:noop")]]
     for day in weekdays:
-        indices = [i for i, item in enumerate(items) if item["_weekday"] == day]
+        indices = [i for i in page_items if items[i]["_weekday"] == day]
         if not indices:
             continue
         rows.append([InlineKeyboardButton(f"— {day} —", callback_data="uc:noop")])
@@ -1051,8 +1058,15 @@ def _selection_keyboard(items, selected):
                 prefix = "✅ " if index in selected else "▫️ "
                 row.append(InlineKeyboardButton(prefix + title, callback_data=f"uc:toggle:{index}"))
             rows.append(row)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"uc:page:{page - 1}"))
+    if page < page_count - 1:
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"uc:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([
-        InlineKeyboardButton(f"Create {len(selected)} channel(s)", callback_data="uc:create"),
+        InlineKeyboardButton(f"⬆️ Create Selected ({len(selected)})", callback_data="uc:create"),
         InlineKeyboardButton("Cancel", callback_data="uc:cancel"),
     ])
     return InlineKeyboardMarkup(rows)
@@ -1161,6 +1175,15 @@ async def uploadchannel_callbacks(client, callback):
     data = callback.data
     if data == "uc:noop":
         return await callback.answer()
+    if data.startswith("uc:page:"):
+        try:
+            page = int(data.rsplit(":", 1)[1])
+        except (TypeError, ValueError):
+            return await callback.answer("Invalid page.", show_alert=True)
+        await callback.message.edit_reply_markup(
+            _selection_keyboard(state["items"], state["selected"], page)
+        )
+        return await callback.answer(f"Page {page + 1}")
     if data == "uc:cancel":
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         return await callback.message.edit("Channel creation cancelled.")
