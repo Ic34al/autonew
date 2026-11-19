@@ -39,7 +39,7 @@ class TorDownloader:
                 await asyncio.sleep(2)
         return None
 
-    async def _wait_for_completed_video(self, directory, timeout=7200, stable_seconds=120, no_progress_timeout=1800):
+    async def _wait_for_completed_video(self, directory, torrent_task=None, timeout=7200, stable_seconds=120, no_progress_timeout=1800):
         """
         torrentp may return after the torrent is added rather than after the
         payload is complete. Never hand a growing/partial MKV to FFmpeg.
@@ -55,6 +55,11 @@ class TorDownloader:
 
         while True:
             now = asyncio.get_running_loop().time()
+            if torrent_task is not None and torrent_task.done():
+                # Surface torrentp errors instead of silently waiting for a file.
+                task_error = torrent_task.exception()
+                if task_error:
+                    raise task_error
             if now - started > timeout:
                 raise TimeoutError(f"Torrent download exceeded {timeout // 60} minutes.")
             if now - last_progress > no_progress_timeout:
@@ -102,26 +107,39 @@ class TorDownloader:
     async def download(self, torrent):
         filename = None
         try:
+            torrent_file = None
             if torrent.startswith("magnet:"):
                 await rep.report("Starting magnet download...", "info")
                 torp = TorrentDownloader(torrent, self.__downdir)
-                await torp.start_download()
             else:
                 await rep.report("Starting torrent file download...", "info")
                 torrent_file = await self.get_torfile(torrent)
                 if not torrent_file:
                     await rep.report("Failed to download torrent file", "error")
                     return None
-                                 
                 torp = TorrentDownloader(torrent_file, self.__downdir)
-                await torp.start_download()
-                try:
-                    await aioremove(torrent_file)
-                except:
-                    pass
 
-            await rep.report("Torrent added to session; waiting for the actual payload download to finish.", "info")
-            file_path = await self._wait_for_completed_video(self.__downdir)
+            # Run torrentp concurrently with file monitoring. Its start_download()
+            # may block silently for the entire transfer, which previously made
+            # Heroku logs/status appear frozen after the torrent was "added".
+            download_task = asyncio.create_task(torp.start_download())
+            await rep.report("Torrent added to session; monitoring payload size while it downloads.", "info")
+            try:
+                file_path = await self._wait_for_completed_video(self.__downdir, torrent_task=download_task)
+            finally:
+                if not download_task.done():
+                    download_task.cancel()
+                    try:
+                        await download_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+                if torrent_file:
+                    try:
+                        await aioremove(torrent_file)
+                    except Exception:
+                        pass
             if not os.path.exists(file_path):
                 await rep.report(f"File not found at {file_path}", "error")
                 return None
