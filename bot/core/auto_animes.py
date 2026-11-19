@@ -7932,7 +7932,7 @@ async def fetch_animes():
                         recovered_result = await get_animes(
                             pending_name,
                             pending_link,
-                            destination_channel=mapped_destination
+                            mapped_channel=mapped_destination
                         )
                         if recovered_result in ("uploaded", "already_published"):
                             seen_links.add(pending_link)
@@ -8020,10 +8020,10 @@ async def fetch_animes():
                         # release is still safe; batch/range releases were rejected above.
                         # A valid /addanime mapping always wins, regardless of
                         # whether the RSS source is SubsPlease or another sub feed.
-                        route_to_main = not bool(selected_channel)
+                        # Unmapped anime should auto-create/reuse a dedicated channel.
                         eligible.append((
                             title, link, feed_url, scheduled_title,
-                            route_to_main, selected_channel, rss_episode
+                            selected_channel, rss_episode
                         ))
                         break
 
@@ -8052,11 +8052,11 @@ async def fetch_animes():
             await report_schedule_status_once(
                 ("matched", matched_signature),
                 f"Schedule scan matched {len(eligible)} eligible release(s) for today. "
-                "Automatic scheduled uploads are enabled; releases are routed to mapped channels or Main Channel.",
+                "Automatic scheduled uploads are enabled; mapped channels are honored and unmapped anime auto-create/reuse dedicated channels.",
                 "success"
             )
 
-            for title, link, feed_url, scheduled_title, route_to_main, selected_channel, rss_episode in eligible:
+            for title, link, feed_url, scheduled_title, selected_channel, rss_episode in eligible:
                 try:
                     while MANUAL_SEARCH_HOLD.is_set():
                         await asleep(2)
@@ -8064,8 +8064,7 @@ async def fetch_animes():
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
                         result = await get_animes(
                             title, link,
-                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None,
-                            mapped_channel=None if route_to_main else selected_channel
+                            mapped_channel=selected_channel
                         )
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
@@ -8099,58 +8098,81 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Resolve /addanime channel mappings for scheduled RSS titles and AniList aliases."""
+    """Resolve mappings, reuse existing anime channels, or create a dedicated channel."""
+    base_name = extract_base_anime_name(name)
+    data = getattr(aniInfo, "adata", {}) or {}
+    titles = data.get("title", {}) or {}
+    candidates = [base_name, name]
+    if isinstance(titles, dict):
+        candidates.extend(titles.get(k) for k in ("english", "romaji", "native"))
+    candidates.extend(data.get("synonyms") or [])
     try:
-        base_name = extract_base_anime_name(name)
-        candidates = [base_name, name, normalize_anime_name_for_search(base_name)]
-        data = getattr(aniInfo, "adata", {}) or {}
-        title_data = data.get("title", {}) or {}
-        if isinstance(title_data, dict):
-            candidates.extend(title_data.get(key) for key in ("english", "romaji", "native"))
-        candidates.extend(data.get("synonyms", []) or [])
+        candidates.extend(await get_all_possible_anime_names(base_name))
+    except Exception as alias_error:
+        await rep.report(f"Alias lookup warning for {base_name}: {alias_error}", "warning", log=False)
+
+    def candidate_keys(value):
+        value = re.sub(r"\\s+", " ", str(value or "")).strip()
+        if not value:
+            return []
+        normalized = normalize_anime_name_for_search(value)
+        return list(dict.fromkeys(k for k in (value.lower(), normalized) if k))
+
+    keys = list(dict.fromkeys(k for candidate in candidates for k in candidate_keys(candidate)))
+    # First honor explicit /addanime and /uploadchannel mappings.
+    for key in keys:
         try:
-            candidates.extend(await get_all_possible_anime_names(base_name))
-        except Exception as alias_error:
-            await rep.report(f"Could not expand channel aliases for {base_name}: {alias_error}", "warning")
-
-        seen = set()
-        for candidate in candidates:
-            value = re.sub(r"\s+", " ", str(candidate or "")).strip()
-            if not value:
+            mapped = await db.get_anime_channel(key)
+            if not mapped:
+                mapped = await db.get_selected_anime_channel(key)
+            if not mapped:
                 continue
-            keys = (value.lower(), normalize_anime_name_for_search(value))
-            for key in dict.fromkeys(k for k in keys if k):
-                if key in seen:
-                    continue
-                seen.add(key)
-                mapped = await db.get_anime_channel(key)
-                if not mapped:
-                    # Also accept mappings created by the newer explicit selector.
-                    mapped = await db.get_selected_anime_channel(key)
-                if not mapped:
-                    continue
-                chat = await validate_channel_id(mapped)
-                if not chat:
-                    raise RuntimeError(
-                        f"Configured /addanime channel {mapped} for '{key}' is inaccessible. "
-                        "Episode upload stopped to prevent publishing to the wrong channel."
-                    )
-                await rep.report(
-                    f"Dedicated channel mapping matched: {base_name} -> {chat.id} (alias: {key}). "
-                    "Main Channel will receive the join-request announcement.",
-                    "success"
-                )
-                return chat.id
+            chat = await validate_channel_id(mapped)
+            if not chat:
+                raise RuntimeError(f"Saved dedicated channel {mapped} for '{key}' is inaccessible.")
+            for alias_key in keys:
+                try:
+                    await db.add_anime_channel_mapping(alias_key, chat.id)
+                except Exception:
+                    pass
+            await rep.report(f"Using saved dedicated channel {chat.id} for {base_name}.", "success", log=False)
+            return int(chat.id)
+        except Exception as lookup_error:
+            await rep.report(f"Channel mapping lookup warning for '{key}': {lookup_error}", "warning", log=False)
 
+    # Reuse a channel already created by the user before creating another one.
+    existing = await find_existing_anime_channel(base_name)
+    if existing:
+        chat = await validate_channel_id(existing)
+        if chat:
+            for alias_key in keys:
+                try:
+                    await db.add_anime_channel_mapping(alias_key, chat.id)
+                except Exception:
+                    pass
+            await rep.report(f"Reused existing anime channel {chat.id} for {base_name}.", "success", log=False)
+            return int(chat.id)
+
+    # Automatic RSS workflow: create a dedicated channel when enabled and a user session exists.
+    creation_enabled = await db.get_channel_creation()
+    if not creation_enabled or not getattr(Var, "USER_SESSION", None):
         await rep.report(
-            f"No /addanime channel mapping found for '{base_name}'; using Main Channel.",
-            "warning"
+            f"Automatic channel creation is disabled or USER_SESSION is missing for {base_name}; routing to Main Channel.",
+            "warning",
+            log=False,
         )
-        return Var.MAIN_CHANNEL
-    except Exception as error:
-        await rep.report(f"Dedicated-channel lookup failed for {name}: {error}", "error")
-        raise
+        return int(Var.MAIN_CHANNEL)
 
+    await rep.report(f"Creating dedicated channel automatically for {base_name}.", "info")
+    created_channel = await create_anime_channel(name, aniInfo)
+    if not created_channel:
+        raise RuntimeError(f"Automatic dedicated-channel creation failed for {base_name}; RSS episode will retry.")
+    for alias_key in keys:
+        try:
+            await db.add_anime_channel_mapping(alias_key, int(created_channel))
+        except Exception as mapping_error:
+            await rep.report(f"Could not save alias mapping '{alias_key}': {mapping_error}", "warning", log=False)
+    return int(created_channel)
 
 async def create_anime_channel(name, aniInfo):
     try:
