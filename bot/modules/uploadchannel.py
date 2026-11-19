@@ -391,7 +391,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
         else "Sub"
     )
-    quality_order = ("HDRi", "1080", "720", "480")
+    quality_order = ("480", "720", "1080", "HDRi")
     buttons = []
     for quality in quality_order:
         upload_name = await info.get_upname(quality)
@@ -415,7 +415,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         await db.set_batch_file_link(token, [uploaded.id])
         start_payload = f"getbatch-{token}"
         url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
-        buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
+        buttons.append(InlineKeyboardButton("HDRip" if quality == "HDRi" else f"{quality}p", url=url))
     caption = (
         f"<b>{_escape(title)} Season {season_number} Episode {int(episode_number):02d}</b>\n"
         f"━━━━━━━━━━━━━━\n"
@@ -439,7 +439,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             chat_id=destination_id,
             photo=episode_thumb,
             caption=caption,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([buttons[:2], buttons[2:]]),
         )
         os.remove(episode_thumb)
     else:
