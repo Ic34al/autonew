@@ -724,7 +724,7 @@ async def uploadchannel_callbacks(client, callback):
                         poster_meta.setdefault("bannerImage", prequel.get("bannerImage"))
                         poster_meta.setdefault("coverImage", prequel.get("coverImage") or {})
                         poster_meta.setdefault("season", prequel.get("season"))
-                        poster_meta.setdefault("seasonYear", season_year)
+                        poster_meta.setdefault("seasonYear", season_year)\n                        poster_meta["season"] = str(season_index)
                         poster_path = await create_anime_thumbnail(
                             poster_meta.get("bannerImage") or
                             (poster_meta.get("coverImage") or {}).get("extraLarge") or
