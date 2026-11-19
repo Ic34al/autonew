@@ -374,7 +374,7 @@ async def _publish_channel_anime_info(media, destination_id):
     titles = media.get("title") or {}
     romaji = titles.get("romaji") or title
     description = re.sub(r"<[^>]+>", " ", str(media.get("description") or ""))
-    description = re.sub(r"\\s+", " ", description).strip()
+    description = re.sub(r"\s+", " ", description).strip()
     if len(description) > 700:
         description = description[:697].rsplit(" ", 1)[0] + "..."
     genres = ", ".join(media.get("genres") or []) or "N/A"
@@ -408,7 +408,8 @@ async def _publish_channel_anime_info(media, destination_id):
     try:
         editor = TextEditor(title)
         await editor.load_info()
-        poster = await build_anime_soul_poster(editor, title, poster_path)
+        current_episode = max(1, int((media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
+        poster = await build_anime_soul_poster(editor, title, poster_path, episode_label=current_episode)
     except Exception as poster_error:
         await rep.report(f"/uploadchannel info poster generation failed for {title}: {poster_error}", "warning", log=False)
     if poster and os.path.exists(poster):
