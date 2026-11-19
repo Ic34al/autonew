@@ -398,7 +398,7 @@ async def _publish_channel_anime_info(media, destination_id):
     studio_nodes = (media.get("studios") or {}).get("nodes") or []
     studio = studio_nodes[0].get("name") if studio_nodes else "N/A"
     caption = (
-        f"<blockquote><b>❝ {html.escape(title)} ❞</b> | <i>{html.escape(str(romaji))}</i></blockquote>\n\n"
+        f"<blockquote><b>❝ {html.escape(title)} ❞</b>\n<i>{html.escape(str(romaji))}</i></blockquote>\n\n"
         f"<b>Genres:</b> {html.escape(genres)}\n"
         f"<b>Type:</b> {html.escape(str(fmt))}\n"
         f"<b>Average Rating:</b> {html.escape(rating)}\n"
@@ -408,7 +408,7 @@ async def _publish_channel_anime_info(media, destination_id):
         f"<b>Runtime:</b> {html.escape(runtime)}\n"
         f"<b>No. of episodes:</b> {html.escape(episodes)}\n"
         f"<b>Studio:</b> {html.escape(studio)}\n\n"
-        + (f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{html.escape(description)}</i></blockquote>" if description else "")
+        + (f"<blockquote expandable>▸ <b>Synopsis:</b> ❝ <i>{html.escape(description)}</i> ❞</blockquote>" if description else "")
     )
     poster_path = f"thumbs/uploadchannel_info_{media_id or hashlib.md5(title.encode()).hexdigest()}_{int(destination_id)}.jpg"
     poster = None
