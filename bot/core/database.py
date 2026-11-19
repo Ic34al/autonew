@@ -505,8 +505,8 @@ class MongoDB:
         self, anime_id: int, season_number: int, channel_id: int,
         status: str, torrent_url: str = "", release_title: str = "",
     ):
-        if status not in ("in_progress", "complete", "failed"):
-            raise ValueError("Invalid archive batch status")
+        if status not in ("in_progress", "complete", "failed", "source_unavailable", "skipped"):
+            raise ValueError(f"Invalid archive batch status: {status}")
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         now = datetime.datetime.utcnow()
         await self.__db.anime_archive_batches.update_one(
