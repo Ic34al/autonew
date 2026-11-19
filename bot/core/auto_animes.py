@@ -8844,32 +8844,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             )
                             saved_msg_id = None
 
-                    # Recover by season/episode/quality/title from storage.
-                    # This also handles changed AniList IDs and filename aliases.
-                    if not saved_msg_id:
-                        recovered_id = _find_stored_quality(qual)
-                        if recovered_id:
-                            try:
-                                recovered_msg = await bot.get_messages(
-                                    Var.FILE_STORE, message_ids=int(recovered_id)
-                                )
-                                if recovered_msg and not getattr(recovered_msg, "empty", False):
-                                    saved_msg_id = int(recovered_id)
-                                    saved_file_ids[qual] = saved_msg_id
-                                    await db.saveAnimeFileId(ani_id, ep_no, qual, saved_msg_id)
-                                    await db.saveAnime(ani_id, ep_no, qual, None)
-                                    await rep.report(
-                                        f"Recovered existing {qual} for S{target_season:02d}E{target_episode:02d} from storage; skipping re-encode.",
-                                        "info",
-                                        log=False,
-                                    )
-                            except Exception as recover_error:
-                                await rep.report(
-                                    f"Could not verify recovered {qual} storage message {recovered_id}: {recover_error}",
-                                    "warning",
-                                    log=False,
-                                )
-
+                    # Storage history cannot be searched by Bot API. Reuse only
+                    # durable quality checkpoints from MongoDB; if absent, encode.
                     if saved_msg_id:
                         await add_quality_button(qual, saved_msg_id)
                         uploaded_qualities.append(qual)
