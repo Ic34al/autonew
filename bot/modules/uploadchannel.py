@@ -693,20 +693,15 @@ async def uploadchannel_callbacks(client, callback):
                         archive_id, season_index, destination_id
                     )
                     previous_status = (previous or {}).get("status")
-                    # Resume safely from the channel history; a stale DB status must not
-                    # suppress uploads when the destination channel is actually empty.
-                    # Check the destination channel's history; existing episodes are skipped.
-                    existing_episodes = set()
-                    async for channel_message in bot.get_chat_history(destination_id, limit=500):
-                        body = " ".join(str(x or "") for x in (
-                            getattr(channel_message, "text", ""),
-                            getattr(channel_message, "caption", ""),
-                        ))
-                        match = re.search(
-                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
-                        )
-                        if match:
-                            existing_episodes.add(int(match.group(1)))
+                    # Bot accounts cannot call messages.GetHistory/get_chat_history.
+                    # Resume from durable DB episode checkpoints instead.
+                    existing_episodes = set(await db.get_anime_archive_completed_episodes(
+                        archive_id, season_index, destination_id
+                    ))
+                    # Legacy completed batches predate episode checkpoints; avoid re-uploading
+                    # their episodes rather than attempting forbidden Telegram history access.
+                    if previous_status == "complete" and not existing_episodes:
+                        existing_episodes.update(range(1, available_episodes + 1))
                     season_year = prequel.get("seasonYear") or "N/A"
                     episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
@@ -755,6 +750,9 @@ async def uploadchannel_callbacks(client, callback):
                         )
                         await _upload_single_episode(
                             prequel, destination_id, season_index, episode_number
+                        )
+                        await db.mark_anime_archive_episode_complete(
+                            archive_id, season_index, destination_id, episode_number
                         )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "complete",
