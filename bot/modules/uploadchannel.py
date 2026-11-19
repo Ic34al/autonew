@@ -160,7 +160,10 @@ def _release_matches_episode(title, season, episode):
     )
     if any(re.search(pattern, title) for pattern in patterns):
         return True
-    if season != 1:
+    # If the release has an explicit SxxExx / season marker, never reinterpret
+    # its episode digits as a bare Season-1 episode number.
+    has_explicit_episode = bool(re.search(r"(?i)\\bS0*\\d+[\\s._-]*E0*\\d+\\b|\\b\\d+x0*\\d+\\b", title))
+    if has_explicit_episode or season != 1:
         return False
     clean = re.sub(r"(?i)\[[^\]]*\]|\([^)]*\)", " ", title)
     clean = re.sub(r"(?i)\b(?:480p|720p|1080p|2160p|4k|x264|x265|hevc|av1)\b", " ", clean)
