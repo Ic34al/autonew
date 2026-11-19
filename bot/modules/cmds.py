@@ -3278,7 +3278,7 @@ async def run_selected_retry(client, status, target_date, queue):
     context_token = retry_cancel_event.set(cancel_event)
     try:
         upload_mode = await db.get_upload_mode()
-        required_qualities = ("480", "720", "1080") if upload_mode == "low_end" else tuple(Var.QUALS)
+        required_qualities = tuple(Var.QUALS)
         completed, failed = 0, []
         for index, (title, link) in enumerate(queue, start=1):
             if cancel_event.is_set():
