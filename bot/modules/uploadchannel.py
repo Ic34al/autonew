@@ -1336,6 +1336,7 @@ async def uploadchannel_callbacks(client, callback):
                     )
                     missing_episode_numbers = []
                     uploaded_episode_numbers = []
+                    season_source_unavailable = False
                     for episode_number in range(1, available_episodes + 1):
                         if episode_number in existing_episodes:
                             continue
@@ -1357,6 +1358,25 @@ async def uploadchannel_callbacks(client, callback):
                             error_text = str(episode_error)
                             if "RSS source missing or ambiguous" in error_text:
                                 missing_episode_numbers.append(episode_number)
+                                # RSS is a release-window feed, not a season archive. If an older
+                                # prequel season is missing its first exact match, do not spend time
+                                # scanning every episode in that season: mark it unavailable and move
+                                # on to the selected/current season so its available releases can encode.
+                                if season_index < len(prequels) + 1:
+                                    season_source_unavailable = True
+                                    await db.set_anime_archive_batch(
+                                        archive_id, season_index, destination_id, "source_unavailable",
+                                        "", f"SubsPlease RSS does not contain older Season {season_index} episode archive",
+                                    )
+                                    await rep.report(
+                                        f"UPLOADCHANNEL: older Season {season_index} for {selected_title} is not in the current SubsPlease RSS window; "
+                                        "skipping its archive scan and continuing to the selected/current season.",
+                                        "warning", log=False,
+                                    )
+                                    await update_progress(
+                                        f"older Season {season_index} unavailable in RSS; moving to selected/current season"
+                                    )
+                                    break
                                 await rep.report(
                                     f"UPLOADCHANNEL: SubsPlease RSS currently has no safe exact match for "
                                     f"{selected_title} Season {season_index} Episode {episode_number}. "
@@ -1370,6 +1390,9 @@ async def uploadchannel_callbacks(client, callback):
                                 )
                                 continue
                             raise
+                    if season_source_unavailable:
+                        # The status was saved above. Do not overwrite it with "failed".
+                        continue
                     if missing_episode_numbers:
                         await db.set_anime_archive_batch(
                             archive_id, season_index, destination_id, "failed",
