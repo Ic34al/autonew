@@ -42,6 +42,7 @@ query ($page: Int, $perPage: Int) {
     media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC) {
       id
       title { english romaji native }
+      synonyms
       bannerImage
       season
       seasonYear
