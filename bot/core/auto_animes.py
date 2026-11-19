@@ -2470,10 +2470,36 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             else await db.getAnimeDestinationPost(ani_id, ep_no, channel_to_use)
         )
         if existing_target_post:
+            # If the dedicated episode post already exists but its Main Channel
+            # join announcement was interrupted, recover that missing step only.
+            if channel_to_use != int(Var.MAIN_CHANNEL) and announce_main:
+                existing_main_post = await db.getAnimeMainPost(ani_id, ep_no)
+                if not existing_main_post:
+                    dedicated_message = await bot.get_messages(
+                        channel_to_use, message_ids=int(existing_target_post)
+                    )
+                    if dedicated_message and not getattr(dedicated_message, "empty", False):
+                        join_markup = await build_anime_watch_markup(channel_to_use)
+                        photo = (
+                            dedicated_message.photo.file_id
+                            if getattr(dedicated_message, "photo", None)
+                            else aniInfo.adata.get("poster_url")
+                        )
+                        recovered_main = await bot.send_photo(
+                            Var.MAIN_CHANNEL,
+                            photo=photo,
+                            caption=f"<b>{name}</b>",
+                            reply_markup=join_markup,
+                        )
+                        if not recovered_main or not getattr(recovered_main, "id", None):
+                            raise RuntimeError(
+                                "Dedicated episode exists, but its Main Channel join announcement "
+                                "could not be recovered; retry is safe."
+                            )
+                        await db.saveAnimeMainPost(ani_id, ep_no, recovered_main.id)
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
-            return "uploaded"
             return "already_published"
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
@@ -2710,8 +2736,9 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             caption=f"<b>{name}</b>",
                             reply_markup=join_markup
                         )
-                        if not main_join_post:
+                        if not main_join_post or not getattr(main_join_post, "id", None):
                             raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
+                        await db.saveAnimeMainPost(ani_id, ep_no, main_join_post.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
