@@ -3110,7 +3110,8 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
             return await status.edit_text("<b>Switch bot mode to anime before using /retry.</b>")
 
         upload_mode = await db.get_upload_mode()
-        required_qualities = ("480", "720", "1080") if upload_mode == "low_end" else tuple(Var.QUALS)
+        # Retry always repairs the standard four-quality episode post.
+        required_qualities = tuple(Var.QUALS)
 
         # Search the configured RSS source plus each quality feed so Sub and
         # Dual releases are both discoverable, regardless of upload mode.
@@ -3288,7 +3289,11 @@ async def run_selected_retry(client, status, target_date, queue):
                     f"<code>{title}</code>\n"
                     f"<i>Reusing saved quality checkpoints...</i>"
                 )
-                await get_animes(title, link, force=True)
+                await get_animes(
+                    title, link, force=True,
+                    qualities_override=list(Var.QUALS),
+                    force_standard_pipeline=True,
+                )
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 verify = TextEditor(title)
