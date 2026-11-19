@@ -27,7 +27,7 @@ fi
 
 echo "[STARTUP CHECK] FFmpeg binary: $FFMPEG_BIN"
 if ! "$FFMPEG_BIN" -version >/dev/null 2>&1; then
-  echo "[STARTUP ERROR] FFmpeg cannot load runtime libraries. LD_LIBRARY_PATH=$LD_LIBRARY_PATH" >&2
+  echo "[STARTUP ERROR] FFmpeg cannot load runtime libraries. LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-}" >&2
   "$FFMPEG_BIN" -version || true
   exit 1
 fi
