@@ -417,16 +417,38 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
         buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
     caption = (
-        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\n"
-        f"<b>Release:</b> {_escape(episode['title'])}\n"
-        f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
+        f"<b>{_escape(title)} Season {season_number} Episode {int(episode_number):02d}</b>\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"➜ <b>Audio:</b> {_escape(info.pdata.get('audio_type') or 'Japanese [English Sub]')}\n"
+        f"➤ <b>Quality:</b> 480p, 720p, 1080p &amp; HDRip\n"
+        f"➜ <b>Episode:</b> {int(episode_number):02d}\n"
+        f"━━━━━━━━━━━━━━\n"
+        f"<blockquote>{_escape((info.adata.get('description') or '')[:450])}</blockquote>"
     )
-    await bot.send_message(
-        chat_id=destination_id,
-        text=caption,
-        reply_markup=InlineKeyboardMarkup([buttons]),
-        disable_web_page_preview=True,
+    episode_thumb = await create_anime_thumbnail(
+        info.adata.get("bannerImage") or
+        (info.adata.get("coverImage") or {}).get("large") or
+        (info.adata.get("coverImage") or {}).get("extraLarge"),
+        title,
+        f"{int(episode_number):02d}",
+        output_name=f"uc_episode_thumb_{safe}.jpg",
+        metadata=info.adata,
     )
+    if episode_thumb and os.path.exists(episode_thumb):
+        await bot.send_photo(
+            chat_id=destination_id,
+            photo=episode_thumb,
+            caption=caption,
+            reply_markup=InlineKeyboardMarkup([buttons]),
+        )
+        os.remove(episode_thumb)
+    else:
+        await bot.send_message(
+            chat_id=destination_id,
+            text=caption,
+            reply_markup=InlineKeyboardMarkup([buttons]),
+            disable_web_page_preview=True,
+        )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
 
