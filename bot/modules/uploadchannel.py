@@ -950,6 +950,25 @@ async def uploadchannel_callbacks(client, callback):
     archive_jobs = []
     channel_stage = "starting USER_SESSION"
     current_anime_title = "unknown"
+
+    async def update_progress(stage, detail=None):
+        nonlocal channel_stage
+        channel_stage = stage
+        text = detail or stage
+        try:
+            await callback.message.edit(
+                f"⏳ <b>/uploadchannel progress</b>\n"
+                f"<b>Anime:</b> {_escape(current_anime_title)}\n"
+                f"<b>Stage:</b> {_escape(text)}\n"
+                f"<i>Please keep the bot running…</i>"
+            )
+        except Exception:
+            pass
+        try:
+            await rep.report(f"/uploadchannel: {current_anime_title} — {stage}", "info")
+        except Exception:
+            pass
+
     try:
         user_client = __import__("pyrogram").Client(
             "autonew_channel_creator",
@@ -959,9 +978,9 @@ async def uploadchannel_callbacks(client, callback):
             in_memory=True,
             parse_mode=ParseMode.HTML,
         )
-        channel_stage = "starting USER_SESSION client"
+        await update_progress("starting USER_SESSION client")
         await user_client.start()
-        channel_stage = "resolving bot account in USER_SESSION"
+        await update_progress("resolving bot account in USER_SESSION")
         # Resolve the bot through its public username in the USER session.
         # A bot-session numeric ID is not necessarily an input peer known to this
         # separate MTProto session and can raise PEER_ID_INVALID.
@@ -999,7 +1018,7 @@ async def uploadchannel_callbacks(client, callback):
         for media in selected_items:
             title = _display_title(media)
             current_anime_title = title
-            channel_stage = f"reading saved channel mapping for {title}"
+            await update_progress(f"reading saved channel mapping for {title}")
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
@@ -1040,7 +1059,7 @@ async def uploadchannel_callbacks(client, callback):
                 try:
                     # First use the persisted invite if present; otherwise try the
                     # numeric peer directly (works when this session has its hash).
-                    channel_stage = f"opening saved channel peer for {title}"
+                    await update_progress(f"opening saved channel peer for {title}")
                     chat = (
                         await user_client.get_chat(saved_invite)
                         if saved_invite else await user_client.get_chat(wanted_id)
@@ -1056,7 +1075,7 @@ async def uploadchannel_callbacks(client, callback):
                     try:
                         from pyrogram.raw.functions.messages import GetDialogs
                         from pyrogram.raw.types import InputPeerEmpty
-                        channel_stage = f"recovering legacy peer from raw Telegram dialogs for {title}"
+                        await update_progress(f"recovering legacy peer from raw Telegram dialogs for {title}")
                         raw_dialogs = await user_client.invoke(
                             GetDialogs(
                                 offset_date=0,
@@ -1101,7 +1120,7 @@ async def uploadchannel_callbacks(client, callback):
                         "the old channel is left untouched.",
                         "warning",
                     )
-                    channel_stage = f"creating replacement channel for {title}"
+                    await update_progress(f"creating replacement channel for {title}")
                     chat = await user_client.create_channel(
                         title, f"Official episode channel for {title}"
                     )
@@ -1123,7 +1142,7 @@ async def uploadchannel_callbacks(client, callback):
             # cache after a fresh in-memory USER_SESSION on Heroku.
             if not persistent_invite:
                 try:
-                    channel_stage = f"creating persistent invite link for {title}"
+                    await update_progress(f"creating persistent invite link for {title}")
                     invite_obj = await user_client.create_chat_invite_link(
                         chat.id, name="Anime uploader persistent peer"
                     )
@@ -1142,14 +1161,14 @@ async def uploadchannel_callbacks(client, callback):
             # USER_SESSION is the channel creator/admin. Verify the bot's status
             # through this session, and repair missing admin rights automatically.
             try:
-                channel_stage = f"checking bot admin rights for {title}"
+                await update_progress(f"checking bot admin rights for {title}")
                 current_member = await user_client.get_chat_member(chat.id, bot_user.id)
                 current_status = str(getattr(current_member, "status", "")).lower()
             except Exception:
                 current_status = ""
 
             if not any(role in current_status for role in ("administrator", "owner", "creator")):
-                channel_stage = f"promoting bot administrator for {title}"
+                await update_progress(f"promoting bot administrator for {title}")
                 await user_client.promote_chat_member(
                     chat.id,
                     bot_user.id,
@@ -1164,7 +1183,7 @@ async def uploadchannel_callbacks(client, callback):
                     ),
                 )
                 # Confirm the promotion before any season/episode upload begins.
-                channel_stage = f"verifying bot administrator rights for {title}"
+                await update_progress(f"verifying bot administrator rights for {title}")
                 confirmed_member = await user_client.get_chat_member(chat.id, bot_user.id)
                 confirmed_status = str(getattr(confirmed_member, "status", "")).lower()
                 if not any(role in confirmed_status for role in ("administrator", "owner", "creator")):
@@ -1184,7 +1203,7 @@ async def uploadchannel_callbacks(client, callback):
 
         # Hold the scheduler lock for the entire archive backlog so a new
         # episode cannot interleave between Season 1/Season 2 or selected channels.
-        channel_stage = "acquiring upload priority lock"
+        await update_progress("acquiring upload priority lock")
         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
         try:
             # Process one selected anime completely before starting the next.
@@ -1212,7 +1231,7 @@ async def uploadchannel_callbacks(client, callback):
                     # suppress uploads when the destination channel is actually empty.
                     # Check the destination channel's history; existing episodes are skipped.
                     existing_episodes = set()
-                    channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
+                    await update_progress(f"reading existing episode history in {destination_id} via USER_SESSION")
                     async for channel_message in user_client.get_chat_history(destination_id, limit=500):
                         body = " ".join(str(x or "") for x in (
                             getattr(channel_message, "text", ""),
@@ -1254,7 +1273,7 @@ async def uploadchannel_callbacks(client, callback):
                             f"to dedicated channel {destination_id}.",
                             "info", log=False,
                         )
-                        channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
+                        await update_progress(f"uploading Season {season_index} Episode {episode_number} to {destination_id}")
                         await _upload_single_episode(
                             prequel, destination_id, season_index, episode_number, user_client
                         )
