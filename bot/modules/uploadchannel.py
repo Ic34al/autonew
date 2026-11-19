@@ -446,7 +446,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         await bot.send_message(
             chat_id=destination_id,
             text=caption,
-            reply_markup=InlineKeyboardMarkup([buttons]),
+            reply_markup=InlineKeyboardMarkup([buttons[:2], buttons[2:]]),
             disable_web_page_preview=True,
         )
     shutil.rmtree(workdir, ignore_errors=True)
@@ -724,7 +724,8 @@ async def uploadchannel_callbacks(client, callback):
                         poster_meta.setdefault("bannerImage", prequel.get("bannerImage"))
                         poster_meta.setdefault("coverImage", prequel.get("coverImage") or {})
                         poster_meta.setdefault("season", prequel.get("season"))
-                        poster_meta.setdefault("seasonYear", season_year)\n                        poster_meta["season"] = str(season_index)
+                        poster_meta.setdefault("seasonYear", season_year)
+                        poster_meta["season"] = str(season_index)
                         poster_path = await create_anime_thumbnail(
                             poster_meta.get("bannerImage") or
                             (poster_meta.get("coverImage") or {}).get("extraLarge") or
