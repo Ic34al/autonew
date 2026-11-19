@@ -39,7 +39,29 @@ class TorDownloader:
                 await asyncio.sleep(2)
         return None
 
-    async def _wait_for_completed_video(self, directory, torrent_task=None, timeout=3600, stable_seconds=120, no_progress_timeout=600):
+    def _torrent_status_snapshot(self, torp):
+        """Return best-effort libtorrent status without depending on public torrentp APIs."""
+        try:
+            downloader = getattr(torp, "_downloader", None)
+            handle = getattr(downloader, "_file", None)
+            if handle is None:
+                return "status unavailable (torrent handle not initialized)"
+            status = handle.status()
+            name = getattr(status, "name", "unknown")
+            state = getattr(status, "state", "unknown")
+            peers = getattr(status, "num_peers", 0)
+            seeds = getattr(status, "num_seeds", 0)
+            done = getattr(status, "total_done", 0)
+            wanted = getattr(status, "total_wanted", 0)
+            rate = getattr(status, "download_rate", 0)
+            progress = (100.0 * done / wanted) if wanted else 0.0
+            return (f"name={name}; state={state}; peers={peers}; seeds={seeds}; "
+                    f"download={rate / 1024:.1f} KiB/s; data={done / 1024 / 1024:.1f}/"
+                    f"{wanted / 1024 / 1024:.1f} MiB ({progress:.1f}%)")
+        except Exception as e:
+            return f"status unavailable ({type(e).__name__}: {e})"
+
+    async def _wait_for_completed_video(self, directory, torrent_task=None, torp=None, timeout=3600, stable_seconds=120, no_progress_timeout=600):
         """
         torrentp may return after the torrent is added rather than after the
         payload is complete. Never hand a growing/partial MKV to FFmpeg.
@@ -98,7 +120,8 @@ class TorDownloader:
                     await rep.report(f"Torrent download still running: {os.path.basename(path)} ({size / 1024 / 1024:.1f} MiB; stable {int(now - (stable_since or now))}s).", "info")
                     last_report = now
             elif now - last_report >= 60:
-                await rep.report("Torrent active; waiting for video payload to appear.", "info")
+                snapshot = self._torrent_status_snapshot(torp) if torp else "torrent status unavailable"
+                await rep.report(f"Torrent active; waiting for video payload. {snapshot}", "info")
                 last_report = now
 
             await asyncio.sleep(5)
@@ -125,7 +148,7 @@ class TorDownloader:
             download_task = asyncio.create_task(torp.start_download())
             await rep.report("Torrent added to session; monitoring payload size while it downloads.", "info")
             try:
-                file_path = await self._wait_for_completed_video(self.__downdir, torrent_task=download_task)
+                file_path = await self._wait_for_completed_video(self.__downdir, torrent_task=download_task, torp=torp)
             finally:
                 if not download_task.done():
                     download_task.cancel()
@@ -135,6 +158,12 @@ class TorDownloader:
                         pass
                     except Exception:
                         pass
+                # Explicitly remove the torrent and shut down its libtorrent session.
+                # Without this, repeated attempts can leave stale sessions/handles.
+                try:
+                    torp.stop_download()
+                except Exception as stop_error:
+                    LOGS.warning(f"Torrent cleanup failed: {stop_error}")
                 if torrent_file:
                     try:
                         await aioremove(torrent_file)
