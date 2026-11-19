@@ -358,7 +358,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
 
 
 async def _upload_single_episode(media, destination_id, season_number, episode_number):
-    """Download one RSS episode, encode four qualities, and publish four buttons."""
+    """Download one RSS episode, encode/upload 720p only, and publish one button."""
     from bot import Var
     episode = await _find_episode_torrent(media, season_number, episode_number)
     if not episode:
