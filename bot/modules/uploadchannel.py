@@ -684,7 +684,11 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     source = None
     if missing_qualities:
-        await rep.report(f"UPLOADCHANNEL: downloading torrent for {title} S{season_number:02d}E{episode_number:02d}.", "info")
+        # Remove leftovers from a previously failed attempt so the downloader
+        # cannot mistake an old/partial MKV for the current torrent payload.
+        shutil.rmtree(workdir, ignore_errors=True)
+        os.makedirs(workdir, exist_ok=True)
+        await rep.report(f"UPLOADCHANNEL: downloading torrent for {title} S{season_number:02d}E{episode_number:02d} from RSS/Nyaa.", "info")
         downloaded = await TorDownloader(workdir).download(episode["link"])
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
