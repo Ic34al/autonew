@@ -355,36 +355,31 @@ class MongoDB:
         return (selected or {}).get("invite_link")
 
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
-        # Keep CRUD keys consistent with add/set methods (case-folded, whitespace-normalized).
-        normalized_name = re.sub(r"\\s+", " ", str(anime_name).casefold()).strip()
-        if not normalized_name:
-            return
-        query = {"anime_name": normalized_name}
+        query = {"anime_name": anime_name.lower()}
         if channel is not None:
-            channel_id = int(channel) if str(channel).lstrip("-").isdigit() else str(channel).strip()
-            query["channel_id"] = channel_id
+            query["channel_id"] = int(channel) if str(channel).lstrip("-").isdigit() else channel
         await self.__anime_channels.delete_many(query)
-        # Selected-channel records use the normalized anime name as their _id.
-        selected_query = {"_id": normalized_name}
-        if channel is not None:
-            selected_query["channel_id"] = query["channel_id"]
-        await self.__db.selected_anime_channels.delete_many(selected_query)
 
     async def get_anime_channel(self, anime_name: str) -> int | None:
-        """Resolve dedicated-channel mapping from release titles using cleaned tokens."""
-        def clean_tokens(value):
-            value = str(value or "").casefold()
-            # Remove common release metadata before matching the anime title.
-            value = re.sub(r"\\b(?:s\\d{1,2}e\\d{1,3}|s\\d{1,2}|season\\s*\\d+|episode\\s*\\d+|ep\\s*\\d+)\\b", " ", value)
-            value = re.sub(r"\\b(?:480p|720p|1080p|2160p|4k|8bit|10bit|12bit|web[- ]?dl|web[- ]?rip|bluray|bdrip|hdtv|dual[- ]audio|multi[- ]subs|aac(?:2\\.0)?|h\\.?264|h\\.?265|hevc|avc|x264|x265|v\\d+)\\b", " ", value)
-            value = re.sub(r"\\[[^\\]]*\\]|\\([^)]*\\)", " ", value)
-            tokens = [t for t in re.findall(r"[a-z0-9]+", value) if t not in {"the","a","an","of","and","to","is","wa","wo","na","no","ore","suru"}]
-            return set(tokens)
+        """Resolve both legacy and current /addanime records using safe normalized aliases."""
+        def compact(value):
+            return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
 
-        target_tokens = clean_tokens(anime_name)
-        if len(target_tokens) < 2:
+        def series_key(value):
+            value = str(value or "").casefold()
+            value = re.sub(r"\bseason\s*\d+\b|\bs\s*\d{1,2}\b", " ", value)
+            value = re.sub(r"\b(?:episode|ep)\s*[-._ ]*\d+\b", " ", value)
+            value = re.sub(r"\b(?:part|cour)\s*\d+\b", " ", value)
+            return compact(value)
+
+        target = compact(anime_name)
+        base_target = series_key(anime_name)
+        if not target:
             return None
-        matches = set()
+
+        exact_channels, series_channels, token_channels = set(), set(), set()
+        ignored = {"the", "a", "an", "of", "and", "to"}
+        target_tokens = {t for t in re.findall(r"[a-z0-9]+", str(anime_name).casefold()) if t not in ignored}
         async for entry in self.__anime_channels.find():
             if not isinstance(entry, dict):
                 continue
@@ -392,22 +387,34 @@ class MongoDB:
             channel_id = entry.get("channel_id") or entry.get("channel") or entry.get("destination")
             if not stored_name or channel_id is None:
                 continue
-            stored_tokens = clean_tokens(stored_name)
-            if len(stored_tokens) < 2:
-                continue
-            overlap = stored_tokens & target_tokens
-            # Strong title containment or high similarity only; avoid false routing.
-            if (stored_tokens <= target_tokens) or (
-                len(overlap) >= 3 and len(overlap) / max(1, len(stored_tokens)) >= 0.80
-            ):
-                normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id).strip()
-                matches.add(normalized_channel)
-        return next(iter(matches)) if len(matches) == 1 else None
+            stored_key = compact(stored_name)
+            stored_series = series_key(stored_name)
+            normalized_channel = int(channel_id) if str(channel_id).lstrip("-").isdigit() else str(channel_id).strip()
+            if stored_key == target:
+                exact_channels.add(normalized_channel)
+            if base_target and stored_series == base_target:
+                series_channels.add(normalized_channel)
+            stored_tokens = {t for t in re.findall(r"[a-z0-9]+", str(stored_name).casefold()) if t not in ignored}
+            if len(target_tokens) >= 3 and len(stored_tokens) >= 3:
+                overlap = len(target_tokens & stored_tokens)
+                if overlap >= 3 and overlap / max(1, min(len(target_tokens), len(stored_tokens))) >= 0.8:
+                    token_channels.add(normalized_channel)
+
+        if len(exact_channels) == 1:
+            return next(iter(exact_channels))
+        if len(exact_channels) > 1:
+            return None
+        if len(series_channels) == 1:
+            return next(iter(series_channels))
+        if len(series_channels) > 1:
+            return None
+        if len(token_channels) == 1:
+            return next(iter(token_channels))
+        return None
 
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
         try:
-            normalized_name = re.sub(r"\\s+", " ", str(anime_name).casefold()).strip()
-            entry = await self.__anime_channels.find_one({"anime_name": normalized_name})
+            entry = await self.__anime_channels.find_one({"anime_name": anime_name.lower()})
             return entry
         except Exception as e:
             print(f"Error fetching raw anime channel entry for {anime_name}: {e}")
@@ -464,13 +471,6 @@ class MongoDB:
     async def get_anime_archive_batch(self, anime_id: int, season_number: int, channel_id: int):
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         return await self.__db.anime_archive_batches.find_one({"_id": key})
-
-    async def get_in_progress_anime_archive_batches(self):
-        """Return unfinished /uploadchannel seasons for automatic restart recovery."""
-        cursor = self.__db.anime_archive_batches.find(
-            {"status": "in_progress"}
-        ).sort("updated_at", 1)
-        return await cursor.to_list(length=100)
 
     async def set_anime_archive_batch(
         self, anime_id: int, season_number: int, channel_id: int,

@@ -26,7 +26,6 @@ import os
 import feedparser
 from fpdf import FPDF
 import httpx
-import io
 import subprocess
 from PIL import Image
 import shutil
@@ -37,10 +36,6 @@ from json import loads as jloads
 # Scheduled releases take priority over manual /search queues.
 AUTO_UPLOAD_PRIORITY_LOCK = asyncio.Lock()
 AUTO_UPLOAD_PRIORITY_PENDING = asyncio.Event()
-# After each successful scheduled upload, give the scanner a 30-minute quiet
-# window to discover and process any newly released ongoing episodes before
-# the /uploadchannel archive backlog resumes.
-AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL = 0.0
 # Set while an admin-selected /search batch is being uploaded.
 MANUAL_SEARCH_HOLD = asyncio.Event()
 
@@ -591,41 +586,9 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
             _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
 
         sender = client or bot
-        sticker_to_send = _ONGOING_PRIORITY_STICKER_FILE_ID
-        # Bot API file_ids are bot-account scoped. When the channel creator
-        # USER_SESSION posts to its private channel, download the sticker bytes
-        # through the Bot API and upload those bytes through the user session.
-        if sender is not bot:
-            get_file_endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getFile"
-            async with httpx.AsyncClient(timeout=25.0) as session:
-                file_response = await session.get(
-                    get_file_endpoint,
-                    params={"file_id": _ONGOING_PRIORITY_STICKER_FILE_ID},
-                )
-                file_response.raise_for_status()
-                file_payload = file_response.json()
-                if not file_payload.get("ok"):
-                    raise RuntimeError(file_payload.get("description", "Telegram getFile failed"))
-                file_path = (file_payload.get("result") or {}).get("file_path")
-                if not file_path:
-                    raise RuntimeError("Telegram getFile returned no file_path for priority sticker")
-                download_url = f"https://api.telegram.org/file/bot{Var.BOT_TOKEN}/{file_path}"
-                sticker_response = await session.get(download_url)
-                sticker_response.raise_for_status()
-            sticker_to_send = io.BytesIO(sticker_response.content)
-            # Preserve the real Telegram sticker format (.webp, .tgs or .webm).
-            # Renaming animated/video sticker bytes to .webp makes Pyrogram's
-            # upload parser reject an otherwise valid sticker.
-            sticker_extension = os.path.splitext(str(file_path))[1].lower() or ".webp"
-            if sticker_extension not in (".webp", ".tgs", ".webm"):
-                raise RuntimeError(
-                    f"Unsupported priority sticker file format: {sticker_extension or 'unknown'}"
-                )
-            sticker_to_send.name = f"priority_sticker{sticker_extension}"
-
         sent_message = await sender.send_sticker(
             chat_id=channel,
-            sticker=sticker_to_send
+            sticker=_ONGOING_PRIORITY_STICKER_FILE_ID
         )
         if not sent_message:
             raise RuntimeError("Telegram did not confirm the priority sticker message")
@@ -2159,96 +2122,115 @@ async def create_anime_channel(name, aniInfo):
 
 
 async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
-    """Render the fixed ANIME SOUL black/red glossy episode thumbnail (1600x900)."""
+    """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
     import io
+    import textwrap
     from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
 
     data = anime_info.adata or {}
     titles = data.get("title") or {}
     title = titles.get("english") or titles.get("romaji") or anime_name
 
-    def clean(value, fallback=""):
+    def clean_value(value, default=""):
         if isinstance(value, list):
-            value = value[0] if value else fallback
-        value = re.sub(r"<[^>]*>", " ", str(value or fallback))
-        return re.sub(r"\\s+", " ", value).strip()
+            value = value[0] if value else default
+        return str(value or default).strip()
 
-    season = clean(anime_info.pdata.get("anime_season"), "")
-    episode = clean(episode_label or anime_info.pdata.get("episode_number"), "01")
+    season = clean_value(anime_info.pdata.get("anime_season"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
     try:
-        season = str(int(season)) if season else ""
+        season = str(int(season))
     except Exception:
         pass
     try:
         episode = str(int(episode)).zfill(2)
     except Exception:
-        episode = clean(episode, "01")
+        pass
 
     cover_data = data.get("coverImage") or {}
+    # Try every artwork source, with retries. Never silently substitute a
+    # previous anime's cached/local thumbnail.
     artwork_urls = []
-    for candidate in (cover_data.get("extraLarge"), cover_data.get("large"), data.get("poster_url"), data.get("bannerImage")):
+    for candidate in (
+        cover_data.get("extraLarge"),
+        cover_data.get("large"),
+        data.get("poster_url"),
+        data.get("bannerImage"),
+    ):
         if candidate and candidate not in artwork_urls:
             artwork_urls.append(candidate)
+
     if not artwork_urls:
-        await rep.report(f"ANIME SOUL thumbnail for '{title}' has no AniList artwork URL; using branded artwork placeholder.", "warning")
-        artwork_urls = []
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable for '{title}': AniList returned no artwork URL.",
+            "warning"
+        )
+        return None
 
     art = None
-    last_error = None
+    last_art_error = None
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(25.0, connect=10.0), follow_redirects=True) as client:
-            for url in artwork_urls:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            for artwork_url in artwork_urls:
                 for attempt in range(1, 4):
                     try:
-                        response = await client.get(url)
+                        response = await client.get(artwork_url)
                         response.raise_for_status()
-                        candidate = Image.open(io.BytesIO(response.content)).convert("RGB")
-                        candidate.load()
-                        art = candidate
+                        candidate_art = Image.open(
+                            io.BytesIO(response.content)
+                        ).convert("RGB")
+                        candidate_art.load()
+                        art = candidate_art
                         break
                     except Exception as exc:
-                        last_error = exc
-                        await rep.report(f"Thumbnail attempt {attempt}/3 failed for '{title}' ({url}): {exc}", "warning")
+                        last_art_error = exc
+                        await rep.report(
+                            f"Thumbnail attempt {attempt}/3 failed for '{title}' "
+                            f"({artwork_url}): {exc}",
+                            "warning"
+                        )
                         if attempt < 3:
                             await asyncio.sleep(attempt * 2)
                 if art is not None:
                     break
     except Exception as exc:
-        last_error = exc
+        last_art_error = exc
+
     if art is None:
-        await rep.report(f"AniList artwork download failed for '{title}' ({last_error}); generating branded fallback card instead.", "warning")
-        art = Image.new("RGB", (900, 1400), (10, 8, 12))
-        fallback_draw = ImageDraw.Draw(art)
-        fallback_draw.rectangle((0, 0, 900, 1400), fill=(10, 8, 12))
-        fallback_draw.rectangle((24, 24, 876, 1376), outline=(150, 0, 30), width=10)
-        fallback_draw.text((450, 700), "ANIME SOUL", fill=(230, 20, 45), anchor="mm")
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable after retries for '{title}': {last_art_error}",
+            "warning"
+        )
+        return None
 
     W, H = 1600, 900
-    RED = (226, 12, 40)
-    WHITE = (246, 246, 250)
-    MUTED = (175, 180, 190)
-    art = ImageEnhance.Color(art).enhance(1.06)
+    split_x = 690
+    art = ImageEnhance.Color(art).enhance(1.08)
     art = ImageEnhance.Contrast(art).enhance(1.04)
 
-    # Fixed matte-black canvas with subtle glossy diagonal ribbons and restrained red glows.
-    canvas = Image.new("RGB", (W, H), (5, 5, 8))
-    glossy = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    gd = ImageDraw.Draw(glossy)
-    gd.polygon([(0,0),(390,0),(150,430),(0,520)], fill=(45,45,52,25))
-    gd.polygon([(860,0),(1220,0),(980,360),(670,470)], fill=(38,38,44,20))
-    gd.polygon([(1320,0),(1600,0),(1600,480),(1120,720)], fill=(40,40,45,18))
-    gd.line([(0,800),(360,610),(800,900)], fill=(155,0,20,42), width=8)
-    gd.line([(1190,0),(920,240),(1570,70)], fill=(170,0,22,50), width=5)
-    gd.line([(0,220),(300,0)], fill=(100,0,12,25), width=3)
-    glossy = glossy.filter(ImageFilter.GaussianBlur(12))
-    canvas = Image.alpha_composite(canvas.convert("RGBA"), glossy)
+    # Left: full-height poster artwork, cropped to fill without stretching.
+    left_art = ImageOps.fit(
+        art, (split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
 
-    glow = Image.new("RGBA", (W,H), (0,0,0,0))
-    glow_draw = ImageDraw.Draw(glow)
-    glow_draw.ellipse((-160,730,300,1150), fill=(155,0,24,42))
-    glow_draw.ellipse((1370,-150,1750,240), fill=(150,0,18,30))
-    glow = glow.filter(ImageFilter.GaussianBlur(75))
-    canvas = Image.alpha_composite(canvas, glow)
+    # Right: same anime artwork, blurred and washed out under a translucent light panel.
+    right_art = ImageOps.fit(
+        art, (W - split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.35),
+    ).filter(ImageFilter.GaussianBlur(16))
+    right_art = ImageEnhance.Brightness(right_art).enhance(1.8)
+    right_art = ImageEnhance.Color(right_art).enhance(0.45)
+
+    canvas = Image.new("RGB", (W, H), (245, 246, 250))
+    canvas.paste(left_art, (0, 0))
+    canvas.paste(right_art, (split_x, 0))
+    overlay = Image.new("RGBA", (W - split_x, H), (250, 250, 253, 222))
+    canvas.paste(overlay, (split_x, 0), overlay)
+    draw = ImageDraw.Draw(canvas)
 
     regular_candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
@@ -2259,182 +2241,154 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
     ]
     def font(size, bold=False):
-        for p in (bold_candidates if bold else regular_candidates):
+        for path in (bold_candidates if bold else regular_candidates):
             try:
-                return ImageFont.truetype(p, size)
+                return ImageFont.truetype(path, size)
             except Exception:
-                pass
+                continue
         return ImageFont.load_default()
 
-    draw = ImageDraw.Draw(canvas)
-    def text_width(txt, f):
-        return draw.textbbox((0,0), str(txt), font=f)[2]
-    def fit_font(txt, start, minimum, max_width, bold=True):
-        for size in range(start, minimum-1, -1):
-            f = font(size, bold)
-            if text_width(txt, f) <= max_width:
-                return f
-        return font(minimum, bold)
-    def wrap(txt, f, max_w, max_lines=None):
-        words = re.sub(r"\\s+", " ", str(txt or "")).split()
-        lines, cur = [], ""
+    def fit_line(text, fnt, max_width):
+        text = str(text)
+        while text and draw.textbbox((0, 0), text, font=fnt)[2] > max_width:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def wrapped(text, fnt, max_width, max_lines):
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
         for word in words:
-            candidate = (cur + " " + word).strip()
-            if text_width(candidate, f) <= max_w:
-                cur = candidate
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
             else:
-                if cur:
-                    lines.append(cur)
-                cur = word
-        if cur:
-            lines.append(cur)
-        if max_lines and len(lines) > max_lines:
-            lines = lines[:max_lines]
-            while lines[-1] and text_width(lines[-1] + "…", f) > max_w:
-                lines[-1] = lines[-1][:-1]
-            lines[-1] = lines[-1].rstrip() + "…"
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > sum(len(x.split()) for x in lines):
+            lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
         return lines
 
-    # Header brand. No anime-specific decoration; this remains universal.
-    draw.rounded_rectangle((24,24,490,96), radius=20, fill=(8,8,12,255), outline=(65,65,70,255), width=2)
-    draw.polygon([(48,42),(48,78),(82,60)], fill=RED)
-    draw.text((100,34), "ANIME", font=font(34,True), fill=WHITE)
-    draw.text((224,34), "SOUL", font=font(34,True), fill=RED)
-    draw.text((102,72), "A N I M E  •  S T R E A M I N G", font=font(13,True), fill=(205,205,210))
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
 
-    # Conditional episode badge, only used by this episode-thumbnail function.
-    badge_text = "NEW EPISODE"
-    badge_font = font(25,True)
-    draw.rounded_rectangle((1260,24,1565,88), radius=18, fill=(10,10,14,255), outline=RED, width=3)
-    draw.text((1287,42), badge_text, font=badge_font, fill=WHITE)
+    # Left poster branding and title overlay.
+    left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
+    left_draw = ImageDraw.Draw(left_overlay)
+    for y in range(560, H):
+        alpha = int(205 * ((y - 560) / (H - 560)))
+        left_draw.line((0, y, split_x, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, 0), left_overlay)
+    draw = ImageDraw.Draw(canvas)
 
-    # Sidebar navigation.
-    draw.rounded_rectangle((18,122,132,790), radius=36, fill=(8,8,12,245), outline=(60,60,68,255), width=2)
-    nav_items=[("⌂","HOME"),("⌕","SEARCH"),("▤","CATEGORY"),("♡","FAVORITES"),("➤","TELEGRAM")]
-    nav_y=185
-    for i,(sym,label) in enumerate(nav_items):
-        col=RED if i==0 else WHITE
-        if i==0:
-            draw.rounded_rectangle((29,155,121,258), radius=22, fill=(28,8,14,255), outline=(120,0,18,255), width=2)
-        draw.text((75,nav_y),sym,font=font(38,True),fill=col,anchor="mm")
-        draw.text((75,nav_y+43),label,font=font(13,True),fill=col,anchor="mm")
-        nav_y+=125
+    draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
+    draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
+    draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23, True), fill=(255,220,70))
 
-    # Portrait artwork frame. For tall posters, use a blurred fill inside the frame
-    # and place the complete sharp poster on top (contain); never stretch it.
-    poster_box=(155,116,590,820)
-    px1,py1,px2,py2=poster_box
-    pw,ph=px2-px1,py2-py1
-    frame_bg=ImageOps.fit(art,(pw,ph),method=Image.Resampling.LANCZOS).filter(ImageFilter.GaussianBlur(22))
-    frame_bg=ImageEnhance.Brightness(frame_bg).enhance(0.42)
-    canvas.paste(frame_bg,(px1,py1))
-    poster=ImageOps.contain(art,(pw-22,ph-22),method=Image.Resampling.LANCZOS)
-    poster_x=px1+(pw-poster.width)//2
-    poster_y=py1+(ph-poster.height)//2
-    canvas.paste(poster,(poster_x,poster_y))
-    draw=ImageDraw.Draw(canvas)
-    draw.rounded_rectangle(poster_box,radius=24,outline=RED,width=3)
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
 
-    # Right-side information block.
-    rx=650
-    right_w=900
-    title_text=clean(title,"Anime title unavailable")
-    # Dynamically shrink the title until it fits cleanly in at most two lines.
-    title_f=font(56,True)
-    title_lines=wrap(title_text,title_f,right_w,2)
-    while title_f.size > 26 and any(text_width(line,title_f) > right_w for line in title_lines):
-        title_f=font(title_f.size-2,True)
-        title_lines=wrap(title_text,title_f,right_w,2)
-    if any(text_width(line,title_f) > right_w for line in title_lines):
-        title_f=font(26,True)
-        title_lines=wrap(title_text,title_f,right_w,2)
-    ty=128
-    for line in title_lines:
-        draw.text((rx,ty),line,font=title_f,fill=WHITE,stroke_width=1,stroke_fill=(0,0,0))
-        ty += title_f.size+9
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrap_complete(str(title), title_font, right_w)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrap_complete(str(title), title_font, right_w)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
 
-    # Season label (use parsed episode season only; don't invent AniList season).
-    season_label=f"SEASON {season}" if season else (clean(data.get("season"),"").replace("_"," ").title() if data.get("season") else "")
-    if season_label:
-        sy=ty+8
-        draw.rounded_rectangle((rx,sy,rx+410,sy+52),radius=18,fill=(95,0,20,255),outline=RED,width=2)
-        draw.text((rx+24,sy+11),season_label,font=font(24,True),fill=WHITE)
-    else:
-        sy=ty+8
-    draw.line((rx,sy+66,rx+right_w,sy+66),fill=(125,0,22,255),width=3)
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
 
-    # Genre pills: only 3, fit the row, safely omit overflow.
-    genres=[clean(g).title() for g in (data.get("genres") or [])[:3] if clean(g)]
-    genre_y=sy+92
-    gx=rx
-    for genre in genres:
-        gf=font(18,True)
-        label=genre
-        while text_width(label,gf)>190 and len(label)>5:
-            label=label[:-2].rstrip()+"…"
-        pill_w=min(230,text_width(label,gf)+38)
-        if gx+pill_w>rx+right_w:
-            break
-        draw.rounded_rectangle((gx,genre_y,gx+pill_w,genre_y+44),radius=22,fill=(10,10,14,255),outline=(105,0,20,255),width=2)
-        draw.text((gx+19,genre_y+11),label,font=gf,fill=WHITE)
-        gx+=pill_w+14
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
 
-    # Synopsis card; strip AniList HTML and truncate by word, not mid-character.
-    raw_synopsis=clean(data.get("description"),"")
-    synopsis=raw_synopsis or "Synopsis unavailable."
-    synopsis_words=synopsis.split()
-    if len(synopsis_words)>33:
-        synopsis=" ".join(synopsis_words[:33]).rstrip(".,;:")+"…"
-    syn_y=genre_y+68
-    syn_box=(rx,syn_y,rx+right_w,syn_y+190)
-    draw.rounded_rectangle(syn_box,radius=22,fill=(9,9,13,238),outline=(60,60,68,255),width=2)
-    draw.rounded_rectangle((rx+18,syn_y+22,rx+26,syn_y+160),radius=4,fill=RED)
-    draw.rounded_rectangle((rx+40,syn_y+18,rx+250,syn_y+54),radius=13,fill=(95,0,20,255),outline=RED,width=1)
-    draw.text((rx+58,syn_y+23),"SYNOPSIS",font=font(20,True),fill=WHITE)
-    syn_font=font(20)
-    syn_lines=wrap(synopsis,syn_font,right_w-82,4)
-    for j,line in enumerate(syn_lines[:4]):
-        draw.text((rx+44,syn_y+72+j*29),line,font=syn_font,fill=(225,225,230))
+    # Watch button.
+    button_y = min(650, max(sy + 18, pill_y + 145))
+    draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
+    draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
+    draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
+    draw.ellipse((rx+340, button_y+2, rx+416, button_y+78), outline=(75,80,92), width=2)
+    draw.text((rx+363, button_y+19), "☆", font=font(38), fill=(20,24,34))
 
-    # Metadata strip: STUDIO / YEAR / FORMAT / STATUS. Hide unavailable fields.
-    meta_y=syn_y+210
-    meta_h=110
-    draw.rounded_rectangle((rx,meta_y,rx+right_w,meta_y+meta_h),radius=20,fill=(8,8,12,245),outline=(55,55,65,255),width=2)
-    studio_nodes=(data.get("studios") or {}).get("nodes") or []
-    studio=clean(studio_nodes[0].get("name")) if studio_nodes and isinstance(studio_nodes[0],dict) else ""
-    year=(data.get("seasonYear") or (data.get("startDate") or {}).get("year") or "")
-    fmt=clean(data.get("format"),"")
-    status_map={"RELEASING":"ONGOING","FINISHED":"FINISHED","NOT_YET_RELEASED":"UPCOMING","CANCELLED":"CANCELLED","HIATUS":"ON HIATUS"}
-    status=status_map.get(str(data.get("status") or "").upper(),"")
-    items=[("STUDIO",studio),("YEAR",str(year) if year else ""),("FORMAT",fmt.upper()),("STATUS",status)]
-    colw=right_w//4
-    for i,(label,value) in enumerate(items):
-        if not value:
-            continue
-        x=rx+i*colw+24
-        if i:
-            draw.line((rx+i*colw,meta_y+16,rx+i*colw,meta_y+meta_h-16),fill=(65,65,72,255),width=2)
-        draw.text((x,meta_y+18),label,font=font(14,True),fill=MUTED)
-        vf=fit_font(value,22,15,colw-48,True)
-        draw.text((x,meta_y+51),value,font=vf,fill=WHITE)
+    # Metadata row at the bottom.
+    line_y = 770
+    draw.line((rx, line_y, W-58, line_y), fill=(130,135,145), width=2)
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Not listed"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    metadata = [
+        ("YEAR", str(year)),
+        ("STUDIO", str(studio)),
+        ("GENRES", genres),
+        ("STATUS", status),
+    ]
+    col_w = right_w // 4
+    for i, (label, value) in enumerate(metadata):
+        x = rx + i * col_w
+        draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
+        draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
 
-    # Bottom CTA row; fixed geometry.
-    button_y=meta_y+meta_h+25
-    draw.rounded_rectangle((rx,button_y,rx+430,button_y+74),radius=36,fill=(110,0,22,255),outline=RED,width=3)
-    draw.polygon([(rx+38,button_y+23),(rx+38,button_y+52),(rx+65,button_y+37)],fill=WHITE)
-    draw.text((rx+88,button_y+20),"WATCH NOW",font=font(25,True),fill=WHITE)
-    ep_x=rx+460
-    draw.rounded_rectangle((ep_x,button_y,ep_x+390,button_y+74),radius=36,fill=(8,8,12,255),outline=(75,75,82,255),width=2)
-    draw.text((ep_x+28,button_y+21),"EPISODE "+episode,font=fit_font("EPISODE "+episode,24,18,330,True),fill=WHITE)
-    
-    # Subtle glossy red accents at top and bottom; keep all details inside the canvas.
-    draw.line([(0,105),(260,105),(420,0)],fill=(90,0,16,255),width=2)
-    draw.line([(0,858),(330,858),(490,900)],fill=(110,0,18,255),width=3)
-    draw.line([(1080,900),(1390,815),(1600,845)],fill=(115,0,20,255),width=3)
-
-    os.makedirs(os.path.dirname(output_path) or ".",exist_ok=True)
-    canvas.convert("RGB").save(output_path,"JPEG",quality=95,optimize=True,progressive=True,subsampling=0)
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
     return output_path
+
 
 async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False):
     mode = await db.get_mode()
@@ -2565,7 +2519,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -3428,6 +3382,237 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+    """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
+    import io
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
+
+    data = anime_info.adata or {}
+    titles = data.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or anime_name
+
+    def clean_value(value, default=""):
+        if isinstance(value, list):
+            value = value[0] if value else default
+        return str(value or default).strip()
+
+    season = clean_value(anime_info.pdata.get("anime_season"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    try:
+        season = str(int(season))
+    except Exception:
+        pass
+    try:
+        episode = str(int(episode)).zfill(2)
+    except Exception:
+        pass
+
+    cover_data = data.get("coverImage") or {}
+    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
+    banner_url = data.get("bannerImage")
+    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
+    artwork_url = cover_url or banner_url
+    if not artwork_url:
+        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(artwork_url)
+            response.raise_for_status()
+            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as exc:
+        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        return None
+
+    W, H = 1600, 900
+    split_x = 690
+    art = ImageEnhance.Color(art).enhance(1.08)
+    art = ImageEnhance.Contrast(art).enhance(1.04)
+
+    # Left: full-height poster artwork, cropped to fill without stretching.
+    left_art = ImageOps.fit(
+        art, (split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
+
+    # Right: same anime artwork, blurred and washed out under a translucent light panel.
+    right_art = ImageOps.fit(
+        art, (W - split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.35),
+    ).filter(ImageFilter.GaussianBlur(16))
+    right_art = ImageEnhance.Brightness(right_art).enhance(1.8)
+    right_art = ImageEnhance.Color(right_art).enhance(0.45)
+
+    canvas = Image.new("RGB", (W, H), (245, 246, 250))
+    canvas.paste(left_art, (0, 0))
+    canvas.paste(right_art, (split_x, 0))
+    overlay = Image.new("RGBA", (W - split_x, H), (250, 250, 253, 222))
+    canvas.paste(overlay, (split_x, 0), overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    regular_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    bold_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
+    def font(size, bold=False):
+        for path in (bold_candidates if bold else regular_candidates):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def fit_line(text, fnt, max_width):
+        text = str(text)
+        while text and draw.textbbox((0, 0), text, font=fnt)[2] > max_width:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def wrapped(text, fnt, max_width, max_lines):
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > sum(len(x.split()) for x in lines):
+            lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
+        return lines
+
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    # Left poster branding and title overlay.
+    left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
+    left_draw = ImageDraw.Draw(left_overlay)
+    for y in range(560, H):
+        alpha = int(205 * ((y - 560) / (H - 560)))
+        left_draw.line((0, y, split_x, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, 0), left_overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
+    draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
+    draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23, True), fill=(255,220,70))
+
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrap_complete(str(title), title_font, right_w)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrap_complete(str(title), title_font, right_w)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
+
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
+
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
+
+    # Watch button.
+    button_y = min(650, max(sy + 18, pill_y + 145))
+    draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
+    draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
+    draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
+    draw.ellipse((rx+340, button_y+2, rx+416, button_y+78), outline=(75,80,92), width=2)
+    draw.text((rx+363, button_y+19), "☆", font=font(38), fill=(20,24,34))
+
+    # Metadata row at the bottom.
+    line_y = 770
+    draw.line((rx, line_y, W-58, line_y), fill=(130,135,145), width=2)
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Not listed"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    metadata = [
+        ("YEAR", str(year)),
+        ("STUDIO", str(studio)),
+        ("GENRES", genres),
+        ("STATUS", status),
+    ]
+    col_w = right_w // 4
+    for i, (label, value) in enumerate(metadata):
+        x = rx + i * col_w
+        draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
+        draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
+    return output_path
+
+
 async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
@@ -3544,7 +3729,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -4339,6 +4524,237 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+    """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
+    import io
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
+
+    data = anime_info.adata or {}
+    titles = data.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or anime_name
+
+    def clean_value(value, default=""):
+        if isinstance(value, list):
+            value = value[0] if value else default
+        return str(value or default).strip()
+
+    season = clean_value(anime_info.pdata.get("anime_season"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    try:
+        season = str(int(season))
+    except Exception:
+        pass
+    try:
+        episode = str(int(episode)).zfill(2)
+    except Exception:
+        pass
+
+    cover_data = data.get("coverImage") or {}
+    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
+    banner_url = data.get("bannerImage")
+    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
+    artwork_url = cover_url or banner_url
+    if not artwork_url:
+        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(artwork_url)
+            response.raise_for_status()
+            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as exc:
+        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        return None
+
+    W, H = 1600, 900
+    split_x = 690
+    art = ImageEnhance.Color(art).enhance(1.08)
+    art = ImageEnhance.Contrast(art).enhance(1.04)
+
+    # Left: full-height poster artwork, cropped to fill without stretching.
+    left_art = ImageOps.fit(
+        art, (split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
+
+    # Right: same anime artwork, blurred and washed out under a translucent light panel.
+    right_art = ImageOps.fit(
+        art, (W - split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.35),
+    ).filter(ImageFilter.GaussianBlur(16))
+    right_art = ImageEnhance.Brightness(right_art).enhance(1.8)
+    right_art = ImageEnhance.Color(right_art).enhance(0.45)
+
+    canvas = Image.new("RGB", (W, H), (245, 246, 250))
+    canvas.paste(left_art, (0, 0))
+    canvas.paste(right_art, (split_x, 0))
+    overlay = Image.new("RGBA", (W - split_x, H), (250, 250, 253, 222))
+    canvas.paste(overlay, (split_x, 0), overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    regular_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    bold_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
+    def font(size, bold=False):
+        for path in (bold_candidates if bold else regular_candidates):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def fit_line(text, fnt, max_width):
+        text = str(text)
+        while text and draw.textbbox((0, 0), text, font=fnt)[2] > max_width:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def wrapped(text, fnt, max_width, max_lines):
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > sum(len(x.split()) for x in lines):
+            lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
+        return lines
+
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    # Left poster branding and title overlay.
+    left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
+    left_draw = ImageDraw.Draw(left_overlay)
+    for y in range(560, H):
+        alpha = int(205 * ((y - 560) / (H - 560)))
+        left_draw.line((0, y, split_x, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, 0), left_overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
+    draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
+    draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23, True), fill=(255,220,70))
+
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrap_complete(str(title), title_font, right_w)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrap_complete(str(title), title_font, right_w)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
+
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
+
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
+
+    # Watch button.
+    button_y = min(650, max(sy + 18, pill_y + 145))
+    draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
+    draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
+    draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
+    draw.ellipse((rx+340, button_y+2, rx+416, button_y+78), outline=(75,80,92), width=2)
+    draw.text((rx+363, button_y+19), "☆", font=font(38), fill=(20,24,34))
+
+    # Metadata row at the bottom.
+    line_y = 770
+    draw.line((rx, line_y, W-58, line_y), fill=(130,135,145), width=2)
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Not listed"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    metadata = [
+        ("YEAR", str(year)),
+        ("STUDIO", str(studio)),
+        ("GENRES", genres),
+        ("STATUS", status),
+    ]
+    col_w = right_w // 4
+    for i, (label, value) in enumerate(metadata):
+        x = rx + i * col_w
+        draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
+        draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
+    return output_path
+
+
 async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
@@ -4455,7 +4871,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -5232,6 +5648,237 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+    """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
+    import io
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
+
+    data = anime_info.adata or {}
+    titles = data.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or anime_name
+
+    def clean_value(value, default=""):
+        if isinstance(value, list):
+            value = value[0] if value else default
+        return str(value or default).strip()
+
+    season = clean_value(anime_info.pdata.get("anime_season"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    try:
+        season = str(int(season))
+    except Exception:
+        pass
+    try:
+        episode = str(int(episode)).zfill(2)
+    except Exception:
+        pass
+
+    cover_data = data.get("coverImage") or {}
+    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
+    banner_url = data.get("bannerImage")
+    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
+    artwork_url = cover_url or banner_url
+    if not artwork_url:
+        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(artwork_url)
+            response.raise_for_status()
+            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as exc:
+        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        return None
+
+    W, H = 1600, 900
+    split_x = 690
+    art = ImageEnhance.Color(art).enhance(1.08)
+    art = ImageEnhance.Contrast(art).enhance(1.04)
+
+    # Left: full-height poster artwork, cropped to fill without stretching.
+    left_art = ImageOps.fit(
+        art, (split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
+
+    # Right: same anime artwork, blurred and washed out under a translucent light panel.
+    right_art = ImageOps.fit(
+        art, (W - split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.35),
+    ).filter(ImageFilter.GaussianBlur(16))
+    right_art = ImageEnhance.Brightness(right_art).enhance(1.8)
+    right_art = ImageEnhance.Color(right_art).enhance(0.45)
+
+    canvas = Image.new("RGB", (W, H), (245, 246, 250))
+    canvas.paste(left_art, (0, 0))
+    canvas.paste(right_art, (split_x, 0))
+    overlay = Image.new("RGBA", (W - split_x, H), (250, 250, 253, 222))
+    canvas.paste(overlay, (split_x, 0), overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    regular_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    bold_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
+    def font(size, bold=False):
+        for path in (bold_candidates if bold else regular_candidates):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def fit_line(text, fnt, max_width):
+        text = str(text)
+        while text and draw.textbbox((0, 0), text, font=fnt)[2] > max_width:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def wrapped(text, fnt, max_width, max_lines):
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > sum(len(x.split()) for x in lines):
+            lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
+        return lines
+
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    # Left poster branding and title overlay.
+    left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
+    left_draw = ImageDraw.Draw(left_overlay)
+    for y in range(560, H):
+        alpha = int(205 * ((y - 560) / (H - 560)))
+        left_draw.line((0, y, split_x, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, 0), left_overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
+    draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
+    draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23, True), fill=(255,220,70))
+
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrap_complete(str(title), title_font, right_w)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrap_complete(str(title), title_font, right_w)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
+
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
+
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
+
+    # Watch button.
+    button_y = min(650, max(sy + 18, pill_y + 145))
+    draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
+    draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
+    draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
+    draw.ellipse((rx+340, button_y+2, rx+416, button_y+78), outline=(75,80,92), width=2)
+    draw.text((rx+363, button_y+19), "☆", font=font(38), fill=(20,24,34))
+
+    # Metadata row at the bottom.
+    line_y = 770
+    draw.line((rx, line_y, W-58, line_y), fill=(130,135,145), width=2)
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Not listed"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    metadata = [
+        ("YEAR", str(year)),
+        ("STUDIO", str(studio)),
+        ("GENRES", genres),
+        ("STATUS", status),
+    ]
+    col_w = right_w // 4
+    for i, (label, value) in enumerate(metadata):
+        x = rx + i * col_w
+        draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
+        draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
+    return output_path
+
+
 async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
@@ -5348,7 +5995,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -6125,6 +6772,237 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+    """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
+    import io
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
+
+    data = anime_info.adata or {}
+    titles = data.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or anime_name
+
+    def clean_value(value, default=""):
+        if isinstance(value, list):
+            value = value[0] if value else default
+        return str(value or default).strip()
+
+    season = clean_value(anime_info.pdata.get("anime_season"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    try:
+        season = str(int(season))
+    except Exception:
+        pass
+    try:
+        episode = str(int(episode)).zfill(2)
+    except Exception:
+        pass
+
+    cover_data = data.get("coverImage") or {}
+    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
+    banner_url = data.get("bannerImage")
+    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
+    artwork_url = cover_url or banner_url
+    if not artwork_url:
+        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(artwork_url)
+            response.raise_for_status()
+            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as exc:
+        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        return None
+
+    W, H = 1600, 900
+    split_x = 690
+    art = ImageEnhance.Color(art).enhance(1.08)
+    art = ImageEnhance.Contrast(art).enhance(1.04)
+
+    # Left: full-height poster artwork, cropped to fill without stretching.
+    left_art = ImageOps.fit(
+        art, (split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
+
+    # Right: same anime artwork, blurred and washed out under a translucent light panel.
+    right_art = ImageOps.fit(
+        art, (W - split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.35),
+    ).filter(ImageFilter.GaussianBlur(16))
+    right_art = ImageEnhance.Brightness(right_art).enhance(1.8)
+    right_art = ImageEnhance.Color(right_art).enhance(0.45)
+
+    canvas = Image.new("RGB", (W, H), (245, 246, 250))
+    canvas.paste(left_art, (0, 0))
+    canvas.paste(right_art, (split_x, 0))
+    overlay = Image.new("RGBA", (W - split_x, H), (250, 250, 253, 222))
+    canvas.paste(overlay, (split_x, 0), overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    regular_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    bold_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
+    def font(size, bold=False):
+        for path in (bold_candidates if bold else regular_candidates):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def fit_line(text, fnt, max_width):
+        text = str(text)
+        while text and draw.textbbox((0, 0), text, font=fnt)[2] > max_width:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def wrapped(text, fnt, max_width, max_lines):
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > sum(len(x.split()) for x in lines):
+            lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
+        return lines
+
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    # Left poster branding and title overlay.
+    left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
+    left_draw = ImageDraw.Draw(left_overlay)
+    for y in range(560, H):
+        alpha = int(205 * ((y - 560) / (H - 560)))
+        left_draw.line((0, y, split_x, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, 0), left_overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
+    draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
+    draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23, True), fill=(255,220,70))
+
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrap_complete(str(title), title_font, right_w)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrap_complete(str(title), title_font, right_w)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
+
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
+
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
+
+    # Watch button.
+    button_y = min(650, max(sy + 18, pill_y + 145))
+    draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
+    draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
+    draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
+    draw.ellipse((rx+340, button_y+2, rx+416, button_y+78), outline=(75,80,92), width=2)
+    draw.text((rx+363, button_y+19), "☆", font=font(38), fill=(20,24,34))
+
+    # Metadata row at the bottom.
+    line_y = 770
+    draw.line((rx, line_y, W-58, line_y), fill=(130,135,145), width=2)
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Not listed"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    metadata = [
+        ("YEAR", str(year)),
+        ("STUDIO", str(studio)),
+        ("GENRES", genres),
+        ("STATUS", status),
+    ]
+    col_w = right_w // 4
+    for i, (label, value) in enumerate(metadata):
+        x = rx + i * col_w
+        draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
+        draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
+    return output_path
+
+
 async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
@@ -6241,7 +7119,7 @@ async def get_animes(name, torrent, force=False):
                 await rep.report(f"Error applying font changer: {e}", "warning")
             
             try:
-                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
@@ -7184,28 +8062,14 @@ async def fetch_animes():
                         await asleep(2)
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
-                        # Pass the resolved destination through the parameter
-                        # get_animes actually supports. Mapped releases go to their
-                        # /addanime channel; unmapped releases explicitly go to Main.
                         result = await get_animes(
-                            title,
-                            link,
-                            destination_channel=(
-                                Var.MAIN_CHANNEL if route_to_main else int(selected_channel)
-                            ),
+                            title, link,
+                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None,
+                            mapped_channel=None if route_to_main else selected_channel
                         )
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
                         retry_after.pop(link, None)
-                        if result == "uploaded":
-                            global AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
-                            AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL = time.monotonic() + 30 * 60
-                            await rep.report(
-                                "Scheduled ongoing episode uploaded. Holding /uploadchannel for a 30-minute "
-                                "quiet window; any newly detected release will upload first and restart this window.",
-                                "info",
-                                log=False,
-                            )
                         await rep.report(
                             f"Scheduled anime processed: {scheduled_title} | {title}",
                             "success",
@@ -7454,6 +8318,237 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+    """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
+    import io
+    import textwrap
+    from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter, ImageEnhance
+
+    data = anime_info.adata or {}
+    titles = data.get("title") or {}
+    title = titles.get("english") or titles.get("romaji") or anime_name
+
+    def clean_value(value, default=""):
+        if isinstance(value, list):
+            value = value[0] if value else default
+        return str(value or default).strip()
+
+    season = clean_value(anime_info.pdata.get("anime_season"), "01")
+    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    try:
+        season = str(int(season))
+    except Exception:
+        pass
+    try:
+        episode = str(int(episode)).zfill(2)
+    except Exception:
+        pass
+
+    cover_data = data.get("coverImage") or {}
+    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
+    banner_url = data.get("bannerImage")
+    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
+    artwork_url = cover_url or banner_url
+    if not artwork_url:
+        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+        return None
+
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            response = await client.get(artwork_url)
+            response.raise_for_status()
+            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+    except Exception as exc:
+        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        return None
+
+    W, H = 1600, 900
+    split_x = 690
+    art = ImageEnhance.Color(art).enhance(1.08)
+    art = ImageEnhance.Contrast(art).enhance(1.04)
+
+    # Left: full-height poster artwork, cropped to fill without stretching.
+    left_art = ImageOps.fit(
+        art, (split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.45),
+    )
+
+    # Right: same anime artwork, blurred and washed out under a translucent light panel.
+    right_art = ImageOps.fit(
+        art, (W - split_x, H), method=Image.Resampling.LANCZOS,
+        centering=(0.5, 0.35),
+    ).filter(ImageFilter.GaussianBlur(16))
+    right_art = ImageEnhance.Brightness(right_art).enhance(1.8)
+    right_art = ImageEnhance.Color(right_art).enhance(0.45)
+
+    canvas = Image.new("RGB", (W, H), (245, 246, 250))
+    canvas.paste(left_art, (0, 0))
+    canvas.paste(right_art, (split_x, 0))
+    overlay = Image.new("RGBA", (W - split_x, H), (250, 250, 253, 222))
+    canvas.paste(overlay, (split_x, 0), overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    regular_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
+    bold_candidates = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    ]
+    def font(size, bold=False):
+        for path in (bold_candidates if bold else regular_candidates):
+            try:
+                return ImageFont.truetype(path, size)
+            except Exception:
+                continue
+        return ImageFont.load_default()
+
+    def fit_line(text, fnt, max_width):
+        text = str(text)
+        while text and draw.textbbox((0, 0), text, font=fnt)[2] > max_width:
+            text = text[:-2].rstrip() + "…"
+        return text
+
+    def wrapped(text, fnt, max_width, max_lines):
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+            if len(lines) >= max_lines:
+                break
+        if current and len(lines) < max_lines:
+            lines.append(current)
+        if len(lines) == max_lines and len(words) > sum(len(x.split()) for x in lines):
+            lines[-1] = fit_line(lines[-1] + "…", fnt, max_width)
+        return lines
+
+    def wrap_complete(text, fnt, max_width):
+        """Wrap every title word; never drop the tail of a long AniList title."""
+        words = re.sub(r"\\s+", " ", str(text or "")).split()
+        lines, current = [], ""
+        for word in words:
+            candidate = (current + " " + word).strip()
+            if draw.textbbox((0, 0), candidate, font=fnt)[2] <= max_width:
+                current = candidate
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines
+
+    # Left poster branding and title overlay.
+    left_overlay = Image.new("RGBA", (split_x, H), (0, 0, 0, 0))
+    left_draw = ImageDraw.Draw(left_overlay)
+    for y in range(560, H):
+        alpha = int(205 * ((y - 560) / (H - 560)))
+        left_draw.line((0, y, split_x, y), fill=(0, 0, 0, alpha))
+    canvas.paste(left_overlay, (0, 0), left_overlay)
+    draw = ImageDraw.Draw(canvas)
+
+    draw.rounded_rectangle((34, 30, 330, 90), radius=15, fill=(8, 12, 22), outline=(255,255,255), width=2)
+    draw.text((55, 45), "ANIME SOUL", font=font(29, True), fill=(255,255,255))
+    draw.text((235, 51), "/ STREAM", font=font(16, True), fill=(235,55,70))
+    # Show the complete AniList title across lines instead of truncating it.
+    left_title_font = font(38, True)
+    left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    if len(left_title_lines) == 3:
+        left_title_font = font(32, True)
+        left_title_lines = wrap_complete(str(title), left_title_font, split_x - 84)
+    left_title_y = 720 if len(left_title_lines) <= 2 else 690
+    for title_line in left_title_lines:
+        draw.text((42, left_title_y), title_line, font=left_title_font,
+                  fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
+        left_title_y += left_title_font.size + 8
+    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+              font=font(23, True), fill=(255,220,70))
+
+    # Right-side streaming dashboard header and content geometry.
+    rx = split_x + 58
+    right_w = W - rx - 58
+    draw.text((rx, 40), "ANIME SOUL", font=font(25, True), fill=(15,18,27))
+    draw.text((rx+210, 45), "/ STREAM", font=font(18), fill=(210,35,55))
+    nav = "HOME     ANIME     SCHEDULE     LIBRARY"
+    nav_font = font(17, True)
+    nav_width = draw.textbbox((0,0), nav, font=nav_font)[2]
+    if nav_width < right_w:
+        draw.text((W-58-nav_width, 48), nav, font=nav_font, fill=(35,38,48))
+
+    # Wrap the complete AniList title instead of cutting it off with an ellipsis.
+    title_font = font(50, True)
+    title_lines = wrap_complete(str(title), title_font, right_w)
+    if len(title_lines) == 3:
+        title_font = font(42, True)
+        title_lines = wrap_complete(str(title), title_font, right_w)
+    title_y = 150
+    for title_line in title_lines:
+        draw.text((rx, title_y), title_line, font=title_font, fill=(8,10,18))
+        title_y += title_font.size + 10
+
+    rule_y = title_y + 8
+    draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
+    pill_y = rule_y + 32
+    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
+
+    # Place the AniList synopsis below the variable-height title block.
+    synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
+    synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+    syn_font = font(19)
+    sy = pill_y + 82
+    synopsis_lines = max(2, min(6, (735 - sy) // 29))
+    for line in wrapped(synopsis, syn_font, right_w, synopsis_lines):
+        draw.text((rx, sy), line, font=syn_font, fill=(35,38,48))
+        sy += 29
+
+    # Watch button.
+    button_y = min(650, max(sy + 18, pill_y + 145))
+    draw.rounded_rectangle((rx, button_y, rx+310, button_y+78), radius=38, fill=(12,14,20))
+    draw.polygon([(rx+38,button_y+24),(rx+38,button_y+54),(rx+64,button_y+39)], fill=(255,255,255))
+    draw.text((rx+83, button_y+22), "WATCH NOW", font=font(25, True), fill=(255,255,255))
+    draw.ellipse((rx+340, button_y+2, rx+416, button_y+78), outline=(75,80,92), width=2)
+    draw.text((rx+363, button_y+19), "☆", font=font(38), fill=(20,24,34))
+
+    # Metadata row at the bottom.
+    line_y = 770
+    draw.line((rx, line_y, W-58, line_y), fill=(130,135,145), width=2)
+    studio_nodes = (data.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "Not listed"
+    year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
+    genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
+    status = str(data.get("status") or "—").replace("_", " ").title()
+    metadata = [
+        ("YEAR", str(year)),
+        ("STUDIO", str(studio)),
+        ("GENRES", genres),
+        ("STATUS", status),
+    ]
+    col_w = right_w // 4
+    for i, (label, value) in enumerate(metadata):
+        x = rx + i * col_w
+        draw.text((x, 795), label, font=font(14, True), fill=(100,105,115))
+        draw.text((x, 823), fit_line(value, font(17, True), col_w-14), font=font(17, True), fill=(15,18,27))
+
+    os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+    canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
+    return output_path
+
+
 async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
     # Manual selected-channel batches can hold automatic processing while active.
     mode = await db.get_mode()
@@ -7587,7 +8682,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 photo_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
             
             try:
-                poster_path = f"thumbs/anime_soul_v2_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
+                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
                 photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
             except Exception as poster_error:
                 await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")

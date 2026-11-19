@@ -4,8 +4,7 @@ from time import time
 from os import path as ospath
 from aiofiles import open as aiopen
 from aiofiles.os import remove as aioremove, rename as aiorename
-from shlex import split as ssplit, quote as shell_quote
-import uuid
+from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
 import asyncio
 import re
@@ -37,8 +36,7 @@ quality_settings = {
 }
 
 class FFEncoder:
-    def __init__(self, message, path, name, qual, is_movie=False, force_default=False):
-        self.force_default = bool(force_default)
+    def __init__(self, message, path, name, qual, is_movie=False):
         self.__proc = None
         self.is_cancelled = False
         self.message = message
@@ -54,17 +52,15 @@ class FFEncoder:
         }
         self.dl_path = path
         self.__total_time = None
-        self.__active_input_path = None
-        self.__temp_token = uuid.uuid4().hex[:12]
         self.out_path = ospath.join("encode", name)
-        self.__prog_file = ospath.join("encode", f"prog_{self.__temp_token}.txt")
+        self.__prog_file = 'prog.txt'
         self.__start_time = time()
         self.editor = TextEditor(name)
         self.pdata = self.editor.pdata
         self.is_movie = is_movie
 
     async def progress(self):
-        self.__total_time = await mediainfo(self.__active_input_path or self.dl_path, get_duration=True)
+        self.__total_time = await mediainfo(self.dl_path, get_duration=True)
         try:
             self.__total_time = float(self.__total_time)
         except (ValueError, TypeError):
@@ -127,29 +123,6 @@ class FFEncoder:
 
     async def get_ffmpeg_command(self, dl_npath, out_npath):
         try:
-            if self.force_default:
-                LOGS.warning(
-                    f"Using safe stream-mapped FFmpeg profile for {self.__name} ({self.__qual}p)."
-                )
-                # Explicit stream mapping avoids Matroska font attachments/data
-                # streams with unknown codec parameters from a bare "-map 0".
-                resolution = self.resolution_map.get(self.__qual, "1920x1080")
-                crf = {"1080": 28, "720": 29, "480": 30, "HDRi": 30}.get(self.__qual, 30)
-                audio_bitrate = {"1080": "128k", "720": "96k", "480": "80k", "HDRi": "96k"}.get(self.__qual, "96k")
-                return (
-                    f"ffmpeg -hide_banner -loglevel warning -analyzeduration 200M -probesize 200M "
-                    f"-ignore_unknown -filter_threads 1 -filter_complex_threads 1 "
-                    f"-i {shell_quote(dl_npath)} "
-                    # Explicitly map playable streams only. Matroska font attachments,
-                    # data streams and unknown codec streams must never be fed to the
-                    # output muxer; this is the safe retry path for mixed MKV releases.
-                    f"-map 0:v:0 -map 0:a? -map 0:s? -map_metadata 0 -map_chapters 0 -dn "
-                    f"-c:v libx264 -preset veryfast -s {resolution} -pix_fmt yuv420p -crf {crf} "
-                    f"-c:a aac -b:a {audio_bitrate} -c:s copy "
-                    f"-max_muxing_queue_size 4096 -max_interleave_delta 0 -threads 1 "
-                    f"-progress {shell_quote(self.__prog_file)} -nostats "
-                    f"{shell_quote(out_npath)} -y"
-                )
             anime_name = self.pdata.get('title', '').strip() if self.pdata else None
             if not anime_name:
                 match = findall(r'\] (.+?) [-–] \d+', self.dl_path)
@@ -372,12 +345,9 @@ class FFEncoder:
             LOGS.info("Progress Temp Generated !")
             pass
 
-        import os
-        os.makedirs("encode", exist_ok=True)
-        dl_npath = ospath.join("encode", f"ffanimeadvin_{self.__temp_token}.mkv")
-        out_npath = ospath.join("encode", f"ffanimeadvout_{self.__temp_token}.mkv")
+        dl_npath = ospath.join("encode", "ffanimeadvin.mkv")
+        out_npath = ospath.join("encode", "ffanimeadvout.mkv")
         await aiorename(self.dl_path, dl_npath)
-        self.__active_input_path = dl_npath
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
 
@@ -423,19 +393,6 @@ class FFEncoder:
                 ffcode = ffcode.replace(
                     out_npath, f"-threads 1 {out_npath}", 1
                 )
-        # Resolve the bundled FFmpeg executable installed by imageio-ffmpeg.
-        # This avoids relying on system packages/buildpacks on Heroku.
-        try:
-            import imageio_ffmpeg
-            bundled_ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-            if ffcode and ffcode.startswith("ffmpeg "):
-                ffcode = ffcode.replace("ffmpeg ", f"\"{bundled_ffmpeg}\" ", 1)
-            elif ffcode and ffcode.startswith("ffmpeg\\t"):
-                ffcode = ffcode.replace("ffmpeg", f"\"{bundled_ffmpeg}\"", 1)
-            LOGS.info("Resolved bundled FFmpeg executable: %s", bundled_ffmpeg)
-        except Exception as ffmpeg_resolve_error:
-            LOGS.error("Bundled FFmpeg resolution failed: %s", ffmpeg_resolve_error)
-            await rep.report("Bundled FFmpeg binary could not be resolved; install imageio-ffmpeg in requirements.", "error")
         LOGS.info(f'Using FFmpeg command: {ffcode}')
         if not ffcode:
             LOGS.error("No FFmpeg command generated")
@@ -498,7 +455,7 @@ class FFEncoder:
             stderr_text = stderr_output.decode("utf-8", errors="replace")
         else:
             stderr_text = str(stderr_output or "")
-        stderr_tail = "\n".join(stderr_text.splitlines()[-35:]).strip()
+        stderr_tail = "\\n".join(stderr_text.splitlines()[-35:]).strip()
 
         try:
             ffpids_cache.remove(proc_pid)
@@ -506,11 +463,6 @@ class FFEncoder:
             pass
 
         await aiorename(dl_npath, self.dl_path)
-        self.__active_input_path = None
-
-        if return_code == 0 and (not ospath.exists(out_npath) or ospath.getsize(out_npath) <= 0):
-            return_code = 1
-            stderr_tail = (stderr_tail + "\nFFmpeg returned success but created no usable output file.").strip()
 
         if self.is_cancelled:
             LOGS.info("Encoding was cancelled.")
@@ -519,43 +471,21 @@ class FFEncoder:
 
         if return_code == 0:
             if ospath.exists(out_npath):
-                if ospath.exists(self.out_path):
-                    await aioremove(self.out_path)
                 await aiorename(out_npath, self.out_path)
-            if ospath.exists(self.__prog_file):
-                await aioremove(self.__prog_file)
             LOGS.info(f"Encoding successful! Output file: {self.out_path}")
             return self.out_path
         else:
-            # Retry custom-command failures once with safe stream mapping.
-            if not self.force_default and not self.is_cancelled and return_code != 0:
-                if ospath.exists(out_npath):
-                    await aioremove(out_npath)
-                self.force_default = True
-                await rep.report(
-                    f"Custom FFmpeg command failed for {self.__name} ({self.__qual}p); "
-                    "retrying once with explicit video/audio/subtitle stream mapping.",
-                    "warning",
-                )
-                return await self.start_encode()
-            if ospath.exists(out_npath):
-                await aioremove(out_npath)
-            if ospath.exists(self.__prog_file):
-                await aioremove(self.__prog_file)
-            error_message = (
-                f"FFmpeg was terminated by SIGTERM (return code {return_code})"
-                if return_code == -15 else f"FFmpeg exited with return code {return_code}"
-            )
+            error_message = f"FFmpeg exited with return code {return_code}"
             if stderr_tail:
                 # Keep reports readable while preserving the useful final diagnostics.
                 diagnostic = stderr_tail[-3500:]
                 LOGS.error(
                     f"Encoding failed for {self.__name} ({self.__qual}p): "
-                    f"{error_message}\n{diagnostic}"
+                    f"{error_message}\\n{diagnostic}"
                 )
                 await rep.report(
                     f"{self.__qual}p encoding failed for {self.__name}. "
-                    f"{error_message}\n<pre>{diagnostic}</pre>",
+                    f"{error_message}\\n<pre>{diagnostic}</pre>",
                     "error",
                 )
             else:

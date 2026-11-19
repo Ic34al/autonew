@@ -15,7 +15,6 @@ from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
 from bot.core.auto_animes import fetch_animes
-from bot.modules.uploadchannel import resume_archive_batches
 
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
@@ -154,20 +153,6 @@ async def main():
         # fail part-way through startup. The finally block must still stop it.
         bot_start_attempted = True
         await bot.start()
-        # Deployment fingerprint and live token identity diagnostics.
-        # This makes stale Heroku releases/incorrect app branches visible without exposing tokens.
-        release_commit = environ.get("HEROKU_SLUG_COMMIT", "unknown")
-        release_version = environ.get("HEROKU_RELEASE_VERSION", "unknown")
-        live_bot = await bot.get_me()
-        live_username = str(getattr(live_bot, "username", "") or "").strip().lstrip("@")
-        configured_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
-        share_username = str(getattr(Var, "FILE_SHARE_BOT_USERNAME", "") or "").strip().lstrip("@")
-        LOGS.info(
-            "DEPLOYMENT_DIAGNOSTICS release_commit=%s release_version=%s "
-            "token_bot=@%s configured_bot_username=@%s file_share_username=@%s",
-            release_commit, release_version, live_username or "unknown",
-            configured_username or "unset", share_username or "unset",
-        )
         await restart()
         
         LOGS.info("Starting tasks...")
@@ -177,7 +162,6 @@ async def main():
         tasks = [
             create_task(queue_loop()),
             create_task(fetch_animes()),
-            create_task(resume_archive_batches()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')

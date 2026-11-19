@@ -43,58 +43,23 @@ def new_task(func):
         return bot_loop.create_task(func(*args, **kwargs))
     return wrapper
 
-async def _fetch_feed(link):
-    """Fetch and parse an RSS/Atom feed asynchronously with bounded retries."""
-    import asyncio
-    import aiohttp
-
-    timeout = aiohttp.ClientTimeout(total=25, connect=10, sock_read=15)
-    headers = {"User-Agent": "AutoAnime-RSS-Reader/1.0"}
-    last_error = None
-
-    for attempt in range(3):
-        try:
-            async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
-                async with session.get(link, allow_redirects=True) as response:
-                    if response.status >= 400:
-                        raise aiohttp.ClientResponseError(
-                            response.request_info, response.history,
-                            status=response.status, message=f"Feed HTTP {response.status}"
-                        )
-                    payload = await response.read()
-            parsed = feedparse(payload)
-            if getattr(parsed, "bozo", False) and not parsed.entries:
-                raise ValueError(f"Feed parsing failed: {getattr(parsed, 'bozo_exception', 'invalid feed')}")
-            return parsed
-        except (aiohttp.ClientError, asyncio.TimeoutError, OSError, ValueError) as exc:
-            last_error = exc
-            if attempt < 2:
-                await asyncio.sleep(1.5 * (attempt + 1))
-
-    raise RuntimeError(f"RSS fetch failed after 3 attempts: {last_error}") from last_error
-
-
 async def getfeeds(link):
-    """Return feed entries oldest first; fail visibly on invalid/unreachable feeds."""
+    """Return every current RSS entry, oldest first; callers can safely drain feed backlogs."""
     try:
-        feed = await _fetch_feed(link)
-        if getattr(feed, "bozo", False):
-            LOGS.warning(f"RSS feed had recoverable parse warnings: {link}: {getattr(feed, 'bozo_exception', '')}")
+        feed = await sync_to_async(feedparse, link)
         return list(reversed(feed.entries))
     except Exception:
-        LOGS.error(f"RSS feed read failed for {link}: {format_exc()}")
+        LOGS.error(format_exc())
         return []
 
 async def getfeed(link, index=0):
     try:
-        feed = await _fetch_feed(link)
-        if getattr(feed, "bozo", False):
-            LOGS.warning(f"RSS feed had recoverable parse warnings: {link}: {getattr(feed, 'bozo_exception', '')}")
+        feed = await sync_to_async(feedparse, link)
         return feed.entries[index]
     except IndexError:
         return None
-    except Exception:
-        LOGS.error(f"RSS feed read failed for {link}: {format_exc()}")
+    except Exception as e:
+        LOGS.error(format_exc())
         return None
 
 @handle_logs
