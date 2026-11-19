@@ -845,7 +845,15 @@ async def resume_archive_batches():
     recovery_task = asyncio.current_task()
     if recovery_task:
         UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
-    pending = await db.get_in_progress_anime_archive_batches()
+    try:
+        pending = await db.get_in_progress_anime_archive_batches()
+    except BaseException:
+        # A database error or cancellation during the initial recovery query
+        # must not leave the recovery guard permanently set in this worker.
+        ARCHIVE_RESUME_STARTED = False
+        if recovery_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
+        raise
     if not pending:
         ARCHIVE_RESUME_STARTED = False
         if recovery_task:
