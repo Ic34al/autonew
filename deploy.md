@@ -7,14 +7,14 @@ This document explains how to deploy Auto-Anime Bot to common platforms (Heroku,
 1. Copy `config.env` into a safe file and populate required values (see list below).
 2. Install system dependencies on your host:
 
-```bash
+```
 sudo apt update
 sudo apt install -y ffmpeg mediainfo python3-venv
 ```
 
 3. Create a Python virtual environment and install the requirements (for local runs):
 
-```bash
+```
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
@@ -30,7 +30,7 @@ pip install -r requirements.txt
 - MONGO_URI — MongoDB connection string (required)
 - MONGO_NAME — DB name (optional)
 - USER_SESSION — optional Pyrogram user session string (use `session_gen.py` to get one)
-- MAIN_CHANNEL — main post channel id (e.g., -100...) 
+- MAIN_CHANNEL — main post channel id (e.g., -100...)
 - BACKUP_CHANNEL — backup channel id (optional)
 - LOG_CHANNEL — channel id where bot sends logs (optional)
 - FILE_STORE — channel id used as file storage (optional)
@@ -50,14 +50,14 @@ Keep secrets out of version control.
 
 - Generate a Pyrogram user session (if needed):
 
-```bash
+```
 python3 session_gen.py
 # paste the result into config.env as USER_SESSION
 ```
 
 - Generate Google Drive token (interactive OAuth):
 
-```bash
+```
 python3 auth.py
 # creates token.pickle locally
 ```
@@ -69,7 +69,7 @@ Upload `token.pickle` to your host only if you trust the environment.
 1. Ensure `config.env` is present and populated.
 2. Activate venv and run:
 
-```bash
+```
 python3 -m bot
 ```
 
@@ -80,14 +80,11 @@ Monitor `log.txt` for startup messages.
 1. Create a new Heroku app.
 2. Add the repository (or use the Deploy button on GitHub).
 3. Set config vars (`Settings` → `Reveal Config Vars`) using the env variable names above.
-4. Add a `Procfile` (if not present) with:
-
-```
-web: python -m bot
-```
-
-5. Set buildpacks / stacks as needed. Heroku's default Python buildpack works.
-6. Deploy and open the logs to ensure the bot starts. Set a worker dyno or put bot in `web` dyno to keep it running.
+4. The root `Procfile` starts the worker through `start.sh`, which checks FFmpeg before starting the bot.
+5. Configure buildpacks in this order:
+   - `heroku-community/apt` (first)
+   - `heroku/python` (last)
+6. Deploy and inspect logs. Do not restart the worker repeatedly if the startup FFmpeg check fails; fix the dependency/buildpack issue and redeploy.
 
 Notes:
 - If `GDRIVE_UPLOAD` is used with OAuth (not service account), you must create `token.pickle` before deploying and add it to the app (use config or a secrets store).
@@ -114,7 +111,7 @@ services:
     volumes:
       - mongo_data:/data/db
     ports:
-      - 27017:27017
+      - 27017
 
   bot:
     build: .
@@ -139,7 +136,7 @@ volumes:
 
 Run:
 
-```bash
+```
 docker-compose up --build
 ```
 
@@ -156,9 +153,11 @@ docker-compose up --build
 
 ### FFmpeg on Heroku (required for encoded anime qualities)
 
-The repository includes an `Aptfile` with `ffmpeg` and an `app.json` buildpack declaration for new Cedar apps. **Existing Heroku apps do not have their buildpacks changed by app.json.** For an existing Cedar app, configure the buildpacks in this order:
+The root `Aptfile` installs both `ffmpeg` and `libpulse0`. The worker runs through `start.sh`, which locates the nested PulseAudio runtime library, adds its directory to `LD_LIBRARY_PATH`, and verifies `ffmpeg -version` and linked dependencies before starting Python. This catches a broken FFmpeg deployment at startup rather than after an anime download begins encoding.
+
+**Existing Heroku apps do not have their buildpacks changed by `app.json`.** Configure the buildpacks in this order:
 
 1. `heroku-community/apt` (first)
 2. `heroku/python` (last)
 
-Then rebuild/redeploy. The Apt buildpack reads the root `Aptfile` and installs FFmpeg. Verify after release with `heroku run ffmpeg -version --app YOUR_APP_NAME` or check the startup logs. If the app uses Fir/Cloud Native Buildpacks, use a supported Debian-packages CNB instead of the classic Apt buildpack.
+Then rebuild/redeploy. Verify the release logs include `[STARTUP CHECK] FFmpeg runtime dependencies are resolved.` If the check fails, it prints the missing library and exits so the broken worker does not repeatedly start encoding jobs. If the app uses Fir/Cloud Native Buildpacks, use a supported Debian-packages CNB instead of the classic Apt buildpack.
