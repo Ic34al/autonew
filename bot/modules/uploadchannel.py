@@ -725,6 +725,14 @@ async def uploadchannel_callbacks(client, callback):
             # Older seasons first, then the currently airing season.
             for selected_media, destination_id in archive_jobs:
                 selected_title = _display_title(selected_media)
+                # Series card first, then priority sticker, then episode uploads.
+                info_post = await _publish_channel_anime_info(selected_media, destination_id)
+                if not info_post or not getattr(info_post, "id", None):
+                    raise RuntimeError(f"Series info card was not confirmed for {selected_title}; episodes were not started.")
+                await asyncio.sleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+                sticker_ok = await send_sticker_to_channel(destination_id, getattr(Var, "STICKER_ID", None))
+                if not sticker_ok:
+                    raise RuntimeError(f"Priority sticker failed after the info card for {selected_title}; episodes were not started.")
                 prequels = _prequel_seasons(selected_media)
                 season_jobs = [(index, item, int(item.get("episodes") or 0))
                                for index, item in enumerate(prequels, start=1)]
@@ -755,13 +763,7 @@ async def uploadchannel_callbacks(client, callback):
                     episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
-                    sticker_ok = await send_sticker_to_channel(
-                        destination_id, getattr(Var, "STICKER_ID", None)
-                    )
-                    if not sticker_ok:
-                        raise RuntimeError(
-                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
-                        )
+
                     if not available_episodes:
                         raise RuntimeError(
                             f"AniList has no released episode count for {season_title}; refusing to guess."
