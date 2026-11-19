@@ -8603,7 +8603,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False, force_standard_pipeline=False, announce_main=True):
     # Manual selected-channel batches can hold automatic processing while active.
     mode = await db.get_mode()
     if mode != "anime":
@@ -8634,7 +8634,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # Manual /search provides one exact selected torrent. The low-end auto mode
         # ignores that torrent and substitutes configured RSS_LOW_END feeds, so use
         # the standard selected-torrent pipeline for manual searches.
-        if upload_mode == "low_end" and not manual_search:
+        if upload_mode == "low_end" and not manual_search and not force_standard_pipeline:
             print(f"get_animes: calling process_low_end for {name}")
             return await process_low_end(
                 name, torrent, force=force,
@@ -8930,7 +8930,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                                     episode_post = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
                                 if not episode_post or not getattr(episode_post, "id", None):
                                     raise RuntimeError(f"Selected anime channel did not confirm post for {name}.")
-                                if defer_main_announcement:
+                                if defer_main_announcement or not announce_main:
                                     # /search batches publish one Main Channel post
                                     # only after every selected episode is uploaded.
                                     post_msg = episode_post
