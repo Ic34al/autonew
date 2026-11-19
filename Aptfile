@@ -1,3 +1,4 @@
 # System binaries and runtime libraries required by anime encoding and media processing
 ffmpeg
 libpulse0
+pulseaudio
