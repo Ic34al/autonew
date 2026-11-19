@@ -422,6 +422,14 @@ async def _publish_channel_anime_info(media, destination_id):
         raise RuntimeError(f"Series information card was not confirmed for {title} in {destination_id}.")
     if media_id:
         await db.set_anime_channel_info_post(media_id, destination_id, sent.id)
+    sticker_done = await db.get_anime_channel_info_sticker_sent(media_id, destination_id) if media_id else False
+    if not sticker_done:
+        await asyncio.sleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
+        sticker_ok = await send_sticker_to_channel(destination_id, getattr(Var, "STICKER_ID", None))
+        if not sticker_ok:
+            raise RuntimeError(f"Priority sticker failed after the info card for {title}; episodes were not started.")
+        if media_id:
+            await db.set_anime_channel_info_sticker_sent(media_id, destination_id)
     return sent
 
 async def _upload_single_episode(media, destination_id, season_number, episode_number):
