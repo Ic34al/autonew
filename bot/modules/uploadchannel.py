@@ -358,76 +358,31 @@ async def _find_episode_torrent(media, season_number, episode_number):
 
 
 async def _upload_single_episode(media, destination_id, season_number, episode_number):
-    """Download one RSS episode, encode four qualities, and publish four buttons."""
-    from bot import Var
+    """Publish one RSS episode through the standard ANIME SOUL four-quality pipeline."""
+    from bot.core.auto_animes import get_animes
+
     episode = await _find_episode_torrent(media, season_number, episode_number)
-    if not episode:
+    if not episode or not episode.get("link"):
         raise RuntimeError(
-            f"RSS source missing or ambiguous for Season {season_number} Episode {episode_number}; "
-            "stopping to avoid uploading the wrong episode."
+            f"RSS source missing for Season {season_number} Episode {episode_number}; "
+            "stopping rather than uploading the wrong episode."
         )
+
     title = _display_title(media)
-    safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{media.get('id')}_{season_number}_{episode_number}")
-    workdir = os.path.join("downloads", "uc_episode_" + safe)
-    os.makedirs(workdir, exist_ok=True)
-    downloaded = await TorDownloader(workdir).download(episode["link"])
-    if not downloaded or not os.path.exists(downloaded):
-        raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
-    video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
-    if len(video_files) != 1:
+    # Normalize the episode identity so TextEditor, resume checkpoints, captions,
+    # poster generation, and quality filenames all refer to the same episode.
+    episode_name = f"{title} S{int(season_number):02d}E{int(episode_number):02d}"
+    result = await get_animes(
+        episode_name,
+        episode["link"],
+        destination_channel=int(destination_id),
+        manual_search=True,
+    )
+    if result not in ("uploaded", "already_published"):
         raise RuntimeError(
-            f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
+            f"Standard uploader did not confirm {title} S{season_number:02d}E{episode_number:02d}: "
+            f"{result!r}"
         )
-    source = video_files[0]
-    info = TextEditor(title)
-    await info.load_info()
-    info.pdata["episode_number"] = str(episode_number).zfill(2)
-    info.pdata["audio_type"] = (
-        "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
-        else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
-        else "Sub"
-    )
-    quality_order = ("HDRi", "1080", "720", "480")
-    buttons = []
-    for quality in quality_order:
-        upload_name = await info.get_upname(quality)
-        quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
-        os.makedirs("encode", exist_ok=True)
-        shutil.copy2(source, quality_source)
-        encoded_path = await FFEncoder(
-            await bot.send_message(
-                Var.LOG_CHANNEL,
-                f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p",
-            ),
-            quality_source, upload_name, quality
-        ).start_encode()
-        if not encoded_path or not os.path.exists(encoded_path):
-            raise RuntimeError(f"Encoding failed for S{season_number}E{episode_number} at {quality}.")
-        uploaded = await TgUploader(await bot.send_message(
-            Var.LOG_CHANNEL,
-            f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p",
-        )).upload(encoded_path, quality)
-        if not uploaded:
-            raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at {quality}.")
-        token = hashlib.sha256(
-            f"{uploaded.id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
-        ).hexdigest()[:24]
-        await db.set_batch_file_link(token, [uploaded.id])
-        start_payload = f"getbatch-{token}"
-        url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
-        buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
-    caption = (
-        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\\n"
-        f"<b>Release:</b> {_escape(episode['title'])}\\n"
-        f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
-    )
-    await bot.send_message(
-        chat_id=destination_id,
-        text=caption,
-        reply_markup=InlineKeyboardMarkup([buttons]),
-        disable_web_page_preview=True,
-    )
-    shutil.rmtree(workdir, ignore_errors=True)
     return True
 
 
@@ -732,25 +687,6 @@ async def uploadchannel_callbacks(client, callback):
                     episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
-                    season_info = (
-                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
-                        f"<b>Season title:</b> {_escape(season_title)}\n"
-                        f"<b>Year:</b> {_escape(season_year)}\n"
-                        f"<b>Episodes:</b> {_escape(episode_total)}\n"
-                        f"<b>Format:</b> {_escape(season_format)}\n"
-                        f"<b>Status:</b> {_escape(season_status)}\n"
-                        f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
-                    )
-                    info_message = await bot.send_message(
-                        chat_id=destination_id,
-                        text=season_info,
-                        disable_web_page_preview=True,
-                    )
-                    if not info_message:
-                        raise RuntimeError(
-                            f"Could not publish Season {season_index} information for {selected_title}; "
-                            "the season batch was not started."
-                        )
                     sticker_ok = await send_sticker_to_channel(
                         destination_id, getattr(Var, "STICKER_ID", None)
                     )
