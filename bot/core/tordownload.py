@@ -39,7 +39,7 @@ class TorDownloader:
                 await asyncio.sleep(2)
         return None
 
-    async def _wait_for_completed_video(self, directory, torrent_task=None, timeout=7200, stable_seconds=120, no_progress_timeout=1800):
+    async def _wait_for_completed_video(self, directory, torrent_task=None, timeout=3600, stable_seconds=120, no_progress_timeout=600):
         """
         torrentp may return after the torrent is added rather than after the
         payload is complete. Never hand a growing/partial MKV to FFmpeg.
@@ -61,9 +61,9 @@ class TorDownloader:
                 if task_error:
                     raise task_error
             if now - started > timeout:
-                raise TimeoutError(f"Torrent download exceeded {timeout // 60} minutes.")
+                raise TimeoutError(f"Torrent download exceeded {timeout // 60} minutes without a completed video payload.")
             if now - last_progress > no_progress_timeout:
-                raise TimeoutError(f"Torrent download made no file-size progress for {no_progress_timeout // 60} minutes.")
+                raise TimeoutError(f"Torrent download made no file-size progress for {no_progress_timeout // 60} minutes. The torrent may have no active seeders/peers or torrentp may not be delivering payload.")
 
             videos = []
             for root, _, files in os.walk(directory):
