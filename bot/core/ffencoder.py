@@ -8,6 +8,7 @@ from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
 import asyncio
 import re
+import shutil
 from asyncio.subprocess import PIPE
 import datetime
 from bot import Var, bot_loop, ffpids_cache, LOGS, ani_cache
@@ -325,6 +326,15 @@ class FFEncoder:
             return ffargs['1080'].format(dl_npath, self.__prog_file, out_npath)
 
     async def start_encode(self):
+        # Fail before moving the source file if FFmpeg is unavailable.
+        # Aptfile/buildpack installation is the permanent deployment fix.
+        ffmpeg_binary = shutil.which("ffmpeg")
+        if not ffmpeg_binary:
+            error = "FFmpeg is missing from this dyno (exit 127). Install ffmpeg via the Heroku Apt buildpack and Aptfile, then rebuild/restart."
+            LOGS.error(error)
+            await rep.report(error, "error")
+            raise RuntimeError(error)
+
         if ani_cache.get('global_pause'):
             LOGS.info('Encoding skipped because /pause is active.')
             return None
