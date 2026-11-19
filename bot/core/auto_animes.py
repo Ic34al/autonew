@@ -8682,6 +8682,35 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             else await db.getAnimeDestinationPost(ani_id, ep_no, target_channel)
         )
         if existing_target_post:
+            # Recover an interrupted Main Channel join announcement without
+            # re-encoding or reposting the episode in its dedicated channel.
+            if (
+                target_channel != int(Var.MAIN_CHANNEL)
+                and announce_main
+                and not defer_main_announcement
+                and not await db.getAnimeMainPost(ani_id, ep_no)
+            ):
+                dedicated_message = await bot.get_messages(
+                    target_channel, message_ids=int(existing_target_post)
+                )
+                if dedicated_message and not getattr(dedicated_message, "empty", False):
+                    join_markup = await build_anime_watch_markup(target_channel)
+                    photo = (
+                        dedicated_message.photo.file_id
+                        if getattr(dedicated_message, "photo", None)
+                        else aniInfo.adata.get("poster_url")
+                    )
+                    recovered_main = await bot.send_photo(
+                        Var.MAIN_CHANNEL,
+                        photo=photo,
+                        caption=(getattr(dedicated_message, "caption", None) or f"<b>{name}</b>"),
+                        reply_markup=join_markup,
+                    )
+                    if not recovered_main or not getattr(recovered_main, "id", None):
+                        raise RuntimeError(
+                            "Dedicated episode exists, but Main Channel announcement recovery failed."
+                        )
+                    await db.saveAnimeMainPost(ani_id, ep_no, recovered_main.id)
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
@@ -8988,7 +9017,11 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     )
 
                 # Persist the Main Channel post ID immediately after send succeeds.
-                if destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
+                if (
+                    destination_channel is None
+                    or str(destination_channel) == str(Var.MAIN_CHANNEL)
+                    or (announce_main and not defer_main_announcement)
+                ):
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
