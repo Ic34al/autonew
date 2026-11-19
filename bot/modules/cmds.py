@@ -388,7 +388,7 @@ async def batch(client, message: Message):
 
     string = f"get-{f_msg_id * abs(Var.FILE_STORE)}-{s_msg_id * abs(Var.FILE_STORE)}"
     base64_string = await encode(string)
-    link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={base64_string}"
+    link = f"https://t.me/{Var.BOT_USERNAME}?start={base64_string}"
     await channel_message.reply_text(f"<blockquote><b>Here's your file link:</blockquote>\n<blockquote>{link}</blockquote></b>", quote=True, disable_web_page_preview=True)
 
 
@@ -408,7 +408,7 @@ async def link_generator(client, message: Message):
             continue
 
     base64_string = await encode(f"get-{msg_id * abs(Var.FILE_STORE)}")
-    link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={base64_string}"
+    link = f"https://t.me/{Var.BOT_USERNAME}?start={base64_string}"
     await channel_message.reply_text(f"<blockquote><b>Here's your file link:</blockquote>\n<blockquote>{link}</blockquote></b>", quote=True, disable_web_page_preview=True)
 
 @bot.on_message(filters.command("forcetask") & filters.user(Var.ADMINS))
@@ -3110,8 +3110,7 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
             return await status.edit_text("<b>Switch bot mode to anime before using /retry.</b>")
 
         upload_mode = await db.get_upload_mode()
-        # Retry always repairs the standard four-quality episode post.
-        required_qualities = tuple(Var.QUALS)
+        required_qualities = ("480", "720", "1080") if upload_mode == "low_end" else tuple(Var.QUALS)
 
         # Search the configured RSS source plus each quality feed so Sub and
         # Dual releases are both discoverable, regardless of upload mode.
@@ -3278,7 +3277,7 @@ async def run_selected_retry(client, status, target_date, queue):
     context_token = retry_cancel_event.set(cancel_event)
     try:
         upload_mode = await db.get_upload_mode()
-        required_qualities = tuple(Var.QUALS)
+        required_qualities = ("480", "720", "1080") if upload_mode == "low_end" else tuple(Var.QUALS)
         completed, failed = 0, []
         for index, (title, link) in enumerate(queue, start=1):
             if cancel_event.is_set():
@@ -3289,11 +3288,7 @@ async def run_selected_retry(client, status, target_date, queue):
                     f"<code>{title}</code>\n"
                     f"<i>Reusing saved quality checkpoints...</i>"
                 )
-                await get_animes(
-                    title, link, force=True,
-                    qualities_override=list(Var.QUALS),
-                    force_standard_pipeline=True,
-                )
+                await get_animes(title, link, force=True)
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 verify = TextEditor(title)
