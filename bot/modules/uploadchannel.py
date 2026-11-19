@@ -738,10 +738,6 @@ async def uploadchannel_callbacks(client, callback):
                 info_post = await _publish_channel_anime_info(selected_media, destination_id)
                 if not info_post or not getattr(info_post, "id", None):
                     raise RuntimeError(f"Series info card was not confirmed for {selected_title}; episodes were not started.")
-                await asyncio.sleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
-                sticker_ok = await send_sticker_to_channel(destination_id, getattr(Var, "STICKER_ID", None))
-                if not sticker_ok:
-                    raise RuntimeError(f"Priority sticker failed after the info card for {selected_title}; episodes were not started.")
                 prequels = _prequel_seasons(selected_media)
                 season_jobs = [(index, item, int(item.get("episodes") or 0))
                                for index, item in enumerate(prequels, start=1)]
