@@ -485,6 +485,18 @@ class MongoDB:
             upsert=True,
         )
 
+    async def get_anime_channel_info_sticker_sent(self, anime_id: int, channel_id: int):
+        key = f"{int(anime_id)}:{int(channel_id)}"
+        record = await self.__db.anime_channel_info_posts.find_one({"_id": key})
+        return bool((record or {}).get("sticker_sent", False))
+
+    async def set_anime_channel_info_sticker_sent(self, anime_id: int, channel_id: int):
+        key = f"{int(anime_id)}:{int(channel_id)}"
+        await self.__db.anime_channel_info_posts.update_one(
+            {"_id": key}, {"$set": {"sticker_sent": True, "updated_at": datetime.datetime.utcnow()}},
+            upsert=True,
+        )
+
     async def get_anime_archive_batch(self, anime_id: int, season_number: int, channel_id: int):
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         return await self.__db.anime_archive_batches.find_one({"_id": key})
