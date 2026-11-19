@@ -18,7 +18,7 @@ from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivi
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
-from bot.core.auto_animes import send_sticker_to_channel, process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_watch_markup
+from bot.core.auto_animes import send_sticker_to_channel, process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, find_video_files, build_anime_watch_markup, build_anime_soul_poster
 from bot.core.func_utils import getfeeds, encode
 from bot.core.tordownload import TorDownloader
 from bot.core.ffencoder import FFEncoder
@@ -356,6 +356,72 @@ async def _find_episode_torrent(media, season_number, episode_number):
             return {"title": title, "link": str(link)}
     return None
 
+
+async def _publish_channel_anime_info(media, destination_id):
+    """Publish the one-time ANIME SOUL series card before episode uploads."""
+    media_id = int(media.get("id") or 0)
+    if media_id:
+        existing = await db.get_anime_channel_info_post(media_id, destination_id)
+        if existing:
+            try:
+                message = await bot.get_messages(destination_id, message_ids=int(existing))
+                if message and not getattr(message, "empty", False):
+                    return message
+            except Exception:
+                pass  # Repair stale checkpoint by sending a fresh card.
+
+    title = _display_title(media)
+    titles = media.get("title") or {}
+    romaji = titles.get("romaji") or title
+    description = re.sub(r"<[^>]+>", " ", str(media.get("description") or ""))
+    description = re.sub(r"\\s+", " ", description).strip()
+    if len(description) > 700:
+        description = description[:697].rsplit(" ", 1)[0] + "..."
+    genres = ", ".join(media.get("genres") or []) or "N/A"
+    fmt = media.get("format") or media.get("type") or "N/A"
+    score = media.get("averageScore")
+    rating = f"{float(score) / 10:.1f}/10" if score else "N/A"
+    status = str(media.get("status") or "N/A").replace("_", " ")
+    start = media.get("startDate") or {}
+    first_aired = "-".join(str(start.get(k)).zfill(2) for k in ("year", "month", "day") if start.get(k)) or "N/A"
+    end = media.get("endDate") or {}
+    last_aired = "-".join(str(end.get(k)).zfill(2) for k in ("year", "month", "day") if end.get(k)) or ("Ongoing" if status.upper() == "RELEASING" else "N/A")
+    runtime = f"{int(media.get('duration'))} minutes" if media.get("duration") else "N/A"
+    episodes = str(media.get("episodes") or "Unknown")
+    studio_nodes = (media.get("studios") or {}).get("nodes") or []
+    studio = studio_nodes[0].get("name") if studio_nodes else "N/A"
+    caption = (
+        f"<blockquote><b>❝ {html.escape(title)} ❞</b> | <i>{html.escape(str(romaji))}</i></blockquote>\n\n"
+        f"<b>Genres:</b> {html.escape(genres)}\n"
+        f"<b>Type:</b> {html.escape(str(fmt))}\n"
+        f"<b>Average Rating:</b> {html.escape(rating)}\n"
+        f"<b>Status:</b> {html.escape(status)}\n"
+        f"<b>First aired:</b> {html.escape(first_aired)}\n"
+        f"<b>Last aired:</b> {html.escape(last_aired)}\n"
+        f"<b>Runtime:</b> {html.escape(runtime)}\n"
+        f"<b>No. of episodes:</b> {html.escape(episodes)}\n"
+        f"<b>Studio:</b> {html.escape(studio)}\n\n"
+        + (f"<blockquote expandable>▸ <b>Synopsis:</b> <i>{html.escape(description)}</i></blockquote>" if description else "")
+    )
+    poster_path = f"thumbs/uploadchannel_info_{media_id or hashlib.md5(title.encode()).hexdigest()}_{int(destination_id)}.jpg"
+    poster = None
+    try:
+        editor = TextEditor(title)
+        await editor.load_info()
+        poster = await build_anime_soul_poster(editor, title, poster_path)
+    except Exception as poster_error:
+        await rep.report(f"/uploadchannel info poster generation failed for {title}: {poster_error}", "warning", log=False)
+    if poster and os.path.exists(poster):
+        with open(poster, "rb") as photo_file:
+            sent = await bot.send_photo(destination_id, photo=photo_file, caption=caption)
+    else:
+        cover = (media.get("coverImage") or {}).get("extraLarge") or (media.get("coverImage") or {}).get("large")
+        sent = await bot.send_photo(destination_id, photo=cover, caption=caption) if cover else await bot.send_message(destination_id, caption)
+    if not sent or not getattr(sent, "id", None):
+        raise RuntimeError(f"Series information card was not confirmed for {title} in {destination_id}.")
+    if media_id:
+        await db.set_anime_channel_info_post(media_id, destination_id, sent.id)
+    return sent
 
 async def _upload_single_episode(media, destination_id, season_number, episode_number):
     """Publish one RSS episode through the standard ANIME SOUL four-quality pipeline."""
