@@ -334,7 +334,19 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 rf"(?i)(?:^|[\s._-])-\s*0*{episode}(?:$|[\s._-])",
                 rf"(?i)\[0*{episode}\](?:$|[\s._-])",
             )
-            if not any(re.search(pattern, title) for pattern in explicit_patterns):
+            explicit_episode = any(re.search(pattern, title) for pattern in explicit_patterns)
+            # Some releases use a bare episode number, e.g. "Anime 01 [1080p]".
+            # Accept it only as a standalone terminal release token, never as
+            # the season number itself.
+            bare_episode = re.search(
+                rf"(?i)(?:^|[\\s._-])0*{episode}(?=\\s*(?:\\[|\\(|$))",
+                title,
+            )
+            if bare_episode:
+                prefix = title[:bare_episode.start()].strip()
+                if re.search(r"(?i)\\bseason\\s*$|\\bS0*\\d*\\s*$", prefix):
+                    bare_episode = None
+            if not explicit_episode and not bare_episode:
                 continue
 
             detected_season = _season_number_from_release(title)
