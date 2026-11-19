@@ -495,6 +495,20 @@ class MongoDB:
             upsert=True,
         )
 
+    async def get_anime_archive_completed_episodes(self, anime_id: int, season_number: int, channel_id: int):
+        key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
+        record = await self.__db.anime_archive_batches.find_one({"_id": key})
+        return sorted({int(value) for value in (record or {}).get("completed_episodes", []) if str(value).isdigit()})
+
+    async def mark_anime_archive_episode_complete(self, anime_id: int, season_number: int, channel_id: int, episode_number: int):
+        key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
+        await self.__db.anime_archive_batches.update_one(
+            {"_id": key},
+            {"$addToSet": {"completed_episodes": int(episode_number)},
+             "$set": {"updated_at": datetime.datetime.utcnow()}},
+            upsert=True,
+        )
+
     async def get_selected_anime_channel(self, anime_name: str):
         key = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
         doc = await self.__db.selected_anime_channels.find_one({"_id": key, "enabled": True})
