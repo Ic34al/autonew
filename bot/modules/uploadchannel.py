@@ -315,6 +315,10 @@ async def _subsplease_torrent_link(entry):
     if magnet_match:
         return html.unescape(magnet_match.group(1).replace("&amp;", "&"))
 
+    nyaa_match = re.search(r"""href=["']([^"']*nyaa\.si/view/(\d+)[^"']*)["']""", page, re.I)
+    if nyaa_match:
+        return f"https://nyaa.si/download/{nyaa_match.group(2)}.torrent"
+
     torrent_match = re.search(r"""href=["']([^"']+\.torrent(?:\?[^"']*)?)["']""", page, re.I)
     if torrent_match:
         href = html.unescape(torrent_match.group(1))
