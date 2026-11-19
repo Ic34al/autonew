@@ -273,7 +273,8 @@ async def _find_episode_torrent(media, season_number, episode_number):
     """Find a verified exact episode torrent, including common plain-number release formats."""
     titles = media.get("title") or {}
     aliases = [_plain_title(titles.get(k)) for k in ("english", "romaji", "native") if titles.get(k)]
-    aliases = [a for a in aliases if a]
+    aliases.extend(_plain_title(value) for value in (media.get("synonyms") or []) if value)
+    aliases = list(dict.fromkeys(a for a in aliases if a))
     if not aliases:
         return None
 
@@ -291,6 +292,9 @@ async def _find_episode_torrent(media, season_number, episode_number):
             f'"{title}" {season}x{ep} 720p',
             f'"{title}" - {ep} 720p',
             f'"{title}" {ep} 720p',
+            f'{title} - {ep}',
+            f'{title} {ep}',
+            f'{title} Episode {episode}',
         ])
 
     feeds = [
@@ -416,10 +420,15 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         start_payload = f"getbatch-{token}"
         url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
         buttons.append(InlineKeyboardButton("HDRip" if quality == "HDRi" else f"{quality}p", url=url))
+    audio_label = {
+        "Sub": "Japanese [English Sub]",
+        "Dub": "English Dub",
+        "Dual": "Dual Japanese/English",
+    }.get(info.pdata.get("audio_type"), info.pdata.get("audio_type") or "Japanese [English Sub]")
     caption = (
         f"<b>{_escape(title)} Season {season_number} Episode {int(episode_number):02d}</b>\n"
         f"━━━━━━━━━━━━━━\n"
-        f"➜ <b>Audio:</b> {_escape(info.pdata.get('audio_type') or 'Japanese [English Sub]')}\n"
+        f"➜ <b>Audio:</b> {_escape(audio_label)}\n"
         f"➤ <b>Quality:</b> 480p, 720p, 1080p &amp; HDRip\n"
         f"➜ <b>Episode:</b> {int(episode_number):02d}\n"
         f"━━━━━━━━━━━━━━\n"
