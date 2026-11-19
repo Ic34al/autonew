@@ -61,7 +61,7 @@ class TorDownloader:
         except Exception as e:
             return f"status unavailable ({type(e).__name__}: {e})"
 
-    async def _wait_for_completed_video(self, directory, torrent_task=None, torp=None, timeout=3600, stable_seconds=120, no_progress_timeout=600):
+    async def _wait_for_completed_video(self, directory, torrent_task=None, torp=None, timeout=3600, stable_seconds=120, no_progress_timeout=600, no_peer_timeout=180):
         """
         torrentp may return after the torrent is added rather than after the
         payload is complete. Never hand a growing/partial MKV to FFmpeg.
@@ -71,6 +71,7 @@ class TorDownloader:
         started = asyncio.get_running_loop().time()
         last_progress = started
         last_report = started
+        zero_peer_since = None
         candidate = None
         previous_size = -1
         stable_since = None
@@ -86,6 +87,24 @@ class TorDownloader:
                 raise TimeoutError(f"Torrent download exceeded {timeout // 60} minutes without a completed video payload.")
             if now - last_progress > no_progress_timeout:
                 raise TimeoutError(f"Torrent download made no file-size progress for {no_progress_timeout // 60} minutes. The torrent may have no active seeders/peers or torrentp may not be delivering payload.")
+            if torp is not None and candidate is None:
+                try:
+                    handle = getattr(getattr(torp, "_downloader", None), "_file", None)
+                    status = handle.status() if handle is not None else None
+                    peers = int(getattr(status, "num_peers", 0)) if status is not None else None
+                    if peers == 0:
+                        zero_peer_since = zero_peer_since or now
+                        if now - zero_peer_since >= no_peer_timeout:
+                            raise TimeoutError(
+                                f"Torrent has had 0 peers for {no_peer_timeout // 60} minutes. "
+                                "This release appears unseeded/unreachable; stop waiting and try another RSS torrent."
+                            )
+                    elif peers is not None and peers > 0:
+                        zero_peer_since = None
+                except TimeoutError:
+                    raise
+                except Exception:
+                    pass
 
             videos = []
             for root, _, files in os.walk(directory):
