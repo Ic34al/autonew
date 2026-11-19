@@ -330,6 +330,30 @@ class MongoDB:
             upsert=True,
         )
 
+
+    async def set_anime_channel_invite_link(self, anime_name: str, channel_id: int, invite_link: str):
+        key = re.sub(r"\s+", " ", str(anime_name).casefold()).strip()
+        if not key or not invite_link:
+            raise ValueError("Anime name and invite link are required")
+        await self.__anime_channels.update_one(
+            {"anime_name": key},
+            {"$set": {"anime_name": key, "channel_id": int(channel_id), "invite_link": str(invite_link)}},
+            upsert=True,
+        )
+        await self.__db.selected_anime_channels.update_one(
+            {"_id": key},
+            {"$set": {"anime_name": key, "channel_id": int(channel_id), "invite_link": str(invite_link), "enabled": True}},
+            upsert=True,
+        )
+
+    async def get_anime_channel_invite_link(self, anime_name: str):
+        key = re.sub(r"\s+", " ", str(anime_name).casefold()).strip()
+        record = await self.__anime_channels.find_one({"anime_name": key})
+        if record and record.get("invite_link"):
+            return record["invite_link"]
+        selected = await self.__db.selected_anime_channels.find_one({"_id": key})
+        return (selected or {}).get("invite_link")
+
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
         query = {"anime_name": anime_name.lower()}
         if channel is not None:
@@ -388,31 +412,6 @@ class MongoDB:
             return next(iter(token_channels))
         return None
 
-    async def set_anime_channel_invite_link(self, anime_name: str, channel_id: int, invite_link: str):
-        """Persist a private-channel invite URL alongside the anime channel mapping."""
-        normalized_name = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
-        if not normalized_name:
-            raise ValueError("Anime name cannot be empty")
-        await self.__anime_channels.update_one(
-            {"anime_name": normalized_name},
-            {"$set": {
-                "anime_name": normalized_name,
-                "channel_id": int(channel_id),
-                "invite_link": str(invite_link).strip(),
-                "invite_link_updated_at": datetime.datetime.utcnow(),
-            }},
-            upsert=True,
-        )
-
-    async def get_anime_channel_invite_link(self, anime_name: str) -> str | None:
-        """Return the stored invite URL for an anime channel mapping."""
-        normalized_name = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
-        if not normalized_name:
-            return None
-        entry = await self.__anime_channels.find_one({"anime_name": normalized_name})
-        link = (entry or {}).get("invite_link")
-        return str(link).strip() if link else None
-
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
         try:
             entry = await self.__anime_channels.find_one({"anime_name": anime_name.lower()})
@@ -469,34 +468,6 @@ class MongoDB:
         record = await self.__db.batch_file_links.find_one({"_id": str(token)})
         return (record or {}).get("message_ids", [])
 
-    async def get_anime_channel_info_post(self, anime_id: int, channel_id: int):
-        key = f"{int(anime_id)}:{int(channel_id)}"
-        record = await self.__db.anime_channel_info_posts.find_one({"_id": key})
-        return (record or {}).get("message_id")
-
-    async def set_anime_channel_info_post(self, anime_id: int, channel_id: int, message_id: int):
-        key = f"{int(anime_id)}:{int(channel_id)}"
-        now = datetime.datetime.utcnow()
-        await self.__db.anime_channel_info_posts.update_one(
-            {"_id": key},
-            {"$set": {"anime_id": int(anime_id), "channel_id": int(channel_id),
-                      "message_id": int(message_id), "updated_at": now},
-             "$setOnInsert": {"created_at": now}},
-            upsert=True,
-        )
-
-    async def get_anime_channel_info_sticker_sent(self, anime_id: int, channel_id: int):
-        key = f"{int(anime_id)}:{int(channel_id)}"
-        record = await self.__db.anime_channel_info_posts.find_one({"_id": key})
-        return bool((record or {}).get("sticker_sent", False))
-
-    async def set_anime_channel_info_sticker_sent(self, anime_id: int, channel_id: int):
-        key = f"{int(anime_id)}:{int(channel_id)}"
-        await self.__db.anime_channel_info_posts.update_one(
-            {"_id": key}, {"$set": {"sticker_sent": True, "updated_at": datetime.datetime.utcnow()}},
-            upsert=True,
-        )
-
     async def get_anime_archive_batch(self, anime_id: int, season_number: int, channel_id: int):
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         return await self.__db.anime_archive_batches.find_one({"_id": key})
@@ -505,8 +476,8 @@ class MongoDB:
         self, anime_id: int, season_number: int, channel_id: int,
         status: str, torrent_url: str = "", release_title: str = "",
     ):
-        if status not in ("in_progress", "complete", "failed", "source_unavailable", "skipped"):
-            raise ValueError(f"Invalid archive batch status: {status}")
+        if status not in ("in_progress", "complete", "failed"):
+            raise ValueError("Invalid archive batch status")
         key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
         now = datetime.datetime.utcnow()
         await self.__db.anime_archive_batches.update_one(
@@ -520,20 +491,6 @@ class MongoDB:
                 "release_title": str(release_title or ""),
                 "updated_at": now,
             }, "$setOnInsert": {"created_at": now}},
-            upsert=True,
-        )
-
-    async def get_anime_archive_completed_episodes(self, anime_id: int, season_number: int, channel_id: int):
-        key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
-        record = await self.__db.anime_archive_batches.find_one({"_id": key})
-        return sorted({int(value) for value in (record or {}).get("completed_episodes", []) if str(value).isdigit()})
-
-    async def mark_anime_archive_episode_complete(self, anime_id: int, season_number: int, channel_id: int, episode_number: int):
-        key = f"{int(anime_id)}:{int(season_number)}:{int(channel_id)}"
-        await self.__db.anime_archive_batches.update_one(
-            {"_id": key},
-            {"$addToSet": {"completed_episodes": int(episode_number)},
-             "$set": {"updated_at": datetime.datetime.utcnow()}},
             upsert=True,
         )
 
