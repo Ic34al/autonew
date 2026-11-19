@@ -8,7 +8,6 @@ from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
 import asyncio
 import re
-import shutil
 from asyncio.subprocess import PIPE
 import datetime
 from bot import Var, bot_loop, ffpids_cache, LOGS, ani_cache
@@ -16,46 +15,6 @@ from .func_utils import mediainfo, convertBytes, convertTime, sendMessage, editM
 from .reporter import rep
 from .text_utils import TextEditor
 from bot.core.database import db
-
-
-# Make Debian/Heroku Apt PulseAudio private runtime libraries visible to FFmpeg.
-def _prepare_ffmpeg_runtime():
-    import os
-    from glob import glob
-    from os import walk
-
-    apt_bin = "/app/.apt/usr/bin"
-    if os.path.isdir(apt_bin):
-        os.environ["PATH"] = apt_bin + os.pathsep + os.environ.get("PATH", "")
-
-    search_roots = ["/app/.apt", "/usr/lib", "/lib"]
-    pulse_dirs = set()
-    for root in search_roots:
-        if not os.path.isdir(root):
-            continue
-        for dirpath, _dirs, files in walk(root):
-            if any(name.startswith("libpulsecommon-") and name.endswith(".so") for name in files):
-                pulse_dirs.add(dirpath)
-
-    paths = [
-        "/app/.apt/usr/lib/x86_64-linux-gnu",
-        "/app/.apt/usr/lib/x86_64-linux-gnu/pulseaudio",
-        "/app/.apt/usr/lib",
-        "/usr/lib/x86_64-linux-gnu",
-        "/usr/lib/x86_64-linux-gnu/pulseaudio",
-        "/lib/x86_64-linux-gnu",
-    ]
-    paths.extend(sorted(pulse_dirs))
-    current = os.environ.get("LD_LIBRARY_PATH", "").split(os.pathsep)
-    merged = [p for p in paths + current if p and os.path.isdir(p)]
-    # Keep order but remove duplicates.
-    merged = list(dict.fromkeys(merged))
-    os.environ["LD_LIBRARY_PATH"] = os.pathsep.join(merged)
-    LOGS.info("[FFmpeg runtime] PATH=%s", os.environ.get("PATH", ""))
-    LOGS.info("[FFmpeg runtime] LD_LIBRARY_PATH=%s", os.environ["LD_LIBRARY_PATH"])
-    LOGS.info("[FFmpeg runtime] libpulsecommon dirs=%s", sorted(pulse_dirs))
-
-_prepare_ffmpeg_runtime()
 
 ffargs = {
     'HDRi': Var.FFCODE_HDRi,
@@ -372,15 +331,6 @@ class FFEncoder:
             return ffargs['1080'].format(dl_npath, self.__prog_file, out_npath)
 
     async def start_encode(self):
-        # Fail before moving the source file if FFmpeg is unavailable.
-        # Aptfile/buildpack installation is the permanent deployment fix.
-        ffmpeg_binary = shutil.which("ffmpeg")
-        if not ffmpeg_binary:
-            error = "FFmpeg is missing from this dyno (exit 127). Install ffmpeg via the Heroku Apt buildpack and Aptfile, then rebuild/restart."
-            LOGS.error(error)
-            await rep.report(error, "error")
-            raise RuntimeError(error)
-
         if ani_cache.get('global_pause'):
             LOGS.info('Encoding skipped because /pause is active.')
             return None
