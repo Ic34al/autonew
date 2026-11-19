@@ -387,40 +387,44 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
         else "Sub"
     )
-    quality_order = ("HDRi", "1080", "720", "480")
-    buttons = []
-    for quality in quality_order:
-        upload_name = await info.get_upname(quality)
-        quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
-        os.makedirs("encode", exist_ok=True)
-        shutil.copy2(source, quality_source)
-        encoded_path = await FFEncoder(
-            await bot.send_message(Var.LOG_CHANNEL, f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"),
-            quality_source, upload_name, quality
-        ).start_encode()
-        if not encoded_path or not os.path.exists(encoded_path):
-            raise RuntimeError(f"Encoding failed for S{season_number}E{episode_number} at {quality}.")
-        uploaded = await TgUploader(await bot.send_message(
-            Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
-        )).upload(encoded_path, quality)
-        if not uploaded:
-            raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at {quality}.")
-        token = hashlib.sha256(
-            f"{uploaded.id}:{media.get('id')}:{season_number}:{episode_number}:{quality}".encode()
-        ).hexdigest()[:24]
-        await db.set_batch_file_link(token, [uploaded.id])
-        start_payload = f"getbatch-{token}"
-        url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
-        buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
+    # /uploadchannel archive mode uploads ONE quality only (720p), not a
+    # four-quality encode/upload matrix. Keep the workflow lightweight and predictable.
+    quality = "720"
+    upload_name = await info.get_upname(quality)
+    quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
+    os.makedirs("encode", exist_ok=True)
+    shutil.copy2(source, quality_source)
+    encoded_path = await FFEncoder(
+        await bot.send_message(
+            Var.LOG_CHANNEL,
+            f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — 720p",
+        ),
+        quality_source, upload_name, quality
+    ).start_encode()
+    if not encoded_path or not os.path.exists(encoded_path):
+        raise RuntimeError(f"Encoding failed for S{season_number}E{episode_number} at 720p.")
+    uploaded = await TgUploader(await bot.send_message(
+        Var.LOG_CHANNEL,
+        f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — 720p",
+    )).upload(encoded_path, quality)
+    if not uploaded:
+        raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at 720p.")
+    token = hashlib.sha256(
+        f"{uploaded.id}:{media.get('id')}:{season_number}:{episode_number}:720".encode()
+    ).hexdigest()[:24]
+    await db.set_batch_file_link(token, [uploaded.id])
+    start_payload = f"getbatch-{token}"
+    url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
+    button = InlineKeyboardButton("720p", url=url)
     caption = (
-        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\n"
-        f"<b>Release:</b> {_escape(episode['title'])}\n"
-        f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
+        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\\n"
+        f"<b>Release:</b> {_escape(episode['title'])}\\n"
+        f"<b>Quality:</b> 720p"
     )
     await bot.send_message(
         chat_id=destination_id,
         text=caption,
-        reply_markup=InlineKeyboardMarkup([buttons]),
+        reply_markup=InlineKeyboardMarkup([[button]]),
         disable_web_page_preview=True,
     )
     shutil.rmtree(workdir, ignore_errors=True)
