@@ -142,6 +142,33 @@ def _plain_title(value):
     return " ".join(value.split())
 
 
+def _release_matches_episode(title, season, episode):
+    """Strict episode identification; bare episode numbers are allowed for S1."""
+    title = str(title or "")
+    season, episode = int(season), int(episode)
+    detected_season = _season_number_from_release(title)
+    if detected_season is not None and detected_season != season:
+        return False
+    if season > 1 and detected_season != season:
+        return False
+    patterns = (
+        rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
+        rf"(?i)\b{season}x0*{episode}\b",
+        rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
+        rf"(?i)\bEp[\s._-]*0*{episode}\b",
+        rf"(?i)\bE0*{episode}\b",
+    )
+    if any(re.search(pattern, title) for pattern in patterns):
+        return True
+    if season != 1:
+        return False
+    clean = re.sub(r"(?i)\[[^\]]*\]|\([^)]*\)", " ", title)
+    clean = re.sub(r"(?i)\b(?:480p|720p|1080p|2160p|4k|x264|x265|hevc|av1)\b", " ", clean)
+    clean = re.sub(r"(?i)\b(?:episode|ep)\s*0*"+str(episode)+r"\b", " ", clean)
+    clean = re.sub(r"[^a-z0-9]+", " ", clean).strip()
+    return bool(re.search(rf"(?:^|\s)0*{episode}(?:\s|$)", clean)
+
+
 def _season_number_from_release(title):
     patterns = (
         r"\bS0*(\d{1,2})(?:E|\s*[-._ ]*\d)",
@@ -286,6 +313,9 @@ async def _find_episode_torrent(media, season_number, episode_number):
             f'"{title}" S{season:02d}E{episode:02d} 720p',
             f'"{title}" Season {season} Episode {episode} 720p',
             f'"{title}" {season}x{episode:02d} 720p',
+            f'"{title}" Episode {episode:02d} 720p',
+            f'"{title}" Ep {episode:02d} 720p',
+            *([f'"{title}" {episode:02d} 720p', f'"{title}" - {episode:02d} 720p'] if season == 1 else []),
         ])
     feeds = [
         f"https://nyaa.si/?page=rss&q={quote_plus(q)}&c=1_2&f=0"
@@ -304,18 +334,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
             normalized = _plain_title(title)
             if not normalized or not any(a == normalized or a in normalized for a in aliases):
                 continue
-            ep_patterns = (
-                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
-                rf"(?i)\b{season}x0*{episode}\b",
-                rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
-                rf"(?i)\bEp[\s._-]*0*{episode}\b",
-            )
-            if not any(re.search(p, title) for p in ep_patterns):
-                continue
-            detected_season = _season_number_from_release(title)
-            if detected_season is not None and detected_season != season:
-                continue
-            if season > 1 and detected_season != season:
+            if not _release_matches_episode(title, season, episode):
                 continue
             link = None
             for candidate in (getattr(entry, "links", None) or []):
