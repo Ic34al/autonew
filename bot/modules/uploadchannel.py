@@ -432,7 +432,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         title,
         f"{int(episode_number):02d}",
         output_name=f"uc_episode_thumb_{safe}.jpg",
-        metadata=info.adata,
+        metadata={**(info.adata or {}), "season": str(season_number)},
     )
     if episode_thumb and os.path.exists(episode_thumb):
         await bot.send_photo(
