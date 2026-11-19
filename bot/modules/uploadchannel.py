@@ -1536,6 +1536,7 @@ async def uploadchannel_callbacks(client, callback):
                         )
                         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                         try:
+                            channel_stage = f"processing Season {season_index} Episode {episode_number} (priority lock acquired)"
                             await _upload_single_episode(
                                 prequel, destination_id, season_index, episode_number, user_client
                             )
