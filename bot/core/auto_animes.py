@@ -2390,7 +2390,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, force_standard_pipeline=False, announce_main=True):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -2417,7 +2417,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     
         upload_mode = await db.get_upload_mode()
         print(f"get_animes: upload_mode={upload_mode}")
-        if upload_mode == "low_end":
+        if upload_mode == "low_end" and not manual_search and not force_standard_pipeline:
             print(f"get_animes: calling process_low_end for {name}")
             return await process_low_end(name, torrent, destination_channel=destination_channel)
     except Exception as e:
@@ -2702,7 +2702,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     # The dedicated channel gets the full episode post and
                     # quality buttons. Main Channel gets exactly one join-request
                     # announcement after every requested quality has uploaded.
-                    if destination_channel is None and not manual_search:
+                    if announce_main:
                         join_markup = await build_anime_watch_markup(target_channel)
                         main_join_post = await bot.send_photo(
                             Var.MAIN_CHANNEL,
@@ -8065,11 +8065,11 @@ async def fetch_animes():
                         result = await get_animes(
                             title, link,
                             destination_channel=selected_channel,
-                            # Scheduled RSS releases use the same full poster +
-                            # multi-quality encoder/publisher pipeline as the
-                            # normal automatic anime uploader. Do not route them
-                            # through low_end's separate quality-feed workflow.
-                            manual_search=True
+                            # Scheduled RSS releases use the normal ANIME SOUL
+                            # poster/caption/four-quality pipeline regardless
+                            # of the low_end setting.
+                            force_standard_pipeline=True,
+                            announce_main=True,
                         )
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
