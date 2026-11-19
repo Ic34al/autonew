@@ -605,7 +605,7 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
             except FloodWait as flood:
                 last_error = flood
                 if attempt < 2:
-                    await asyncio.sleep(max(1, int(flood.value) + 1)
+                    await asyncio.sleep(max(1, int(flood.value) + 1))
             except Exception as error:
                 last_error = error
                 if attempt < 2:
