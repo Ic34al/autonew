@@ -719,10 +719,19 @@ async def uploadchannel_callbacks(client, callback):
                             getattr(history_message, "text", ""),
                             getattr(history_message, "caption", ""),
                         ))
-                        if re.search(
-                            rf"(?i)Season\s*{season_index}\b.*(?:Episodes|Format|Status)",
+                        # Old retries posted a multiline text header beginning with
+                        # "Season 1" and placed Episodes/Format/Status on later
+                        # lines. The previous regex required them on the same
+                        # line, so it missed that post and sent a duplicate.
+                        has_season = bool(re.search(
+                            rf"(?i)\bSeason\s*{season_index}\b",
                             history_body,
-                        ):
+                        ))
+                        has_header_fields = all(re.search(
+                            rf"(?i)\b{field}\s*:",
+                            history_body,
+                        ) for field in ("Episodes", "Format", "Status", "Qualities"))
+                        if has_season and has_header_fields:
                             info_exists = True
                             break
 
@@ -748,6 +757,9 @@ async def uploadchannel_callbacks(client, callback):
                         poster_meta.setdefault("season", prequel.get("season"))
                         poster_meta.setdefault("seasonYear", season_year)
                         poster_meta["season"] = str(season_index)
+                        # Relation data is authoritative; title search results
+                        # must not overwrite the selected prequel's identity.
+                        poster_meta["title"] = prequel.get("title") or poster_meta.get("title")
                         poster_path = await create_anime_thumbnail(
                             poster_meta.get("bannerImage") or
                             (poster_meta.get("coverImage") or {}).get("extraLarge") or
