@@ -390,7 +390,7 @@ class MongoDB:
 
     async def set_anime_channel_invite_link(self, anime_name: str, channel_id: int, invite_link: str):
         """Persist a private-channel invite URL alongside the anime channel mapping."""
-        normalized_name = re.sub(r"\\s+", " ", str(anime_name).lower()).strip()
+        normalized_name = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
         if not normalized_name:
             raise ValueError("Anime name cannot be empty")
         await self.__anime_channels.update_one(
@@ -406,7 +406,7 @@ class MongoDB:
 
     async def get_anime_channel_invite_link(self, anime_name: str) -> str | None:
         """Return the stored invite URL for an anime channel mapping."""
-        normalized_name = re.sub(r"\\s+", " ", str(anime_name).lower()).strip()
+        normalized_name = re.sub(r"\s+", " ", str(anime_name).lower()).strip()
         if not normalized_name:
             return None
         entry = await self.__anime_channels.find_one({"anime_name": normalized_name})
