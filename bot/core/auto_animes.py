@@ -8812,13 +8812,12 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Queued to Encode...</i></pre>")
                 await rep.report("Added Task to Queue...", "info")
             
+            await editMessage(
+                stat_msg,
+                f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\\n\\n"
+                f"<pre><i>Queued for encoding...</i></pre>"
+            )
             await ffQueue.put(post_id)
-            if ffLock.locked():
-                await editMessage(
-                    stat_msg,
-                    f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\\n\\n"
-                    f"<pre><i>Waiting for encoder queue...</i></pre>"
-                )
             await ffEvent.wait()
             await ffLock.acquire()
             try:
@@ -8895,7 +8894,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     for encode_attempt in range(1, max_encode_attempts + 1):
                         await editMessage(
                             stat_msg,
-                            f"<blockquote>‣ <b>Anime Name :</b> <b><i>{filename}</i></b></blockquote>\\n\\n"
+                            f"<blockquote>‣ <b>Anime Name :</b> <b><i>{filename}</i></b></blockquote>\n\n"
                             f"<pre><i>Encoding {qual} — attempt {encode_attempt}/{max_encode_attempts}...</i></pre>"
                         )
                         try:
