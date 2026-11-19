@@ -681,7 +681,7 @@ async def uploadchannel_callbacks(client, callback):
                             getattr(channel_message, "caption", ""),
                         ))
                         match = re.search(
-                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
+                            rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
                         )
                         if match:
                             existing_episodes.add(int(match.group(1)))
@@ -698,7 +698,7 @@ async def uploadchannel_callbacks(client, callback):
                             getattr(history_message, "caption", ""),
                         ))
                         if re.search(
-                            rf"(?i)Season\\s*{season_index}\\b.*(?:Episodes|Format|Status)",
+                            rf"(?i)Season\s*{season_index}\b.*(?:Episodes|Format|Status)",
                             history_body,
                         ):
                             info_exists = True
