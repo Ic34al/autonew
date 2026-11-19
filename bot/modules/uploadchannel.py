@@ -311,11 +311,11 @@ async def _subsplease_torrent_link(entry):
         await rep.report(f"SubsPlease release-page torrent resolution failed: {type(exc).__name__}: {exc}", "warning", log=False)
         return None
 
-    magnet_match = re.search(r'href=["\\'](magnet:\\?[^"\\']+)["\\']', page, re.I)
+    magnet_match = re.search(r"""href=["'](magnet:[^"']+)["']""", page, re.I)
     if magnet_match:
         return html.unescape(magnet_match.group(1).replace("&amp;", "&"))
 
-    torrent_match = re.search(r'href=["\\']([^"\\']+\\.torrent(?:\\?[^"\\']*)?)["\\']', page, re.I)
+    torrent_match = re.search(r"""href=["']([^"']+\.torrent(?:\?[^"']*)?)["']""", page, re.I)
     if torrent_match:
         href = html.unescape(torrent_match.group(1))
         if href.startswith("//"):
@@ -405,11 +405,11 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 continue
 
             episode_patterns = (
-                rf"(?i)\\bS0*{season}[\\s._-]*E0*{episode}\\b",
-                rf"(?i)\\b{season}x0*{episode}\\b",
-                rf"(?i)\\bSeason[\\s._-]*0*{season}[\\s._-]*(?:Episode|Ep)?[\\s._-]*0*{episode}\\b",
-                rf"(?i)\\b(?:Episode|Ep)[\\s._-]*0*{episode}\\b",
-                rf"(?i)(?:^|[\\s._\\-\\[])0*{episode}(?:[\\s._\\-\\]\\[]|$)",
+                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
+                rf"(?i)\b{season}x0*{episode}\b",
+                rf"(?i)\bSeason[\s._-]*0*{season}[\s._-]*(?:Episode|Ep)?[\s._-]*0*{episode}\b",
+                rf"(?i)\b(?:Episode|Ep)[\s._-]*0*{episode}\b",
+                rf"(?i)(?:^|[\s._\-\[])0*{episode}(?:[\s._\-\]\[]|$)",
             )
             if not any(re.search(pattern, release_title) for pattern in episode_patterns):
                 continue
