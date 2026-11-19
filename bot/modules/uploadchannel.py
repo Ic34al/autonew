@@ -1334,7 +1334,8 @@ async def uploadchannel_callbacks(client, callback):
                         archive_id, season_index, destination_id, "in_progress",
                         "", f"episode-by-episode S{season_index} 4-quality",
                     )
-                    season_source_missing = False
+                    missing_episode_numbers = []
+                    uploaded_episode_numbers = []
                     for episode_number in range(1, available_episodes + 1):
                         if episode_number in existing_episodes:
                             continue
@@ -1351,32 +1352,42 @@ async def uploadchannel_callbacks(client, callback):
                                 prequel, destination_id, season_index, episode_number, user_client,
                                 progress_callback=update_progress,
                             )
+                            uploaded_episode_numbers.append(episode_number)
                         except RuntimeError as episode_error:
                             error_text = str(episode_error)
-                            if "RSS source missing or ambiguous" in error_text and prequel is not selected_media:
-                                season_source_missing = True
+                            if "RSS source missing or ambiguous" in error_text:
+                                missing_episode_numbers.append(episode_number)
                                 await rep.report(
-                                    f"UPLOADCHANNEL: SubsPlease RSS does not contain a safe exact match for "
+                                    f"UPLOADCHANNEL: SubsPlease RSS currently has no safe exact match for "
                                     f"{selected_title} Season {season_index} Episode {episode_number}. "
-                                    f"Skipping this older season and continuing to the selected season. "
+                                    f"Skipping this episode and continuing to check later episodes; "
+                                    f"RSS feeds are release-window feeds, not complete season archives. "
                                     f"Details: {error_text}",
                                     "warning", log=False,
                                 )
                                 await update_progress(
-                                    f"RSS unavailable for older Season {season_index}; continuing to selected season"
+                                    f"Episode {episode_number} unavailable in current RSS; checking next episode"
                                 )
-                                break
+                                continue
                             raise
-                    if season_source_missing:
+                    if missing_episode_numbers:
                         await db.set_anime_archive_batch(
-                            archive_id, season_index, destination_id, "source_unavailable",
-                            "", f"SubsPlease RSS unavailable for S{season_index}; skipped safely",
+                            archive_id, season_index, destination_id, "failed",
+                            "", f"RSS episode gaps S{season_index}: {','.join(map(str, missing_episode_numbers))}; "
+                                f"uploaded episodes: {','.join(map(str, uploaded_episode_numbers))}",
                         )
-                        continue
-                    await db.set_anime_archive_batch(
-                        archive_id, season_index, destination_id, "complete",
-                        "", f"episode-by-episode S{season_index} 4-quality",
-                    )
+                        await rep.report(
+                            f"UPLOADCHANNEL: finished scanning Season {season_index}; "
+                            f"uploaded {len(uploaded_episode_numbers)} episode(s), "
+                            f"RSS-missing {len(missing_episode_numbers)} episode(s). "
+                            f"Continuing workflow rather than aborting.",
+                            "warning", log=False,
+                        )
+                    else:
+                        await db.set_anime_archive_batch(
+                            archive_id, season_index, destination_id, "complete",
+                            "", f"episode-by-episode S{season_index} 4-quality",
+                        )
     
         finally:
             AUTO_UPLOAD_PRIORITY_LOCK.release()
