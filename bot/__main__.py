@@ -154,6 +154,20 @@ async def main():
         # fail part-way through startup. The finally block must still stop it.
         bot_start_attempted = True
         await bot.start()
+        # Deployment fingerprint and live token identity diagnostics.
+        # This makes stale Heroku releases/incorrect app branches visible without exposing tokens.
+        release_commit = environ.get("HEROKU_SLUG_COMMIT", "unknown")
+        release_version = environ.get("HEROKU_RELEASE_VERSION", "unknown")
+        live_bot = await bot.get_me()
+        live_username = str(getattr(live_bot, "username", "") or "").strip().lstrip("@")
+        configured_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
+        share_username = str(getattr(Var, "FILE_SHARE_BOT_USERNAME", "") or "").strip().lstrip("@")
+        LOGS.info(
+            "DEPLOYMENT_DIAGNOSTICS release_commit=%s release_version=%s "
+            "token_bot=@%s configured_bot_username=@%s file_share_username=@%s",
+            release_commit, release_version, live_username or "unknown",
+            configured_username or "unset", share_username or "unset",
+        )
         await restart()
         
         LOGS.info("Starting tasks...")
