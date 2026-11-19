@@ -8790,6 +8790,12 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 await stat_msg.delete()
                 raise RuntimeError(f"File download incomplete for {name}; RSS item remains retryable.")
 
+            await editMessage(
+                stat_msg,
+                f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\\n\\n"
+                f"<pre><i>Download complete — preparing encoding queue...</i></pre>"
+            )
+
             try:
                 language_label = await detect_release_language(dl_path, name)
                 aniInfo.pdata["audio_type"] = language_label
@@ -8807,11 +8813,18 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 await rep.report("Added Task to Queue...", "info")
             
             await ffQueue.put(post_id)
+            if ffLock.locked():
+                await editMessage(
+                    stat_msg,
+                    f"<blockquote>‣ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\\n\\n"
+                    f"<pre><i>Waiting for encoder queue...</i></pre>"
+                )
             await ffEvent.wait()
             await ffLock.acquire()
             try:
                 btns = []
                 uploaded_qualities = []
+                failed_qualities = []
                 required_qualities = list(qualities_override) if qualities_override else (list(Var.QUALS) if encoding_enabled else ["HDRi"])
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
@@ -8876,13 +8889,40 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     )
                     await rep.report(f"Starting Encode for {qual}...", "info")
 
-                    out_path = await FFEncoder(
-                        stat_msg, dl_path, filename, qual, is_movie=is_movie
-                    ).start_encode()
-                    if not out_path or not ospath.exists(out_path):
-                        raise RuntimeError(
-                            f"{qual} encoding failed for {name}; earlier uploaded qualities are saved and will be reused on retry."
+                    out_path = None
+                    encode_error = None
+                    max_encode_attempts = 3
+                    for encode_attempt in range(1, max_encode_attempts + 1):
+                        await editMessage(
+                            stat_msg,
+                            f"<blockquote>‣ <b>Anime Name :</b> <b><i>{filename}</i></b></blockquote>\\n\\n"
+                            f"<pre><i>Encoding {qual} — attempt {encode_attempt}/{max_encode_attempts}...</i></pre>"
                         )
+                        try:
+                            out_path = await FFEncoder(
+                                stat_msg, dl_path, filename, qual, is_movie=is_movie
+                            ).start_encode()
+                            if out_path and ospath.exists(out_path):
+                                encode_error = None
+                                break
+                            encode_error = RuntimeError(f"Encoder returned no valid output for {qual}.")
+                        except Exception as current_encode_error:
+                            encode_error = current_encode_error
+                            out_path = None
+
+                        if encode_attempt < max_encode_attempts:
+                            await rep.report(
+                                f"{qual} encode attempt {encode_attempt}/{max_encode_attempts} failed for {name}: {encode_error}; retrying.",
+                                "warning",
+                            )
+                            await asyncio.sleep(min(10, 2 * encode_attempt))
+                    if not out_path or not ospath.exists(out_path):
+                        failed_qualities.append(qual)
+                        await rep.report(
+                            f"{qual} encoding failed after {max_encode_attempts} attempts for {name}; continuing with remaining qualities. Earlier uploaded qualities are checkpointed.",
+                            "error",
+                        )
+                        continue
 
                     await editMessage(
                         stat_msg,
@@ -8904,7 +8944,17 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
 
             finally:
                 ffLock.release()
-            
+
+            if not uploaded_qualities:
+                raise RuntimeError(
+                    f"All requested qualities failed for {name}: {', '.join(failed_qualities) or 'no files uploaded'}. RSS item remains retryable."
+                )
+            if failed_qualities:
+                await rep.report(
+                    f"Episode {name} will be published with available qualities only. Failed: {', '.join(failed_qualities)}",
+                    "warning",
+                )
+
             available_quality_map = {quality: True for quality in uploaded_qualities}
             if int(channel_to_use) == int(Var.MAIN_CHANNEL):
                 caption = await build_main_channel_feed_caption(
