@@ -429,47 +429,6 @@ def _selection_keyboard(items, selected):
     return InlineKeyboardMarkup(rows)
 
 
-
-@bot.on_message(filters.command("setchannelinvite") & filters.private)
-async def setchannelinvite_command(client, message):
-    if not message.from_user or message.from_user.id not in Var.ADMINS:
-        return await message.reply("⛔ This command is restricted to bot administrators.")
-    raw = message.text.split(None, 1)
-    if len(raw) < 2 or "|" not in raw[1]:
-        return await message.reply(
-            "Usage: /setchannelinvite Anime Title | https://t.me/+INVITE_LINK"
-        )
-    anime_title, invite_link = [part.strip() for part in raw[1].split("|", 1)]
-    if not anime_title or not re.match(r"^https?://t\.me/(?:\+|joinchat/)", invite_link):
-        return await message.reply("Send the exact private channel invite link, not a channel ID.")
-    user_client = __import__("pyrogram").Client(
-        "autonew_channel_creator",
-        api_id=int(Var.API_ID),
-        api_hash=Var.API_HASH,
-        session_string=Var.USER_SESSION,
-        in_memory=True,
-        parse_mode=ParseMode.HTML,
-    )
-    try:
-        await user_client.start()
-        chat = await user_client.get_chat(invite_link)
-        if not chat or not getattr(chat, "id", None) or not str(getattr(chat, "type", "")).lower().endswith("channel"):
-            return await message.reply("That invite link did not resolve to a channel.")
-        await db.add_anime_channel_mapping(anime_title, chat.id)
-        await db.set_anime_channel_invite_link(anime_title, chat.id, invite_link)
-        await db.set_anime_channel_selected(anime_title, chat.id)
-        await message.reply(
-            f"✅ Saved the private channel reference for <b>{_escape(anime_title)}</b> "
-            f"({chat.id}). Retry /uploadchannel now."
-        )
-    except Exception as exc:
-        await message.reply(
-            f"❌ Could not validate that invite link: {_escape(type(exc).__name__)}: {_escape(exc)}"
-        )
-    finally:
-        if user_client.is_connected:
-            await user_client.stop()
-
 @bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
     # Respond explicitly to non-admins instead of silently filtering the command.
@@ -535,8 +494,6 @@ async def uploadchannel_callbacks(client, callback):
     user_client = None
     created = []
     archive_jobs = []
-    channel_stage = "starting USER_SESSION"
-    current_anime_title = "unknown"
     try:
         user_client = __import__("pyrogram").Client(
             "autonew_channel_creator",
@@ -544,11 +501,8 @@ async def uploadchannel_callbacks(client, callback):
             api_hash=Var.API_HASH,
             session_string=Var.USER_SESSION,
             in_memory=True,
-            parse_mode=ParseMode.HTML,
         )
-        channel_stage = "starting USER_SESSION client"
         await user_client.start()
-        channel_stage = "resolving bot account in USER_SESSION"
         # Resolve the bot through its public username in the USER session.
         # A bot-session numeric ID is not necessarily an input peer known to this
         # separate MTProto session and can raise PEER_ID_INVALID.
@@ -564,8 +518,6 @@ async def uploadchannel_callbacks(client, callback):
         selected_items = [state["items"][i] for i in sorted(state["selected"])]
         for media in selected_items:
             title = _display_title(media)
-            current_anime_title = title
-            channel_stage = f"reading saved channel mapping for {title}"
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
@@ -586,130 +538,47 @@ async def uploadchannel_callbacks(client, callback):
 
             chat = None
             reused = False
-            persistent_invite = None
             if mapped_id:
                 wanted_id = int(mapped_id)
-                # The saved channels were created by USER_SESSION. Resolve them
-                # through that same creator account, not the bot token: the bot
-                # may not have been promoted yet if an earlier run stopped midway.
-                # Do not scan get_dialogs(); stale dialog peers can trigger
-                # channels.GetChannels / CHANNEL_INVALID.
-                saved_invite = await db.get_anime_channel_invite_link(title)
-                persistent_invite = saved_invite
-                resolve_error = None
-                try:
-                    # First use the persisted invite if present; otherwise try the
-                    # numeric peer directly (works when this session has its hash).
-                    channel_stage = f"opening saved channel peer for {title}"
-                    chat = (
-                        await user_client.get_chat(saved_invite)
-                        if saved_invite else await user_client.get_chat(wanted_id)
-                    )
-                except Exception as exc:
-                    resolve_error = exc
-                    chat = None
-
+                # Load the saved channel peer from the USER_SESSION dialog cache.
+                async for dialog in user_client.get_dialogs():
+                    if int(dialog.chat.id) == wanted_id:
+                        chat = dialog.chat
+                        break
                 if chat is None:
-                    # Recover a legacy channel peer through raw messages.GetDialogs.
-                    # Unlike Pyrogram's high-level iterator, this does not try to
-                    # resolve each dialog's offset peer through channels.GetChannels.
                     try:
-                        from pyrogram.raw.functions.messages import GetDialogs
-                        from pyrogram.raw.types import InputPeerEmpty
-                        channel_stage = f"recovering legacy peer from raw Telegram dialogs for {title}"
-                        raw_dialogs = await user_client.invoke(
-                            GetDialogs(
-                                offset_date=0,
-                                offset_id=0,
-                                offset_peer=InputPeerEmpty(),
-                                limit=100,
-                                hash=0,
-                            )
-                        )
-                        for raw_chat in getattr(raw_dialogs, "chats", []) or []:
-                            raw_id = getattr(raw_chat, "id", None)
-                            raw_hash = getattr(raw_chat, "access_hash", None)
-                            if raw_id is None or raw_hash is None:
-                                continue
-                            # Pyrogram storage.update_peers expects normalized
-                            # (marked_id, access_hash, type, username, phone) tuples.
-                            marked_id = int(f"-100{int(raw_id)}")
-                            peer_type = "channel" if getattr(raw_chat, "broadcast", False) else "supergroup"
-                            await user_client.storage.update_peers([
-                                (
-                                    marked_id,
-                                    int(raw_hash),
-                                    peer_type,
-                                    getattr(raw_chat, "username", None),
-                                    None,
-                                )
-                            ])
-                            if marked_id == wanted_id:
-                                chat = await user_client.get_chat(wanted_id)
-                                break
-                    except Exception as raw_error:
-                        resolve_error = raw_error
-
+                        chat = await user_client.get_chat(wanted_id)
+                    except Exception:
+                        chat = None
                 if chat is None:
-                    # The saved peer is irrecoverable for this USER_SESSION.
-                    # Do not abort the whole selection or keep retrying the same
-                    # invalid ID forever. Create a replacement channel and update
-                    # every title alias below after Telegram confirms creation.
-                    await rep.report(
-                        f"Saved channel mapping for {title} ({wanted_id}) is not accessible "
-                        f"({type(resolve_error).__name__}: {resolve_error}). Creating a replacement channel; "
-                        "the old channel is left untouched.",
-                        "warning",
-                    )
-                    channel_stage = f"creating replacement channel for {title}"
-                    chat = await user_client.create_channel(
-                        title, f"Official episode channel for {title}"
-                    )
-                    reused = False
-                elif not chat or int(chat.id) != wanted_id:
                     raise RuntimeError(
-                        f"Saved mapping for '{title}' points to {wanted_id}, but Telegram "
-                        "returned a different channel. Refusing to overwrite the mapping."
+                        f"A channel mapping already exists for '{title}' ({wanted_id}), "
+                        "but USER_SESSION cannot access it. No duplicate channel was created. "
+                        "Check that this account still has access to that channel."
                     )
-                else:
-                    reused = True
+                reused = True
             else:
                 chat = await user_client.create_channel(
                     title, f"Official episode channel for {title}"
                 )
 
-            # Persist a durable invite reference for private channels. Unlike a
-            # numeric channel ID, the invite URL can repopulate Pyrogram's peer
-            # cache after a fresh in-memory USER_SESSION on Heroku.
-            if not persistent_invite:
-                try:
-                    channel_stage = f"creating persistent invite link for {title}"
-                    invite_obj = await user_client.create_chat_invite_link(
-                        chat.id, name="Anime uploader persistent peer"
-                    )
-                    persistent_invite = invite_obj.invite_link
-                except Exception as invite_error:
-                    raise RuntimeError(
-                        f"Could not create a persistent invite reference for '{title}': {invite_error}"
-                    ) from invite_error
-
-            # Save aliases and invite reference only after the real channel is resolved.
+            # Refresh all aliases and selected mapping for either reused or new channel.
             for name in names:
                 await db.add_anime_channel_mapping(name, chat.id)
-                await db.set_anime_channel_invite_link(name, chat.id, persistent_invite)
             await db.set_anime_channel_selected(title, chat.id)
 
-            # USER_SESSION is the channel creator/admin. Verify the bot's status
-            # through this session, and repair missing admin rights automatically.
+            # Telegram does not allow bots to be ordinary channel members.
+            # A bot must be promoted directly by the channel creator/admin.
+            # Calling promote_chat_member performs channels.editAdmin; do NOT
+            # call add_chat_members (channels.inviteToChannel), which returns
+            # USER_BOT for bot accounts.
             try:
-                channel_stage = f"checking bot admin rights for {title}"
                 current_member = await user_client.get_chat_member(chat.id, bot_user.id)
                 current_status = str(getattr(current_member, "status", "")).lower()
             except Exception:
                 current_status = ""
 
             if not any(role in current_status for role in ("administrator", "owner", "creator")):
-                channel_stage = f"promoting bot administrator for {title}"
                 await user_client.promote_chat_member(
                     chat.id,
                     bot_user.id,
@@ -723,15 +592,6 @@ async def uploadchannel_callbacks(client, callback):
                         can_pin_messages=True,
                     ),
                 )
-                # Confirm the promotion before any season/episode upload begins.
-                channel_stage = f"verifying bot administrator rights for {title}"
-                confirmed_member = await user_client.get_chat_member(chat.id, bot_user.id)
-                confirmed_status = str(getattr(confirmed_member, "status", "")).lower()
-                if not any(role in confirmed_status for role in ("administrator", "owner", "creator")):
-                    raise RuntimeError(
-                        f"Bot promotion could not be confirmed for '{title}' ({chat.id}). "
-                        "No episode upload was started."
-                    )
             # Each archive season gets its own info -> sticker -> episode-batch sequence.
             created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
@@ -739,7 +599,6 @@ async def uploadchannel_callbacks(client, callback):
 
         # Hold the scheduler lock for the entire archive backlog so a new
         # episode cannot interleave between Season 1/Season 2 or selected channels.
-        channel_stage = "acquiring upload priority lock"
         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
         try:
             # Process one selected anime completely before starting the next.
@@ -767,13 +626,13 @@ async def uploadchannel_callbacks(client, callback):
                     # suppress uploads when the destination channel is actually empty.
                     # Check the destination channel's history; existing episodes are skipped.
                     existing_episodes = set()
-                    async for channel_message in user_client.get_chat_history(destination_id, limit=500):
+                    async for channel_message in bot.get_chat_history(destination_id, limit=500):
                         body = " ".join(str(x or "") for x in (
                             getattr(channel_message, "text", ""),
                             getattr(channel_message, "caption", ""),
                         ))
                         match = re.search(
-                            rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
+                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
                         )
                         if match:
                             existing_episodes.add(int(match.group(1)))
@@ -840,15 +699,9 @@ async def uploadchannel_callbacks(client, callback):
             f"✅ Processed {len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
         )
     except Exception as exc:
-        await rep.report(
-            f"Automatic anime channel creation failed at stage '{channel_stage}' "
-            f"for '{current_anime_title}': {type(exc).__name__}: {exc}",
-            "error",
-        )
+        await rep.report(f"Automatic anime channel creation failed: {type(exc).__name__}: {exc}", "error")
         await callback.message.edit(
-            f"⚠️ Channel setup stopped at <b>{_escape(channel_stage)}</b> for "
-            f"<b>{_escape(current_anime_title)}</b>. {len(created)} channel(s) were completed before the error.\n"
-            f"<code>{_escape(exc)}</code>"
+            f"⚠️ Channel creation stopped. {len(created)} channel(s) were created before the error.\n<code>{_escape(exc)}</code>"
         )
     finally:
         if user_client:
