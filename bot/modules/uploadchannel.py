@@ -375,6 +375,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
 
             ep_patterns = (
                 rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
+                rf"(?i)\bS0*{season}[\s._-]+0*{episode}\b",
                 rf"(?i)\b{season}x0*{episode}\b",
                 rf"(?i)\bSeason[\s._-]*0*{season}[\s._-]*Episode[\s._-]*0*{episode}\b",
                 rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
@@ -500,13 +501,13 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # links must open the existing Monkey file-share bot. Do not derive this
     # username from BOT_TOKEN: that token belongs to Auto Anime Uploader.
     share_bot_username = str(
-        getattr(Var, "BOT_USERNAME", "Orewa_Monkey_D_Kaizuko_Bot") or ""
+        getattr(Var, "FILE_SHARE_BOT_USERNAME", "Orewa_Monkey_D_Kaizuko_Bot") or ""
     ).strip().lstrip("@")
     expected_share_bot = "Orewa_Monkey_D_Kaizuko_Bot"
     if share_bot_username.casefold() != expected_share_bot.casefold():
         raise RuntimeError(
             "File-share bot mismatch: expected @Orewa_Monkey_D_Kaizuko_Bot "
-            f"but BOT_USERNAME is @{share_bot_username or 'not configured'}. "
+            f"but FILE_SHARE_BOT_USERNAME is @{share_bot_username or 'not configured'}. "
             "Episode quality buttons were not created to avoid sending users to the wrong bot."
         )
     quality_order = ("720", "1080", "480", "HDRi")
