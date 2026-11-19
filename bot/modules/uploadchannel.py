@@ -135,10 +135,27 @@ async def _fetch_currently_airing():
 
 
 def _plain_title(value):
+    """Normalize AniList and SubsPlease release names to the same series title.
+
+    SubsPlease names a second-season release like
+    'Tensei Shitara Ken Deshita S2 - 08', while AniList often calls the same
+    series 'Tensei shitara Ken Deshita 2nd Season'. Strip both season styles,
+    episode/quality tags, release-group/hash tags and media extensions before
+    comparing titles.
+    """
     value = str(value or "").casefold()
     value = re.sub(r"\[[^\]]*\]|\([^)]*\)", " ", value)
+    value = re.sub(r"\.(?:mkv|mp4|avi|webm|m4v)$", " ", value)
+    value = re.sub(
+        r"\b(?:first|1st|second|2nd|third|3rd|fourth|4th|fifth|5th|sixth|6th)\s+season\b",
+        " ",
+        value,
+    )
+    value = re.sub(r"\bseason\s*(?:\d+|one|two|three|four|five|i{1,3}|iv|v)\b", " ", value)
     value = re.sub(r"\b(?:batch|complete|season pack|full season|720p|1080p|480p|1080|720|480)\b", " ", value)
-    value = re.sub(r"\bs\d{1,2}\s*[-._ ]*e?\d{1,3}\b|\bseason\s*\d+\b", " ", value)
+    value = re.sub(r"\bs\d{1,2}\s*[-._ ]*e?\d{1,3}\b", " ", value)
+    value = re.sub(r"\bs\d{1,2}\b", " ", value)
+    value = re.sub(r"\b(?:episode|ep)\s*[-._ ]*\d{1,3}\b", " ", value)
     value = re.sub(r"[^a-z0-9]+", " ", value)
     return " ".join(value.split())
 
@@ -1016,6 +1033,9 @@ async def uploadchannel_callbacks(client, callback):
     user_client = None
     created = []
     archive_jobs = []
+    uploaded_episode_total = 0
+    already_present_episode_total = 0
+    rss_missing_episode_total = 0
     channel_stage = "starting USER_SESSION"
     current_anime_title = "unknown"
 
@@ -1339,6 +1359,7 @@ async def uploadchannel_callbacks(client, callback):
                     season_source_unavailable = False
                     for episode_number in range(1, available_episodes + 1):
                         if episode_number in existing_episodes:
+                            already_present_episode_total += 1
                             continue
                         await rep.report(
                             f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
@@ -1354,10 +1375,12 @@ async def uploadchannel_callbacks(client, callback):
                                 progress_callback=update_progress,
                             )
                             uploaded_episode_numbers.append(episode_number)
+                            uploaded_episode_total += 1
                         except RuntimeError as episode_error:
                             error_text = str(episode_error)
                             if "RSS source missing or ambiguous" in error_text:
                                 missing_episode_numbers.append(episode_number)
+                                rss_missing_episode_total += 1
                                 # RSS is a release-window feed, not a season archive. If an older
                                 # prequel season is missing its first exact match, do not spend time
                                 # scanning every episode in that season: mark it unavailable and move
@@ -1417,9 +1440,24 @@ async def uploadchannel_callbacks(client, callback):
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
-        await callback.message.edit(
-            f"✅ Processed {len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
-        )
+        if uploaded_episode_total:
+            completion_text = (
+                f"✅ Channel setup finished for {len(created)} anime channel(s).\n"
+                f"📤 Episodes uploaded: <b>{uploaded_episode_total}</b>\n"
+                f"⏭ Already present: <b>{already_present_episode_total}</b>\n"
+                f"⚠️ Not present in current SubsPlease RSS window: <b>{rss_missing_episode_total}</b>\n\n"
+                f"{summary}"
+            )
+        else:
+            completion_text = (
+                f"⚠️ Channel setup finished for {len(created)} anime channel(s), "
+                "but <b>zero episodes were uploaded</b>.\n"
+                f"⏭ Already present in destination history: <b>{already_present_episode_total}</b>\n"
+                f"🔎 No exact SubsPlease RSS releases were accepted: <b>{rss_missing_episode_total}</b>\n\n"
+                f"{summary}\n\n"
+                "The channel is ready, but episode publishing is NOT complete. Check the RSS title-match diagnostics before reporting success."
+            )
+        await callback.message.edit(completion_text)
     except Exception as exc:
         await rep.report(
             f"Automatic anime channel creation failed at stage '{channel_stage}' "
