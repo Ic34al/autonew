@@ -422,6 +422,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
 async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     from bot import Var
+    await rep.report(f"UPLOADCHANNEL: searching RSS for {title if \"title\" in locals() else _display_title(media)} S{season_number:02d}E{episode_number:02d}.", "info")
     episode = await _find_episode_torrent(media, season_number, episode_number)
     if not episode:
         raise RuntimeError(
@@ -460,6 +461,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     }
     """
     try:
+        await rep.report(f"UPLOADCHANNEL: fetching exact AniList metadata for {title} S{season_number:02d}E{episode_number:02d}.", "info")
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as metadata_client:
             metadata_response = await metadata_client.post(
                 ANILIST_URL,
@@ -565,6 +567,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # A fresh in-memory USER_SESSION may not know its numeric peer ID, and
         # it cannot read channel history until it has joined the storage channel.
         # Resolve/join it through the configured public username or invite link.
+        await rep.report(f"UPLOADCHANNEL: resolving FILE_STORE for {title} S{target_season:02d}E{target_episode:02d}.", "info")
         if storage_link:
             try:
                 storage_chat = await destination_client.join_chat(storage_link)
@@ -596,6 +599,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # in this storage channel. Do not promote Auto Anime Uploader here:
         # its BOT_TOKEN is only used to publish episode cards, not to serve files.
         scanned_storage_messages = 0
+        await rep.report(f"UPLOADCHANNEL: scanning up to 5000 FILE_STORE messages for {title} S{target_season:02d}E{target_episode:02d}.", "info")
         async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
             scanned_storage_messages += 1
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
@@ -680,6 +684,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     source = None
     if missing_qualities:
+        await rep.report(f"UPLOADCHANNEL: downloading torrent for {title} S{season_number:02d}E{episode_number:02d}.", "info")
         downloaded = await TorDownloader(workdir).download(episode["link"])
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
@@ -691,6 +696,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         source = video_files[0]
 
     for quality in missing_qualities:
+        await rep.report(f"UPLOADCHANNEL: encoding {title} S{season_number:02d}E{episode_number:02d} at {quality}.", "info")
         upload_name = await info.get_upname(quality)
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
@@ -726,6 +732,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 f"Encoding failed for S{season_number}E{episode_number} at {quality}, "
                 "including the safe default FFmpeg retry. Earlier uploaded qualities remain saved."
             )
+        await rep.report(f"UPLOADCHANNEL: uploading {title} S{season_number:02d}E{episode_number:02d} at {quality} to FILE_STORE.", "info")
         uploaded = await TgUploader(await bot.send_message(
             Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
         )).upload(encoded_path, quality)
@@ -1133,6 +1140,7 @@ async def uploadchannel_callbacks(client, callback):
                 else:
                     reused = True
             else:
+                await update_progress(f"creating new channel for {title}")
                 chat = await user_client.create_channel(
                     title, f"Official episode channel for {title}"
                 )
