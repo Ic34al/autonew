@@ -321,13 +321,13 @@ async def _find_episode_torrent(media, season_number, episode_number):
             # Episode 01, '#01', '- 01', and '[01]'. Plain-number forms
             # are only accepted when the number is a release episode token.
             explicit_patterns = (
-                rf"(?i)\\bS0*{season}[\\s._-]*E0*{episode}\\b",
-                rf"(?i)\\b{season}x0*{episode}\\b",
-                rf"(?i)\\bEpisode[\\s._-]*0*{episode}\\b",
-                rf"(?i)\\bEp[\\s._-]*0*{episode}\\b",
-                rf"(?i)(?:^|[\\s._-])#0*{episode}(?:$|[\\s._-])",
-                rf"(?i)(?:^|[\\s._-])-\\s*0*{episode}(?:$|[\\s._-])",
-                rf"(?i)\\[0*{episode}\\](?:$|[\\s._-])",
+                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
+                rf"(?i)\b{season}x0*{episode}\b",
+                rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
+                rf"(?i)\bEp[\s._-]*0*{episode}\b",
+                rf"(?i)(?:^|[\s._-])#0*{episode}(?:$|[\s._-])",
+                rf"(?i)(?:^|[\s._-])-\s*0*{episode}(?:$|[\s._-])",
+                rf"(?i)\[0*{episode}\](?:$|[\s._-])",
             )
             if not any(re.search(pattern, title) for pattern in explicit_patterns):
                 continue
@@ -350,7 +350,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
             link = link or getattr(entry, "link", None)
             if not link:
                 continue
-            match = re.match(r"^https?://(?:www\\.)?nyaa\\.si/view/(\\d+)", str(link), re.I)
+            match = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)", str(link), re.I)
             if match:
                 link = f"https://nyaa.si/download/{match.group(1)}.torrent"
             candidates.append({"title": title, "link": str(link)})
