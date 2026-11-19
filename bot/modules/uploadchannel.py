@@ -28,7 +28,6 @@ import os
 import shutil
 import hashlib
 from bot.core.reporter import rep
-from bot.core.anime_thumbnail import create_anime_thumbnail
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
 ANILIST_URL = "https://graphql.anilist.co"
@@ -42,7 +41,6 @@ query ($page: Int, $perPage: Int) {
     media(type: ANIME, status: RELEASING, sort: POPULARITY_DESC) {
       id
       title { english romaji native }
-      synonyms
       bannerImage
       season
       seasonYear
@@ -271,43 +269,30 @@ async def _find_720p_season_pack(media, season_number):
 
 
 async def _find_episode_torrent(media, season_number, episode_number):
-    """Find a verified exact episode torrent, including common plain-number release formats."""
+    """Find one exact 720p source torrent for the requested anime season/episode."""
     titles = media.get("title") or {}
     aliases = [_plain_title(titles.get(k)) for k in ("english", "romaji", "native") if titles.get(k)]
-    aliases.extend(_plain_title(value) for value in (media.get("synonyms") or []) if value)
-    aliases = list(dict.fromkeys(a for a in aliases if a))
+    aliases = [a for a in aliases if a]
     if not aliases:
         return None
-
     season = int(season_number)
     episode = int(episode_number)
-    ep = f"{episode:02d}"
     queries = []
     for key in ("english", "romaji", "native"):
         title = titles.get(key)
         if not title:
             continue
         queries.extend([
-            f'"{title}" S{season:02d}E{ep} 720p',
+            f'"{title}" S{season:02d}E{episode:02d} 720p',
             f'"{title}" Season {season} Episode {episode} 720p',
-            f'"{title}" {season}x{ep} 720p',
-            f'"{title}" - {ep} 720p',
-            f'"{title}" {ep} 720p',
-            f'{title} - {ep}',
-            f'{title} {ep}',
-            f'{title} Episode {episode}',
+            f'"{title}" {season}x{episode:02d} 720p',
         ])
-
     feeds = [
         f"https://nyaa.si/?page=rss&q={quote_plus(q)}&c=1_2&f=0"
         for q in queries
     ]
     feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
     feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
-
-    # Collect candidates across feeds rather than stopping at the first feed.
-    candidates = []
-    seen_titles = set()
     for feed_url in dict.fromkeys(x for x in feeds if x):
         try:
             entries = await getfeeds(feed_url)
@@ -316,47 +301,22 @@ async def _find_episode_torrent(media, season_number, episode_number):
             continue
         for entry in entries or []:
             title = str(getattr(entry, "title", "") or "")
-            if title in seen_titles:
-                continue
-            seen_titles.add(title)
             normalized = _plain_title(title)
-            if not normalized or not any(alias == normalized or alias in normalized for alias in aliases):
+            if not normalized or not any(a == normalized or a in normalized for a in aliases):
                 continue
-
-            # Recognize standard fansub formats: S01E01, 1x01, Ep 01,
-            # Episode 01, '#01', '- 01', and '[01]'. Plain-number forms
-            # are only accepted when the number is a release episode token.
-            explicit_patterns = (
+            ep_patterns = (
                 rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
                 rf"(?i)\b{season}x0*{episode}\b",
                 rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
                 rf"(?i)\bEp[\s._-]*0*{episode}\b",
-                rf"(?i)(?:^|[\s._-])#0*{episode}(?:$|[\s._-])",
-                rf"(?i)(?:^|[\s._-])-\s*0*{episode}(?:$|[\s._-])",
-                rf"(?i)\[0*{episode}\](?:$|[\s._-])",
             )
-            explicit_episode = any(re.search(pattern, title) for pattern in explicit_patterns)
-            # Some releases use a bare episode number, e.g. "Anime 01 [1080p]".
-            # Accept it only as a standalone terminal release token, never as
-            # the season number itself.
-            bare_episode = re.search(
-                rf"(?i)(?:^|[\s._-])0*{episode}(?=\s*(?:\[|\(|$))",
-                title,
-            )
-            if bare_episode:
-                prefix = title[:bare_episode.start()].strip()
-                if re.search(r"(?i)\bseason\s*$|\bS0*\d*\s*$", prefix):
-                    bare_episode = None
-            if not explicit_episode and not bare_episode:
+            if not any(re.search(p, title) for p in ep_patterns):
                 continue
-
             detected_season = _season_number_from_release(title)
             if detected_season is not None and detected_season != season:
                 continue
-            # Season 2+ must be explicit to avoid accidentally selecting S1.
             if season > 1 and detected_season != season:
                 continue
-
             link = None
             for candidate in (getattr(entry, "links", None) or []):
                 href = candidate.get("href") if isinstance(candidate, dict) else None
@@ -371,12 +331,9 @@ async def _find_episode_torrent(media, season_number, episode_number):
             match = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)", str(link), re.I)
             if match:
                 link = f"https://nyaa.si/download/{match.group(1)}.torrent"
-            candidates.append({"title": title, "link": str(link)})
-
-    # Prefer releases with an explicit episode marker and an actual torrent URL.
-    if candidates:
-        return candidates[0]
+            return {"title": title, "link": str(link)}
     return None
+
 
 async def _upload_single_episode(media, destination_id, season_number, episode_number):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
@@ -408,7 +365,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
         else "Sub"
     )
-    quality_order = ("480", "720", "1080", "HDRi")
+    quality_order = ("HDRi", "1080", "720", "480")
     buttons = []
     for quality in quality_order:
         upload_name = await info.get_upname(quality)
@@ -432,45 +389,18 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         await db.set_batch_file_link(token, [uploaded.id])
         start_payload = f"getbatch-{token}"
         url = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(start_payload)}"
-        buttons.append(InlineKeyboardButton("HDRip" if quality == "HDRi" else f"{quality}p", url=url))
-    audio_label = {
-        "Sub": "Japanese [English Sub]",
-        "Dub": "English Dub",
-        "Dual": "Dual Japanese/English",
-    }.get(info.pdata.get("audio_type"), info.pdata.get("audio_type") or "Japanese [English Sub]")
+        buttons.append(InlineKeyboardButton(f"{quality}p", url=url))
     caption = (
-        f"<b>{_escape(title)} Season {season_number} Episode {int(episode_number):02d}</b>\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"➜ <b>Audio:</b> {_escape(audio_label)}\n"
-        f"➤ <b>Quality:</b> 480p, 720p, 1080p &amp; HDRip\n"
-        f"➜ <b>Episode:</b> {int(episode_number):02d}\n"
-        f"━━━━━━━━━━━━━━\n"
-        f"<blockquote>{_escape((info.adata.get('description') or '')[:450])}</blockquote>"
+        f"<b>{_escape(title)} — Season {season_number} Episode {episode_number}</b>\n"
+        f"<b>Release:</b> {_escape(episode['title'])}\n"
+        f"<b>Available qualities:</b> HDRip, 1080p, 720p, 480p"
     )
-    episode_thumb = await create_anime_thumbnail(
-        info.adata.get("bannerImage") or
-        (info.adata.get("coverImage") or {}).get("large") or
-        (info.adata.get("coverImage") or {}).get("extraLarge"),
-        title,
-        f"{int(episode_number):02d}",
-        output_name=f"uc_episode_thumb_{safe}.jpg",
-        metadata={**(info.adata or {}), "season": str(season_number)},
+    await bot.send_message(
+        chat_id=destination_id,
+        text=caption,
+        reply_markup=InlineKeyboardMarkup([buttons]),
+        disable_web_page_preview=True,
     )
-    if episode_thumb and os.path.exists(episode_thumb):
-        await bot.send_photo(
-            chat_id=destination_id,
-            photo=episode_thumb,
-            caption=caption,
-            reply_markup=InlineKeyboardMarkup([buttons[:2], buttons[2:]]),
-        )
-        os.remove(episode_thumb)
-    else:
-        await bot.send_message(
-            chat_id=destination_id,
-            text=caption,
-            reply_markup=InlineKeyboardMarkup([buttons[:2], buttons[2:]]),
-            disable_web_page_preview=True,
-        )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
 
@@ -498,6 +428,47 @@ def _selection_keyboard(items, selected):
     ])
     return InlineKeyboardMarkup(rows)
 
+
+
+@bot.on_message(filters.command("setchannelinvite") & filters.private)
+async def setchannelinvite_command(client, message):
+    if not message.from_user or message.from_user.id not in Var.ADMINS:
+        return await message.reply("⛔ This command is restricted to bot administrators.")
+    raw = message.text.split(None, 1)
+    if len(raw) < 2 or "|" not in raw[1]:
+        return await message.reply(
+            "Usage: /setchannelinvite Anime Title | https://t.me/+INVITE_LINK"
+        )
+    anime_title, invite_link = [part.strip() for part in raw[1].split("|", 1)]
+    if not anime_title or not re.match(r"^https?://t\.me/(?:\+|joinchat/)", invite_link):
+        return await message.reply("Send the exact private channel invite link, not a channel ID.")
+    user_client = __import__("pyrogram").Client(
+        "autonew_channel_creator",
+        api_id=int(Var.API_ID),
+        api_hash=Var.API_HASH,
+        session_string=Var.USER_SESSION,
+        in_memory=True,
+        parse_mode=ParseMode.HTML,
+    )
+    try:
+        await user_client.start()
+        chat = await user_client.get_chat(invite_link)
+        if not chat or not getattr(chat, "id", None) or not str(getattr(chat, "type", "")).lower().endswith("channel"):
+            return await message.reply("That invite link did not resolve to a channel.")
+        await db.add_anime_channel_mapping(anime_title, chat.id)
+        await db.set_anime_channel_invite_link(anime_title, chat.id, invite_link)
+        await db.set_anime_channel_selected(anime_title, chat.id)
+        await message.reply(
+            f"✅ Saved the private channel reference for <b>{_escape(anime_title)}</b> "
+            f"({chat.id}). Retry /uploadchannel now."
+        )
+    except Exception as exc:
+        await message.reply(
+            f"❌ Could not validate that invite link: {_escape(type(exc).__name__)}: {_escape(exc)}"
+        )
+    finally:
+        if user_client.is_connected:
+            await user_client.stop()
 
 @bot.on_message(filters.command("uploadchannel") & filters.private)
 async def uploadchannel_command(client, message):
@@ -571,6 +542,7 @@ async def uploadchannel_callbacks(client, callback):
             api_hash=Var.API_HASH,
             session_string=Var.USER_SESSION,
             in_memory=True,
+            parse_mode=ParseMode.HTML,
         )
         await user_client.start()
         # Resolve the bot through its public username in the USER session.
@@ -608,23 +580,32 @@ async def uploadchannel_callbacks(client, callback):
 
             chat = None
             reused = False
+            persistent_invite = None
             if mapped_id:
                 wanted_id = int(mapped_id)
-                # Load the saved channel peer from the USER_SESSION dialog cache.
-                async for dialog in user_client.get_dialogs():
-                    if int(dialog.chat.id) == wanted_id:
-                        chat = dialog.chat
-                        break
-                if chat is None:
-                    try:
-                        chat = await user_client.get_chat(wanted_id)
-                    except Exception:
-                        chat = None
-                if chat is None:
+                # The saved channels were created by USER_SESSION. Resolve them
+                # through that same creator account, not the bot token: the bot
+                # may not have been promoted yet if an earlier run stopped midway.
+                # Do not scan get_dialogs(); stale dialog peers can trigger
+                # channels.GetChannels / CHANNEL_INVALID.
+                saved_invite = await db.get_anime_channel_invite_link(title)
+                persistent_invite = saved_invite
+                try:
+                    # An invite URL carries a resolvable Telegram peer even after
+                    # Heroku restarts and the in-memory Pyrogram peer cache is lost.
+                    chat = await user_client.get_chat(saved_invite) if saved_invite else await user_client.get_chat(wanted_id)
+                except Exception as resolve_error:
                     raise RuntimeError(
-                        f"A channel mapping already exists for '{title}' ({wanted_id}), "
-                        "but USER_SESSION cannot access it. No duplicate channel was created. "
-                        "Check that this account still has access to that channel."
+                        f"Saved channel '{title}' ({wanted_id}) has no usable persisted invite link "
+                        f"and its numeric peer cannot be resolved: "
+                        f"{type(resolve_error).__name__}: {resolve_error}. "
+                        "Run /setchannelinvite Anime Title | https://t.me/+INVITE_LINK once for this "
+                        "existing channel. The mapping was kept; no duplicate was created."
+                    ) from resolve_error
+                if not chat or int(chat.id) != wanted_id:
+                    raise RuntimeError(
+                        f"Saved mapping for '{title}' points to {wanted_id}, but Telegram "
+                        "returned a different channel. No duplicate was created."
                     )
                 reused = True
             else:
@@ -632,16 +613,28 @@ async def uploadchannel_callbacks(client, callback):
                     title, f"Official episode channel for {title}"
                 )
 
-            # Refresh all aliases and selected mapping for either reused or new channel.
+            # Persist a durable invite reference for private channels. Unlike a
+            # numeric channel ID, the invite URL can repopulate Pyrogram's peer
+            # cache after a fresh in-memory USER_SESSION on Heroku.
+            if not persistent_invite:
+                try:
+                    invite_obj = await user_client.create_chat_invite_link(
+                        chat.id, name="Anime uploader persistent peer"
+                    )
+                    persistent_invite = invite_obj.invite_link
+                except Exception as invite_error:
+                    raise RuntimeError(
+                        f"Could not create a persistent invite reference for '{title}': {invite_error}"
+                    ) from invite_error
+
+            # Save aliases and invite reference only after the real channel is resolved.
             for name in names:
                 await db.add_anime_channel_mapping(name, chat.id)
+                await db.set_anime_channel_invite_link(name, chat.id, persistent_invite)
             await db.set_anime_channel_selected(title, chat.id)
 
-            # Telegram does not allow bots to be ordinary channel members.
-            # A bot must be promoted directly by the channel creator/admin.
-            # Calling promote_chat_member performs channels.editAdmin; do NOT
-            # call add_chat_members (channels.inviteToChannel), which returns
-            # USER_BOT for bot accounts.
+            # USER_SESSION is the channel creator/admin. Verify the bot's status
+            # through this session, and repair missing admin rights automatically.
             try:
                 current_member = await user_client.get_chat_member(chat.id, bot_user.id)
                 current_status = str(getattr(current_member, "status", "")).lower()
@@ -662,6 +655,14 @@ async def uploadchannel_callbacks(client, callback):
                         can_pin_messages=True,
                     ),
                 )
+                # Confirm the promotion before any season/episode upload begins.
+                confirmed_member = await user_client.get_chat_member(chat.id, bot_user.id)
+                confirmed_status = str(getattr(confirmed_member, "status", "")).lower()
+                if not any(role in confirmed_status for role in ("administrator", "owner", "creator")):
+                    raise RuntimeError(
+                        f"Bot promotion could not be confirmed for '{title}' ({chat.id}). "
+                        "No episode upload was started."
+                    )
             # Each archive season gets its own info -> sticker -> episode-batch sequence.
             created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
@@ -696,14 +697,13 @@ async def uploadchannel_callbacks(client, callback):
                     # suppress uploads when the destination channel is actually empty.
                     # Check the destination channel's history; existing episodes are skipped.
                     existing_episodes = set()
-                    # Bots cannot invoke messages.GetHistory. Read channel history through the authorized USER_SESSION.
-                    async for channel_message in user_client.get_chat_history(destination_id, limit=500):
+                    async for channel_message in bot.get_chat_history(destination_id, limit=500):
                         body = " ".join(str(x or "") for x in (
                             getattr(channel_message, "text", ""),
                             getattr(channel_message, "caption", ""),
                         ))
                         match = re.search(
-                            rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
+                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
                         )
                         if match:
                             existing_episodes.add(int(match.group(1)))
@@ -711,89 +711,32 @@ async def uploadchannel_callbacks(client, callback):
                     episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
-                    # Publish the season header only once. Existing channel history is
-                    # authoritative on retries, so a retry does not spam duplicate posters.
-                    info_exists = False
-                    async for history_message in user_client.get_chat_history(destination_id, limit=500):
-                        history_body = " ".join(str(x or "") for x in (
-                            getattr(history_message, "text", ""),
-                            getattr(history_message, "caption", ""),
-                        ))
-                        # Old retries posted a multiline text header beginning with
-                        # "Season 1" and placed Episodes/Format/Status on later
-                        # lines. The previous regex required them on the same
-                        # line, so it missed that post and sent a duplicate.
-                        has_season = bool(re.search(
-                            rf"(?i)\bSeason\s*{season_index}\b",
-                            history_body,
-                        ))
-                        has_header_fields = all(re.search(
-                            rf"(?i)\b{field}\s*:",
-                            history_body,
-                        ) for field in ("Episodes", "Format", "Status", "Qualities"))
-                        if has_season and has_header_fields:
-                            info_exists = True
-                            break
-
-                    # Use the season's own title, not the selected sequel title,
-                    # to prevent captions like "Season 2 — Season 1".
                     season_info = (
-                        f"<b>{_escape(season_title)} — Season {season_index}</b>\n"
+                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
+                        f"<b>Season title:</b> {_escape(season_title)}\n"
                         f"<b>Year:</b> {_escape(season_year)}\n"
                         f"<b>Episodes:</b> {_escape(episode_total)}\n"
                         f"<b>Format:</b> {_escape(season_format)}\n"
                         f"<b>Status:</b> {_escape(season_status)}\n"
                         f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
                     )
-                    if not info_exists:
-                        season_editor = TextEditor(season_title)
-                        await season_editor.load_info()
-                        poster_meta = dict(prequel)
-                        poster_meta.update(season_editor.adata or {})
-                        poster_meta.setdefault("title", prequel.get("title") or {})
-                        poster_meta.setdefault("description", prequel.get("description"))
-                        poster_meta.setdefault("bannerImage", prequel.get("bannerImage"))
-                        poster_meta.setdefault("coverImage", prequel.get("coverImage") or {})
-                        poster_meta.setdefault("season", prequel.get("season"))
-                        poster_meta.setdefault("seasonYear", season_year)
-                        poster_meta["season"] = str(season_index)
-                        # Relation data is authoritative; title search results
-                        # must not overwrite the selected prequel's identity.
-                        poster_meta["title"] = prequel.get("title") or poster_meta.get("title")
-                        poster_path = await create_anime_thumbnail(
-                            poster_meta.get("bannerImage") or
-                            (poster_meta.get("coverImage") or {}).get("extraLarge") or
-                            (poster_meta.get("coverImage") or {}).get("large"),
-                            season_title,
-                            f"Season {season_index}",
-                            output_name=f"uc_info_{archive_id}_{season_index}.jpg",
-                            metadata=poster_meta,
+                    info_message = await bot.send_message(
+                        chat_id=destination_id,
+                        text=season_info,
+                        disable_web_page_preview=True,
+                    )
+                    if not info_message:
+                        raise RuntimeError(
+                            f"Could not publish Season {season_index} information for {selected_title}; "
+                            "the season batch was not started."
                         )
-                        if poster_path and os.path.exists(poster_path):
-                            info_message = await bot.send_photo(
-                                chat_id=destination_id,
-                                photo=poster_path,
-                                caption=season_info,
-                            )
-                            os.remove(poster_path)
-                        else:
-                            info_message = await bot.send_message(
-                                chat_id=destination_id,
-                                text=season_info,
-                                disable_web_page_preview=True,
-                            )
-                        if not info_message:
-                            raise RuntimeError(
-                                f"Could not publish Season {season_index} information for {selected_title}; "
-                                "the season batch was not started."
-                            )
-                        sticker_ok = await send_sticker_to_channel(
-                            destination_id, getattr(Var, "STICKER_ID", None)
+                    sticker_ok = await send_sticker_to_channel(
+                        destination_id, getattr(Var, "STICKER_ID", None)
+                    )
+                    if not sticker_ok:
+                        raise RuntimeError(
+                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
                         )
-                        if not sticker_ok:
-                            raise RuntimeError(
-                                f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
-                            )
                     if not available_episodes:
                         raise RuntimeError(
                             f"AniList has no released episode count for {season_title}; refusing to guess."
