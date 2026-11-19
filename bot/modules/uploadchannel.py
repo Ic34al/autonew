@@ -366,6 +366,13 @@ async def _publish_channel_anime_info(media, destination_id):
             try:
                 message = await bot.get_messages(destination_id, message_ids=int(existing))
                 if message and not getattr(message, "empty", False):
+                    sticker_done = await db.get_anime_channel_info_sticker_sent(media_id, destination_id)
+                    if not sticker_done:
+                        await asyncio.sleep(1)
+                        sticker_ok = await send_sticker_to_channel(destination_id, getattr(Var, "STICKER_ID", None))
+                        if not sticker_ok:
+                            raise RuntimeError("Priority sticker failed after the existing info card.")
+                        await db.set_anime_channel_info_sticker_sent(media_id, destination_id)
                     return message
             except Exception:
                 pass  # Repair stale checkpoint by sending a fresh card.
