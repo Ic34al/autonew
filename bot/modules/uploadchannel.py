@@ -402,6 +402,19 @@ async def _find_episode_torrent(media, season_number, episode_number):
             seen_entries.add(entry_key)
             scanned += 1
 
+            # Ongoing /uploadchannel jobs must use a single-episode torrent only.
+            # Reject batch/season-pack titles and explicit multi-episode ranges before
+            # matching the requested episode, so a torrent containing E01-E08 cannot
+            # be mistaken for an individual E08 release.
+            if re.search(
+                r"(?i)\\b(?:batch|complete|full season|season pack|episodes?\\s*\\d+\\s*[-~–]\\s*\\d+)\\b",
+                release_title,
+            ) or re.search(
+                r"(?i)(?:\\b\\d{1,3}\\s*[-~–]\\s*\\d{1,3}\\b|\\bE0*\\d{1,3}\\s*[-~–]\\s*E0*\\d{1,3}\\b)",
+                release_title,
+            ):
+                continue
+
             normalized_release = _plain_title(release_title)
             title_match = any(
                 _plain_title(alias) and _plain_title(alias) in normalized_release
