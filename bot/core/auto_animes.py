@@ -8064,7 +8064,7 @@ async def fetch_animes():
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
                         result = await get_animes(
                             title, link,
-                            mapped_channel=selected_channel,
+                            destination_channel=selected_channel,
                             # Scheduled RSS releases use the same full poster +
                             # multi-quality encoder/publisher pipeline as the
                             # normal automatic anime uploader. Do not route them
