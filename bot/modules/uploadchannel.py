@@ -269,30 +269,39 @@ async def _find_720p_season_pack(media, season_number):
 
 
 async def _find_episode_torrent(media, season_number, episode_number):
-    """Find one exact 720p source torrent for the requested anime season/episode."""
+    """Find a verified exact episode torrent, including common plain-number release formats."""
     titles = media.get("title") or {}
     aliases = [_plain_title(titles.get(k)) for k in ("english", "romaji", "native") if titles.get(k)]
     aliases = [a for a in aliases if a]
     if not aliases:
         return None
+
     season = int(season_number)
     episode = int(episode_number)
+    ep = f"{episode:02d}"
     queries = []
     for key in ("english", "romaji", "native"):
         title = titles.get(key)
         if not title:
             continue
         queries.extend([
-            f'"{title}" S{season:02d}E{episode:02d} 720p',
+            f'"{title}" S{season:02d}E{ep} 720p',
             f'"{title}" Season {season} Episode {episode} 720p',
-            f'"{title}" {season}x{episode:02d} 720p',
+            f'"{title}" {season}x{ep} 720p',
+            f'"{title}" - {ep} 720p',
+            f'"{title}" {ep} 720p',
         ])
+
     feeds = [
         f"https://nyaa.si/?page=rss&q={quote_plus(q)}&c=1_2&f=0"
         for q in queries
     ]
     feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
     feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
+
+    # Collect candidates across feeds rather than stopping at the first feed.
+    candidates = []
+    seen_titles = set()
     for feed_url in dict.fromkeys(x for x in feeds if x):
         try:
             entries = await getfeeds(feed_url)
@@ -301,22 +310,35 @@ async def _find_episode_torrent(media, season_number, episode_number):
             continue
         for entry in entries or []:
             title = str(getattr(entry, "title", "") or "")
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
             normalized = _plain_title(title)
-            if not normalized or not any(a == normalized or a in normalized for a in aliases):
+            if not normalized or not any(alias == normalized or alias in normalized for alias in aliases):
                 continue
-            ep_patterns = (
-                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
-                rf"(?i)\b{season}x0*{episode}\b",
-                rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
-                rf"(?i)\bEp[\s._-]*0*{episode}\b",
+
+            # Recognize standard fansub formats: S01E01, 1x01, Ep 01,
+            # Episode 01, '#01', '- 01', and '[01]'. Plain-number forms
+            # are only accepted when the number is a release episode token.
+            explicit_patterns = (
+                rf"(?i)\\bS0*{season}[\\s._-]*E0*{episode}\\b",
+                rf"(?i)\\b{season}x0*{episode}\\b",
+                rf"(?i)\\bEpisode[\\s._-]*0*{episode}\\b",
+                rf"(?i)\\bEp[\\s._-]*0*{episode}\\b",
+                rf"(?i)(?:^|[\\s._-])#0*{episode}(?:$|[\\s._-])",
+                rf"(?i)(?:^|[\\s._-])-\\s*0*{episode}(?:$|[\\s._-])",
+                rf"(?i)\\[0*{episode}\\](?:$|[\\s._-])",
             )
-            if not any(re.search(p, title) for p in ep_patterns):
+            if not any(re.search(pattern, title) for pattern in explicit_patterns):
                 continue
+
             detected_season = _season_number_from_release(title)
             if detected_season is not None and detected_season != season:
                 continue
+            # Season 2+ must be explicit to avoid accidentally selecting S1.
             if season > 1 and detected_season != season:
                 continue
+
             link = None
             for candidate in (getattr(entry, "links", None) or []):
                 href = candidate.get("href") if isinstance(candidate, dict) else None
@@ -328,12 +350,15 @@ async def _find_episode_torrent(media, season_number, episode_number):
             link = link or getattr(entry, "link", None)
             if not link:
                 continue
-            match = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)", str(link), re.I)
+            match = re.match(r"^https?://(?:www\\.)?nyaa\\.si/view/(\\d+)", str(link), re.I)
             if match:
                 link = f"https://nyaa.si/download/{match.group(1)}.torrent"
-            return {"title": title, "link": str(link)}
-    return None
+            candidates.append({"title": title, "link": str(link)})
 
+    # Prefer releases with an explicit episode marker and an actual torrent URL.
+    if candidates:
+        return candidates[0]
+    return None
 
 async def _upload_single_episode(media, destination_id, season_number, episode_number):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
