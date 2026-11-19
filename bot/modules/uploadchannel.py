@@ -377,6 +377,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         episode["link"],
         destination_channel=int(destination_id),
         manual_search=True,
+        qualities_override=list(Var.QUALS),
     )
     if result not in ("uploaded", "already_published"):
         raise RuntimeError(
