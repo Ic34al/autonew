@@ -26,32 +26,77 @@ class TorDownloader:
         return filename.lower().endswith(self.video_exts)
 
     async def _get_downloaded_file(self, directory, max_retries=10):
+        # Compatibility helper: recursively return a video path if present.
         for attempt in range(max_retries):
             try:
-                items = os.listdir(directory)
-                
-                files = [f for f in items if os.path.isfile(os.path.join(directory, f)) and self.is_video_file(f)]
-                if files:
-                    valid_files = [f for f in files if not f.endswith(('.part', '.tmp', '.crdownload'))]
-                    if valid_files:
-                        return valid_files[0]
-                
-                dirs = [d for d in items if os.path.isdir(os.path.join(directory, d))]
-                for subdir in dirs:
-                    subdir_path = os.path.join(directory, subdir)
-                    subdir_files = [f for f in os.listdir(subdir_path) 
-                                    if os.path.isfile(os.path.join(subdir_path, f)) and self.is_video_file(f)]
-                    if subdir_files:
-                        return os.path.join(subdir, subdir_files[0])
-                
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
-                    
+                for root, _, files in os.walk(directory):
+                    for name in files:
+                        if self.is_video_file(name) and not name.endswith(('.part', '.tmp', '.crdownload')):
+                            return os.path.join(root, name)
             except Exception:
-                if attempt < max_retries - 1:
-                    await asyncio.sleep(2)
-                    
+                pass
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2)
         return None
+
+    async def _wait_for_completed_video(self, directory, timeout=7200, stable_seconds=120, no_progress_timeout=1800):
+        """
+        torrentp may return after the torrent is added rather than after the
+        payload is complete. Never hand a growing/partial MKV to FFmpeg.
+        Wait for a video file to exist and remain size-stable, with timeouts
+        and periodic progress logs.
+        """
+        started = asyncio.get_running_loop().time()
+        last_progress = started
+        last_report = started
+        candidate = None
+        previous_size = -1
+        stable_since = None
+
+        while True:
+            now = asyncio.get_running_loop().time()
+            if now - started > timeout:
+                raise TimeoutError(f"Torrent download exceeded {timeout // 60} minutes.")
+            if now - last_progress > no_progress_timeout:
+                raise TimeoutError(f"Torrent download made no file-size progress for {no_progress_timeout // 60} minutes.")
+
+            videos = []
+            for root, _, files in os.walk(directory):
+                for name in files:
+                    if not self.is_video_file(name) or name.endswith(('.part', '.tmp', '.crdownload')):
+                        continue
+                    path = os.path.join(root, name)
+                    try:
+                        size = os.path.getsize(path)
+                    except OSError:
+                        continue
+                    if size > 0:
+                        videos.append((path, size))
+
+            if videos:
+                path, size = max(videos, key=lambda item: item[1])
+                if path != candidate:
+                    candidate = path
+                    previous_size = size
+                    stable_since = now
+                    last_progress = now
+                    await rep.report(f"Torrent payload detected: {os.path.basename(path)} ({size / 1024 / 1024:.1f} MiB). Waiting for completion.", "info")
+                elif size != previous_size:
+                    previous_size = size
+                    stable_since = now
+                    last_progress = now
+                elif stable_since is not None and now - stable_since >= stable_seconds:
+                    await rep.report(f"Torrent payload stable for {stable_seconds}s; treating as complete: {os.path.basename(path)} ({size / 1024 / 1024:.1f} MiB).", "info")
+                    return path
+
+                if now - last_report >= 60:
+                    await rep.report(f"Torrent download still running: {os.path.basename(path)} ({size / 1024 / 1024:.1f} MiB; stable {int(now - (stable_since or now))}s).", "info")
+                    last_report = now
+            elif now - last_report >= 60:
+                await rep.report("Torrent active; waiting for video payload to appear.", "info")
+                last_report = now
+
+            await asyncio.sleep(5)
 
     @handle_logs
     async def download(self, torrent):
@@ -75,24 +120,18 @@ class TorDownloader:
                 except:
                     pass
 
-            await asyncio.sleep(3)
-
-            filename = await self._get_downloaded_file(self.__downdir)
-            if not filename:
-                await rep.report("Download failed - no files found", "error")
-                return None
-                     
-            file_path = os.path.join(self.__downdir, filename)
+            await rep.report("Torrent added to session; waiting for the actual payload download to finish.", "info")
+            file_path = await self._wait_for_completed_video(self.__downdir)
             if not os.path.exists(file_path):
                 await rep.report(f"File not found at {file_path}", "error")
                 return None
-                     
+
             file_size = os.path.getsize(file_path)
-            if file_size == 0:
+            if file_size <= 0:
                 await rep.report("Downloaded file is empty", "error")
                 return None
-                     
-            await rep.report(f"Successfully downloaded: {filename}", "info")
+
+            await rep.report(f"Successfully downloaded and verified: {file_path} ({file_size / 1024 / 1024:.1f} MiB)", "info")
             return file_path
 
         except Exception as e:
