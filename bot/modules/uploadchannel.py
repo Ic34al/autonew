@@ -382,8 +382,8 @@ async def _publish_channel_anime_info(media, destination_id):
     romaji = titles.get("romaji") or title
     description = re.sub(r"<[^>]+>", " ", str(media.get("description") or ""))
     description = re.sub(r"\s+", " ", description).strip()
-    if len(description) > 700:
-        description = description[:697].rsplit(" ", 1)[0] + "..."
+    if len(description) > 450:
+        description = description[:447].rsplit(" ", 1)[0] + "..."
     genres = ", ".join(media.get("genres") or []) or "N/A"
     fmt = media.get("format") or media.get("type") or "N/A"
     score = media.get("averageScore")
