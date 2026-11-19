@@ -269,79 +269,122 @@ async def _find_720p_season_pack(media, season_number):
 
 
 
+async def _subsplease_torrent_link(entry):
+    """Resolve a torrent/magnet attached to a SubsPlease RSS item or its release page."""
+    candidates = []
+    for candidate in (getattr(entry, "links", None) or []):
+        href = candidate.get("href") if isinstance(candidate, dict) else None
+        rel = str(candidate.get("rel") or "").lower() if isinstance(candidate, dict) else ""
+        media_type = str(candidate.get("type") or "").lower() if isinstance(candidate, dict) else ""
+        if href and (rel == "enclosure" or "torrent" in media_type or href.lower().startswith("magnet:")):
+            candidates.append(href)
+
+    entry_link = str(getattr(entry, "link", "") or "")
+    if entry_link:
+        candidates.append(entry_link)
+
+    # A SubsPlease RSS item commonly links to its release page rather than
+    # embedding the magnet. Resolve only links belonging to that RSS item;
+    # never perform a separate Nyaa search.
+    for candidate in candidates:
+        if candidate.lower().startswith("magnet:"):
+            return candidate
+        if re.search(r"(?i)\.torrent(?:$|[?#])", candidate):
+            return candidate
+        nyaa_view = re.match(r"^https?://(?:www\.)?nyaa\.si/view/(\d+)(?:[/?#].*)?$", candidate, re.I)
+        if nyaa_view:
+            return f"https://nyaa.si/download/{nyaa_view.group(1)}.torrent"
+
+    page_url = entry_link
+    if not page_url or not page_url.startswith(("http://", "https://")):
+        return None
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, connect=8.0),
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AutoAnimeUploader/1.0)"},
+        ) as client:
+            response = await client.get(page_url)
+            response.raise_for_status()
+            page = response.text
+    except Exception as exc:
+        await rep.report(f"SubsPlease release-page torrent resolution failed: {type(exc).__name__}: {exc}", "warning", log=False)
+        return None
+
+    magnet_match = re.search(r'href=["\\'](magnet:\\?[^"\\']+)["\\']', page, re.I)
+    if magnet_match:
+        return html.unescape(magnet_match.group(1).replace("&amp;", "&"))
+
+    torrent_match = re.search(r'href=["\\']([^"\\']+\\.torrent(?:\\?[^"\\']*)?)["\\']', page, re.I)
+    if torrent_match:
+        href = html.unescape(torrent_match.group(1))
+        if href.startswith("//"):
+            return "https:" + href
+        if href.startswith("/"):
+            from urllib.parse import urljoin
+            return urljoin(page_url, href)
+        if href.startswith("http"):
+            return href
+    return None
+
+
 async def _find_episode_torrent(media, season_number, episode_number):
-    """Search Nyaa RSS using AniList titles/synonyms and return only an exact episode match."""
+    """Find an exact episode in SubsPlease RSS and resolve its attached torrent."""
     titles = media.get("title") or {}
-    raw_aliases = [
-        titles.get(key) for key in ("english", "romaji", "native")
-        if titles.get(key)
-    ]
-    # AniList's synonyms often contain the short Japanese/romanized title
-    # used by release groups when the English title is long.
+    raw_aliases = [titles.get(key) for key in ("english", "romaji", "native") if titles.get(key)]
     raw_aliases.extend(media.get("synonyms") or [])
     aliases = []
     for value in raw_aliases:
         value = str(value or "").strip()
         normalized = _plain_title(value)
-        if value and normalized and normalized not in {
-            _plain_title(existing) for existing in aliases
-        }:
+        if value and normalized and normalized not in {_plain_title(existing) for existing in aliases}:
             aliases.append(value)
     if not aliases:
-        await rep.report(
-            f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.",
-            "warning", log=False,
-        )
+        await rep.report(f"AniList supplied no searchable title aliases for anime ID {media.get('id')}.", "warning", log=False)
         return None
 
-    season = int(season_number)
-    episode = int(episode_number)
-    queries = []
-    for alias in aliases:
-        # Avoid quoted-only searches: Nyaa title punctuation and release-group
-        # formatting varies. Keep each query title-specific and episode-specific.
-        queries.extend([
-            f"{alias} S{season:02d}E{episode:02d} 720p",
-            f"{alias} S{season}E{episode:02d} 720p",
-            f"{alias} Season {season} Episode {episode} 720p",
-            f"{alias} {episode:02d} 720p",
-        ])
-    feeds = [
-        f"https://nyaa.si/?page=rss&q={quote_plus(query)}&c=1_2&f=0"
-        for query in queries
-    ]
-    feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
-    feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
+    season, episode = int(season_number), int(episode_number)
+    # This workflow intentionally uses SubsPlease RSS only. RSS_LOW_END is
+    # configured to SubsPlease quality feeds; custom RSS entries are included
+    # only when their URL is also a SubsPlease feed.
+    feeds = list((getattr(Var, "RSS_LOW_END", {}) or {}).values())
+    configured = getattr(Var, "RSS_ITEMS_ANIME", []) or []
+    if isinstance(configured, str):
+        configured = configured.split()
+    feeds.extend(
+        url for url in configured
+        if "subsplease.org" in str(url).lower()
+    )
+    feeds = list(dict.fromkeys(url for url in feeds if url and "subsplease.org" in str(url).lower()))
+    if not feeds:
+        feeds = ["https://subsplease.org/rss/?r=720", "https://subsplease.org/rss/?r=1080"]
 
     seen_entries = set()
     scanned = 0
-    for feed_url in dict.fromkeys(url for url in feeds if url):
+    await rep.report(
+        f"UPLOADCHANNEL: scanning {len(feeds)} SubsPlease RSS feed(s) for "
+        f"{_display_title(media)} S{season:02d}E{episode:02d}.",
+        "info", log=False,
+    )
+    for feed_url in feeds:
         try:
             entries = await getfeeds(feed_url)
         except Exception as exc:
-            await rep.report(
-                f"Episode RSS scan failed for {feed_url}: {type(exc).__name__}: {exc}",
-                "warning", log=False,
-            )
+            await rep.report(f"SubsPlease RSS scan failed for {feed_url}: {type(exc).__name__}: {exc}", "warning", log=False)
             continue
-
         for entry in entries or []:
-            title = str(getattr(entry, "title", "") or "")
-            link = getattr(entry, "link", None)
-            entry_key = (title.casefold(), str(link or ""))
+            release_title = str(getattr(entry, "title", "") or "")
+            entry_link = str(getattr(entry, "link", "") or "")
+            entry_key = (release_title.casefold(), entry_link)
             if entry_key in seen_entries:
                 continue
             seen_entries.add(entry_key)
             scanned += 1
 
-            normalized_release = _plain_title(title)
-            # First prefer a full normalized alias match. For abbreviated
-            # release titles, permit a strong token overlap only (>=75% of
-            # a meaningful alias and at least four matching words).
+            normalized_release = _plain_title(release_title)
             title_match = any(
-                _plain_title(alias) in normalized_release
+                _plain_title(alias) and _plain_title(alias) in normalized_release
                 for alias in aliases
-                if _plain_title(alias)
             )
             if not title_match:
                 release_tokens = set(normalized_release.split())
@@ -353,76 +396,64 @@ async def _find_episode_torrent(media, season_number, episode_number):
                             "her", "his", "their", "you", "your", "into",
                         }
                     }
-                    if len(alias_tokens) >= 4:
+                    if len(alias_tokens) >= 3:
                         overlap = len(alias_tokens & release_tokens)
-                        if overlap >= 4 and overlap / len(alias_tokens) >= 0.75:
+                        if overlap >= 3 and overlap / len(alias_tokens) >= 0.75:
                             title_match = True
                             break
             if not title_match:
                 continue
 
-            ep_patterns = (
-                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
-                rf"(?i)\b{season}x0*{episode}\b",
-                rf"(?i)\bSeason[\s._-]*0*{season}[\s._-]*Episode[\s._-]*0*{episode}\b",
-                rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
-                rf"(?i)\bEp[\s._-]*0*{episode}\b",
+            episode_patterns = (
+                rf"(?i)\\bS0*{season}[\\s._-]*E0*{episode}\\b",
+                rf"(?i)\\b{season}x0*{episode}\\b",
+                rf"(?i)\\bSeason[\\s._-]*0*{season}[\\s._-]*(?:Episode|Ep)?[\\s._-]*0*{episode}\\b",
+                rf"(?i)\\b(?:Episode|Ep)[\\s._-]*0*{episode}\\b",
+                rf"(?i)(?:^|[\\s._\\-\\[])0*{episode}(?:[\\s._\\-\\]\\[]|$)",
             )
-            episode_match = any(re.search(pattern, title) for pattern in ep_patterns)
-            # Many Season 1 releases are numbered simply "- 01". Accept that
-            # format only for S1 and only after a strong anime-title match.
-            if season == 1 and not episode_match:
-                episode_match = bool(re.search(
-                    rf"(?i)(?:^|[\s._\-\[])0*{episode}(?:[\s._\-\]\[]|$)",
-                    title,
-                ))
-            if not episode_match:
+            if not any(re.search(pattern, release_title) for pattern in episode_patterns):
                 continue
 
-            detected_season = _season_number_from_release(title)
+            detected_season = _season_number_from_release(release_title)
             if detected_season is not None and detected_season != season:
                 continue
-            if season > 1 and detected_season != season:
+            # For later seasons, require explicit season evidence to avoid
+            # accidentally selecting an episode from Season 1.
+            if season > 1 and detected_season is None:
                 continue
 
-            torrent_link = None
-            for candidate in (getattr(entry, "links", None) or []):
-                href = candidate.get("href") if isinstance(candidate, dict) else None
-                rel = str(candidate.get("rel") or "").lower() if isinstance(candidate, dict) else ""
-                content_type = str(candidate.get("type") or "").lower() if isinstance(candidate, dict) else ""
-                if href and (
-                    rel == "enclosure"
-                    or "bittorrent" in content_type
-                    or "x-bittorrent" in content_type
-                ):
-                    torrent_link = href
-                    break
-            torrent_link = torrent_link or link
+            torrent_link = await _subsplease_torrent_link(entry)
             if not torrent_link:
+                await rep.report(
+                    f"Matched SubsPlease RSS release but no torrent/magnet link could be resolved: {release_title}",
+                    "warning", log=False,
+                )
                 continue
-
-            match = re.match(
-                r"^https?://(?:www\.)?nyaa\.si/view/(\d+)",
-                str(torrent_link), re.I,
-            )
-            if match:
-                torrent_link = f"https://nyaa.si/download/{match.group(1)}.torrent"
-            return {"title": title, "link": str(torrent_link)}
+            await rep.report(f"UPLOADCHANNEL: matched SubsPlease release: {release_title}", "info", log=False)
+            return {"title": release_title, "link": torrent_link, "source": "SubsPlease RSS"}
 
     await rep.report(
-        f"No exact RSS torrent match for AniList anime {media.get('id')} "
-        f"Season {season} Episode {episode}; searched {len(aliases)} title aliases "
-        f"across {len(dict.fromkeys(url for url in feeds if url))} feeds "
-        f"and inspected {scanned} unique entries. No upload was started.",
+        f"No exact SubsPlease RSS torrent match for AniList anime {media.get('id')} "
+        f"Season {season} Episode {episode}; inspected {scanned} unique RSS entries. "
+        "No Nyaa search fallback was used.",
         "warning", log=False,
     )
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     from bot import Var
-    await rep.report(f"UPLOADCHANNEL: searching RSS for {_display_title(media)} S{season_number:02d}E{episode_number:02d}.", "info")
+    title_for_progress = _display_title(media)
+    async def _progress(stage, detail=None):
+        if progress_callback:
+            try:
+                await progress_callback(stage, f"{title_for_progress} S{season_number:02d}E{episode_number:02d}: {detail or stage}")
+            except Exception:
+                pass
+        await rep.report(f"UPLOADCHANNEL: {title_for_progress} S{season_number:02d}E{episode_number:02d} — {detail or stage}", "info", log=False)
+
+    await _progress("searching SubsPlease RSS", "searching SubsPlease RSS for exact episode torrent")
     episode = await _find_episode_torrent(media, season_number, episode_number)
     if not episode:
         raise RuntimeError(
@@ -461,7 +492,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     }
     """
     try:
-        await rep.report(f"UPLOADCHANNEL: fetching exact AniList metadata for {title} S{season_number:02d}E{episode_number:02d}.", "info")
+        await _progress("fetching metadata", "fetching exact AniList metadata and artwork")
         async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as metadata_client:
             metadata_response = await metadata_client.post(
                 ANILIST_URL,
@@ -567,7 +598,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # A fresh in-memory USER_SESSION may not know its numeric peer ID, and
         # it cannot read channel history until it has joined the storage channel.
         # Resolve/join it through the configured public username or invite link.
-        await rep.report(f"UPLOADCHANNEL: resolving FILE_STORE for {title} S{target_season:02d}E{target_episode:02d}.", "info")
+        await _progress("checking FILE_STORE", "checking reusable episode qualities in FILE_STORE")
         if storage_link:
             try:
                 storage_chat = await destination_client.join_chat(storage_link)
@@ -599,7 +630,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # in this storage channel. Do not promote Auto Anime Uploader here:
         # its BOT_TOKEN is only used to publish episode cards, not to serve files.
         scanned_storage_messages = 0
-        await rep.report(f"UPLOADCHANNEL: scanning up to 5000 FILE_STORE messages for {title} S{target_season:02d}E{target_episode:02d}.", "info")
+        await _progress("scanning FILE_STORE", "scanning FILE_STORE history for existing qualities")
         async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
             scanned_storage_messages += 1
             media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
@@ -688,8 +719,29 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # cannot mistake an old/partial MKV for the current torrent payload.
         shutil.rmtree(workdir, ignore_errors=True)
         os.makedirs(workdir, exist_ok=True)
-        await rep.report(f"UPLOADCHANNEL: downloading torrent for {title} S{season_number:02d}E{episode_number:02d} from RSS/Nyaa.", "info")
-        downloaded = await TorDownloader(workdir).download(episode["link"])
+        await _progress("downloading torrent", f"downloading from {episode.get('source', 'SubsPlease RSS')}; waiting for file data")
+        download_started = asyncio.get_running_loop().time()
+        async def download_heartbeat():
+            while True:
+                await asyncio.sleep(30)
+                elapsed = int(asyncio.get_running_loop().time() - download_started)
+                total_bytes = 0
+                for root, _, files in os.walk(workdir):
+                    for filename in files:
+                        try:
+                            total_bytes += os.path.getsize(os.path.join(root, filename))
+                        except OSError:
+                            pass
+                await _progress("downloading torrent", f"downloading from SubsPlease RSS • {elapsed}s elapsed • {total_bytes / 1024 / 1024:.1f} MiB received")
+        heartbeat_task = asyncio.create_task(download_heartbeat())
+        try:
+            downloaded = await TorDownloader(workdir).download(episode["link"])
+        finally:
+            heartbeat_task.cancel()
+            try:
+                await heartbeat_task
+            except asyncio.CancelledError:
+                pass
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
         video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
@@ -700,7 +752,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         source = video_files[0]
 
     for quality in missing_qualities:
-        await rep.report(f"UPLOADCHANNEL: encoding {title} S{season_number:02d}E{episode_number:02d} at {quality}.", "info")
+        await _progress("encoding", f"encoding {quality}p quality")
         upload_name = await info.get_upname(quality)
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
@@ -736,7 +788,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 f"Encoding failed for S{season_number}E{episode_number} at {quality}, "
                 "including the safe default FFmpeg retry. Earlier uploaded qualities remain saved."
             )
-        await rep.report(f"UPLOADCHANNEL: uploading {title} S{season_number:02d}E{episode_number:02d} at {quality} to FILE_STORE.", "info")
+        await _progress("uploading", f"uploading encoded {quality}p file to FILE_STORE")
         uploaded = await TgUploader(await bot.send_message(
             Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
         )).upload(encoded_path, quality)
@@ -764,6 +816,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
     keyboard = InlineKeyboardMarkup(keyboard_rows)
 
+    await _progress("publishing episode card", "all four quality links ready; publishing episode card")
     # Generate the same ANIME SOUL 16:9 episode artwork used by the normal
     # uploader. Do not post progress, season-info, or sticker messages in the
     # anime channel: publish exactly one final photo/caption/buttons per episode,
@@ -1287,7 +1340,8 @@ async def uploadchannel_callbacks(client, callback):
                         )
                         await update_progress(f"uploading Season {season_index} Episode {episode_number} to {destination_id}")
                         await _upload_single_episode(
-                            prequel, destination_id, season_index, episode_number, user_client
+                            prequel, destination_id, season_index, episode_number, user_client,
+                            progress_callback=update_progress,
                         )
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "complete",
