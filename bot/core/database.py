@@ -355,10 +355,20 @@ class MongoDB:
         return (selected or {}).get("invite_link")
 
     async def remove_anime_channel_mapping(self, anime_name: str, channel: str | int | None = None):
-        query = {"anime_name": anime_name.lower()}
+        # Keep CRUD keys consistent with add/set methods (case-folded, whitespace-normalized).
+        normalized_name = re.sub(r"\\s+", " ", str(anime_name).casefold()).strip()
+        if not normalized_name:
+            return
+        query = {"anime_name": normalized_name}
         if channel is not None:
-            query["channel_id"] = int(channel) if str(channel).lstrip("-").isdigit() else channel
+            channel_id = int(channel) if str(channel).lstrip("-").isdigit() else str(channel).strip()
+            query["channel_id"] = channel_id
         await self.__anime_channels.delete_many(query)
+        # Selected-channel records use the normalized anime name as their _id.
+        selected_query = {"_id": normalized_name}
+        if channel is not None:
+            selected_query["channel_id"] = query["channel_id"]
+        await self.__db.selected_anime_channels.delete_many(selected_query)
 
     async def get_anime_channel(self, anime_name: str) -> int | None:
         """Resolve dedicated-channel mapping from release titles using cleaned tokens."""
@@ -396,7 +406,8 @@ class MongoDB:
 
     async def get_raw_anime_channel(self, anime_name: str) -> dict | None:
         try:
-            entry = await self.__anime_channels.find_one({"anime_name": anime_name.lower()})
+            normalized_name = re.sub(r"\\s+", " ", str(anime_name).casefold()).strip()
+            entry = await self.__anime_channels.find_one({"anime_name": normalized_name})
             return entry
         except Exception as e:
             print(f"Error fetching raw anime channel entry for {anime_name}: {e}")
