@@ -353,7 +353,7 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
             ).hexdigest()[:24]
             await db.set_batch_file_link(batch_token, qual_msg_ids)
             batch_string = f"getbatch-{batch_token}"
-            batch_link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={await encode(batch_string)}"
+            batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
             btn_text = f"• Download Ep 1 To {episode_count} Click Here •"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
             if batch_buttons:
@@ -564,54 +564,75 @@ async def find_existing_anime_channel(anime_name: str):
 _ONGOING_PRIORITY_STICKER_FILE_ID = None
 
 async def send_sticker_to_channel(channel, sticker_id=None, client=None):
-    """Send the priority Ongoing Anime Time sticker with retries and fallback."""
+    """Always send the FIRST sticker from the user's priority sticker pack."""
     global _ONGOING_PRIORITY_STICKER_FILE_ID
-    sender = client or bot
-    last_error = None
-    if not _ONGOING_PRIORITY_STICKER_FILE_ID:
-        try:
+    # Sticker priority is mandatory for episode/schedule posts; do not let an old
+    # SEND_STICKER=False setting suppress the explicitly requested pack.
+    try:
+        # Do not use STICKER_ID or the caller's sticker_id: those may point to
+        # an older/different sticker. The requested pack's first sticker wins.
+        if not _ONGOING_PRIORITY_STICKER_FILE_ID:
             sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
             endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getStickerSet"
             async with httpx.AsyncClient(timeout=25.0) as session:
                 response = await session.get(endpoint, params={"name": sticker_set_name})
                 response.raise_for_status()
                 payload = response.json()
-            stickers = (payload.get("result") or {}).get("stickers") or []
-            if payload.get("ok") and stickers and stickers[0].get("file_id"):
-                _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
-            else:
-                raise RuntimeError(payload.get("description", "Priority sticker pack unavailable/empty"))
-        except Exception as error:
-            last_error = error
+            if not payload.get("ok"):
+                raise RuntimeError(payload.get("description", "Telegram getStickerSet failed"))
+            stickers = payload.get("result", {}).get("stickers") or []
+            if not stickers or not stickers[0].get("file_id"):
+                raise RuntimeError(f"Priority sticker pack {sticker_set_name} is empty")
+            _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
 
-    candidates = []
-    if _ONGOING_PRIORITY_STICKER_FILE_ID:
-        candidates.append(_ONGOING_PRIORITY_STICKER_FILE_ID)
-    fallback = sticker_id or getattr(Var, "STICKER_ID", None)
-    if fallback and fallback not in candidates:
-        candidates.append(fallback)
-    if not candidates:
-        await rep.report(f"Priority sticker unavailable for {channel}: {last_error}", "error")
+        sender = client or bot
+        sticker_to_send = _ONGOING_PRIORITY_STICKER_FILE_ID
+        # Bot API file_ids are bot-account scoped. When the channel creator
+        # USER_SESSION posts to its private channel, download the sticker bytes
+        # through the Bot API and upload those bytes through the user session.
+        if sender is not bot:
+            get_file_endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getFile"
+            async with httpx.AsyncClient(timeout=25.0) as session:
+                file_response = await session.get(
+                    get_file_endpoint,
+                    params={"file_id": _ONGOING_PRIORITY_STICKER_FILE_ID},
+                )
+                file_response.raise_for_status()
+                file_payload = file_response.json()
+                if not file_payload.get("ok"):
+                    raise RuntimeError(file_payload.get("description", "Telegram getFile failed"))
+                file_path = (file_payload.get("result") or {}).get("file_path")
+                if not file_path:
+                    raise RuntimeError("Telegram getFile returned no file_path for priority sticker")
+                download_url = f"https://api.telegram.org/file/bot{Var.BOT_TOKEN}/{file_path}"
+                sticker_response = await session.get(download_url)
+                sticker_response.raise_for_status()
+            sticker_to_send = io.BytesIO(sticker_response.content)
+            # Preserve the real Telegram sticker format (.webp, .tgs or .webm).
+            # Renaming animated/video sticker bytes to .webp makes Pyrogram's
+            # upload parser reject an otherwise valid sticker.
+            sticker_extension = os.path.splitext(str(file_path))[1].lower() or ".webp"
+            if sticker_extension not in (".webp", ".tgs", ".webm"):
+                raise RuntimeError(
+                    f"Unsupported priority sticker file format: {sticker_extension or 'unknown'}"
+                )
+            sticker_to_send.name = f"priority_sticker{sticker_extension}"
+
+        sent_message = await sender.send_sticker(
+            chat_id=channel,
+            sticker=sticker_to_send
+        )
+        if not sent_message:
+            raise RuntimeError("Telegram did not confirm the priority sticker message")
+        await rep.report(
+            f"Sent FIRST priority sticker from Ongoing_Anime_stickers_by_fStikBot "
+            f"after post to {channel} (message_id={sent_message.id})",
+            "info"
+        )
+        return True
+    except Exception as error:
+        await rep.report(f"Priority sticker delivery failed for {channel}: {error}", "error")
         return False
-
-    for candidate in candidates:
-        for attempt in range(3):
-            try:
-                sent = await sender.send_sticker(chat_id=channel, sticker=candidate)
-                if sent and getattr(sent, "id", None):
-                    await rep.report(f"Priority sticker sent after post to {channel} (message_id={sent.id})", "info")
-                    return True
-                raise RuntimeError("Telegram did not confirm sticker send")
-            except FloodWait as flood:
-                last_error = flood
-                if attempt < 2:
-                    await asyncio.sleep(max(1, int(flood.value) + 1))
-            except Exception as error:
-                last_error = error
-                if attempt < 2:
-                    await asyncio.sleep(1 + attempt)
-    await rep.report(f"Priority sticker delivery failed for {channel} after retries: {last_error}", "error")
-    return False
 
 async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_number, qualities):
     """Build the exact established Main Channel caption with Telegram expandable synopsis."""
@@ -672,13 +693,13 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
         episode_label = html.escape(str(episode_number or "—"))
     episode_word = "Episode"
     caption = (
-        f"<blockquote><b>❝ {html.escape(str(display_title))} ❞</b></blockquote>\n"
+        f"<b>{html.escape(str(display_title))}</b>\n"
         "──────────────────────\n"
         f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
         f"<b>➤ Quality: {html.escape(quality_text)}</b>\n"
         f"<b>➥ {episode_word}: {episode_label}</b>\n"
         "──────────────────────\n"
-        + (f"<blockquote expandable>❝ <i>{synopsis}</i> ❞</blockquote>" if synopsis else "")
+        + (f"<blockquote expandable>≡ {synopsis}</blockquote>" if synopsis else "")
     )
     return caption
 
@@ -1044,7 +1065,7 @@ async def process_manga_chapter(title, chapter_url, manual=False):
                 force_document=True
             )
 
-            bot_link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={await encode('get-'+str(file_store_msg.id * abs(Var.FILE_STORE)))}"
+            bot_link = f"https://telegram.me/{Var.BOT_USERNAME}?start={await encode('get-'+str(file_store_msg.id * abs(Var.FILE_STORE)))}"
 
             manga_banner = await db.get_manga_banner(manga_name)
             poster_url = (manga_banner or 
@@ -1488,7 +1509,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -1529,7 +1550,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -2401,7 +2422,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, force_standard_pipeline=False, announce_main=True):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -2428,7 +2449,7 @@ async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=N
                     
         upload_mode = await db.get_upload_mode()
         print(f"get_animes: upload_mode={upload_mode}")
-        if upload_mode == "low_end" and not manual_search and not force_standard_pipeline:
+        if upload_mode == "low_end":
             print(f"get_animes: calling process_low_end for {name}")
             return await process_low_end(name, torrent, destination_channel=destination_channel)
     except Exception as e:
@@ -2481,36 +2502,10 @@ async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=N
             else await db.getAnimeDestinationPost(ani_id, ep_no, channel_to_use)
         )
         if existing_target_post:
-            # If the dedicated episode post already exists but its Main Channel
-            # join announcement was interrupted, recover that missing step only.
-            if channel_to_use != int(Var.MAIN_CHANNEL) and announce_main:
-                existing_main_post = await db.getAnimeMainPost(ani_id, ep_no)
-                if not existing_main_post:
-                    dedicated_message = await bot.get_messages(
-                        channel_to_use, message_ids=int(existing_target_post)
-                    )
-                    if dedicated_message and not getattr(dedicated_message, "empty", False):
-                        join_markup = await build_anime_watch_markup(channel_to_use)
-                        photo = (
-                            dedicated_message.photo.file_id
-                            if getattr(dedicated_message, "photo", None)
-                            else aniInfo.adata.get("poster_url")
-                        )
-                        recovered_main = await bot.send_photo(
-                            Var.MAIN_CHANNEL,
-                            photo=photo,
-                            caption=f"<b>{name}</b>",
-                            reply_markup=join_markup,
-                        )
-                        if not recovered_main or not getattr(recovered_main, "id", None):
-                            raise RuntimeError(
-                                "Dedicated episode exists, but its Main Channel join announcement "
-                                "could not be recovered; retry is safe."
-                            )
-                        await db.saveAnimeMainPost(ani_id, ep_no, recovered_main.id)
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
+            return "uploaded"
             return "already_published"
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
@@ -2588,7 +2583,7 @@ async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=N
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -2739,7 +2734,7 @@ async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=N
                     # The dedicated channel gets the full episode post and
                     # quality buttons. Main Channel gets exactly one join-request
                     # announcement after every requested quality has uploaded.
-                    if announce_main:
+                    if destination_channel is None and not manual_search:
                         join_markup = await build_anime_watch_markup(target_channel)
                         main_join_post = await bot.send_photo(
                             Var.MAIN_CHANNEL,
@@ -2747,9 +2742,8 @@ async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=N
                             caption=f"<b>{name}</b>",
                             reply_markup=join_markup
                         )
-                        if not main_join_post or not getattr(main_join_post, "id", None):
+                        if not main_join_post:
                             raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
-                        await db.saveAnimeMainPost(ani_id, ep_no, main_join_post.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
@@ -2999,7 +2993,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -3040,7 +3034,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -3651,7 +3645,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def _legacy_get_animes_v2(name, torrent, force=False):
+async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -3799,7 +3793,7 @@ async def _legacy_get_animes_v2(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -4155,7 +4149,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -4196,7 +4190,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -4793,7 +4787,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def _legacy_get_animes_v3(name, torrent, force=False):
+async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -4941,7 +4935,7 @@ async def _legacy_get_animes_v3(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -5279,7 +5273,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -5320,7 +5314,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -5917,7 +5911,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def _legacy_get_animes_v4(name, torrent, force=False):
+async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -6065,7 +6059,7 @@ async def _legacy_get_animes_v4(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -6403,7 +6397,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -6444,7 +6438,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -7041,7 +7035,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def _legacy_get_animes_v5(name, torrent, force=False):
+async def get_animes(name, torrent, force=False):
     mode = await db.get_mode()
     if mode != "anime":
         await rep.report(f"Skipping {name} because mode is not anime (current mode: {mode})", "info")
@@ -7189,7 +7183,7 @@ async def _legacy_get_animes_v5(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -7579,7 +7573,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -7620,7 +7614,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -7970,7 +7964,7 @@ async def fetch_animes():
                         recovered_result = await get_animes(
                             pending_name,
                             pending_link,
-                            mapped_channel=mapped_destination
+                            destination_channel=mapped_destination
                         )
                         if recovered_result in ("uploaded", "already_published"):
                             seen_links.add(pending_link)
@@ -8058,10 +8052,10 @@ async def fetch_animes():
                         # release is still safe; batch/range releases were rejected above.
                         # A valid /addanime mapping always wins, regardless of
                         # whether the RSS source is SubsPlease or another sub feed.
-                        # Unmapped anime should auto-create/reuse a dedicated channel.
+                        route_to_main = not bool(selected_channel)
                         eligible.append((
                             title, link, feed_url, scheduled_title,
-                            selected_channel, rss_episode
+                            route_to_main, selected_channel, rss_episode
                         ))
                         break
 
@@ -8090,11 +8084,11 @@ async def fetch_animes():
             await report_schedule_status_once(
                 ("matched", matched_signature),
                 f"Schedule scan matched {len(eligible)} eligible release(s) for today. "
-                "Automatic scheduled uploads are enabled; mapped channels are honored and unmapped anime auto-create/reuse dedicated channels.",
+                "Automatic scheduled uploads are enabled; releases are routed to mapped channels or Main Channel.",
                 "success"
             )
 
-            for title, link, feed_url, scheduled_title, selected_channel, rss_episode in eligible:
+            for title, link, feed_url, scheduled_title, route_to_main, selected_channel, rss_episode in eligible:
                 try:
                     while MANUAL_SEARCH_HOLD.is_set():
                         await asleep(2)
@@ -8102,12 +8096,8 @@ async def fetch_animes():
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
                         result = await get_animes(
                             title, link,
-                            destination_channel=selected_channel,
-                            # Scheduled RSS releases use the normal ANIME SOUL
-                            # poster/caption/four-quality pipeline regardless
-                            # of the low_end setting.
-                            force_standard_pipeline=True,
-                            announce_main=True,
+                            destination_channel=Var.MAIN_CHANNEL if route_to_main else None,
+                            mapped_channel=None if route_to_main else selected_channel
                         )
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
@@ -8141,81 +8131,58 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Resolve mappings, reuse existing anime channels, or create a dedicated channel."""
-    base_name = extract_base_anime_name(name)
-    data = getattr(aniInfo, "adata", {}) or {}
-    titles = data.get("title", {}) or {}
-    candidates = [base_name, name]
-    if isinstance(titles, dict):
-        candidates.extend(titles.get(k) for k in ("english", "romaji", "native"))
-    candidates.extend(data.get("synonyms") or [])
+    """Resolve /addanime channel mappings for scheduled RSS titles and AniList aliases."""
     try:
-        candidates.extend(await get_all_possible_anime_names(base_name))
-    except Exception as alias_error:
-        await rep.report(f"Alias lookup warning for {base_name}: {alias_error}", "warning", log=False)
-
-    def candidate_keys(value):
-        value = re.sub(r"\\s+", " ", str(value or "")).strip()
-        if not value:
-            return []
-        normalized = normalize_anime_name_for_search(value)
-        return list(dict.fromkeys(k for k in (value.lower(), normalized) if k))
-
-    keys = list(dict.fromkeys(k for candidate in candidates for k in candidate_keys(candidate)))
-    # First honor explicit /addanime and /uploadchannel mappings.
-    for key in keys:
+        base_name = extract_base_anime_name(name)
+        candidates = [base_name, name, normalize_anime_name_for_search(base_name)]
+        data = getattr(aniInfo, "adata", {}) or {}
+        title_data = data.get("title", {}) or {}
+        if isinstance(title_data, dict):
+            candidates.extend(title_data.get(key) for key in ("english", "romaji", "native"))
+        candidates.extend(data.get("synonyms", []) or [])
         try:
-            mapped = await db.get_anime_channel(key)
-            if not mapped:
-                mapped = await db.get_selected_anime_channel(key)
-            if not mapped:
+            candidates.extend(await get_all_possible_anime_names(base_name))
+        except Exception as alias_error:
+            await rep.report(f"Could not expand channel aliases for {base_name}: {alias_error}", "warning")
+
+        seen = set()
+        for candidate in candidates:
+            value = re.sub(r"\s+", " ", str(candidate or "")).strip()
+            if not value:
                 continue
-            chat = await validate_channel_id(mapped)
-            if not chat:
-                raise RuntimeError(f"Saved dedicated channel {mapped} for '{key}' is inaccessible.")
-            for alias_key in keys:
-                try:
-                    await db.add_anime_channel_mapping(alias_key, chat.id)
-                except Exception:
-                    pass
-            await rep.report(f"Using saved dedicated channel {chat.id} for {base_name}.", "success", log=False)
-            return int(chat.id)
-        except Exception as lookup_error:
-            await rep.report(f"Channel mapping lookup warning for '{key}': {lookup_error}", "warning", log=False)
+            keys = (value.lower(), normalize_anime_name_for_search(value))
+            for key in dict.fromkeys(k for k in keys if k):
+                if key in seen:
+                    continue
+                seen.add(key)
+                mapped = await db.get_anime_channel(key)
+                if not mapped:
+                    # Also accept mappings created by the newer explicit selector.
+                    mapped = await db.get_selected_anime_channel(key)
+                if not mapped:
+                    continue
+                chat = await validate_channel_id(mapped)
+                if not chat:
+                    raise RuntimeError(
+                        f"Configured /addanime channel {mapped} for '{key}' is inaccessible. "
+                        "Episode upload stopped to prevent publishing to the wrong channel."
+                    )
+                await rep.report(
+                    f"Dedicated channel mapping matched: {base_name} -> {chat.id} (alias: {key}). "
+                    "Main Channel will receive the join-request announcement.",
+                    "success"
+                )
+                return chat.id
 
-    # Reuse a channel already created by the user before creating another one.
-    existing = await find_existing_anime_channel(base_name)
-    if existing:
-        chat = await validate_channel_id(existing)
-        if chat:
-            for alias_key in keys:
-                try:
-                    await db.add_anime_channel_mapping(alias_key, chat.id)
-                except Exception:
-                    pass
-            await rep.report(f"Reused existing anime channel {chat.id} for {base_name}.", "success", log=False)
-            return int(chat.id)
-
-    # Automatic RSS workflow: create a dedicated channel when enabled and a user session exists.
-    creation_enabled = await db.get_channel_creation()
-    if not creation_enabled or not getattr(Var, "USER_SESSION", None):
         await rep.report(
-            f"Automatic channel creation is disabled or USER_SESSION is missing for {base_name}; routing to Main Channel.",
-            "warning",
-            log=False,
+            f"No /addanime channel mapping found for '{base_name}'; using Main Channel.",
+            "warning"
         )
-        return int(Var.MAIN_CHANNEL)
+        return Var.MAIN_CHANNEL
+    except Exception as error:
+        await rep.report(f"Dedicated-channel lookup failed for {name}: {error}", "error")
+        raise
 
-    await rep.report(f"Creating dedicated channel automatically for {base_name}.", "info")
-    created_channel = await create_anime_channel(name, aniInfo)
-    if not created_channel:
-        raise RuntimeError(f"Automatic dedicated-channel creation failed for {base_name}; RSS episode will retry.")
-    for alias_key in keys:
-        try:
-            await db.add_anime_channel_mapping(alias_key, int(created_channel))
-        except Exception as mapping_error:
-            await rep.report(f"Could not save alias mapping '{alias_key}': {mapping_error}", "warning", log=False)
-    return int(created_channel)
 
 async def create_anime_channel(name, aniInfo):
     try:
@@ -8614,7 +8581,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False, force_standard_pipeline=False, announce_main=True):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
     # Manual selected-channel batches can hold automatic processing while active.
     mode = await db.get_mode()
     if mode != "anime":
@@ -8645,7 +8612,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # Manual /search provides one exact selected torrent. The low-end auto mode
         # ignores that torrent and substitutes configured RSS_LOW_END feeds, so use
         # the standard selected-torrent pipeline for manual searches.
-        if upload_mode == "low_end" and not manual_search and not force_standard_pipeline:
+        if upload_mode == "low_end" and not manual_search:
             print(f"get_animes: calling process_low_end for {name}")
             return await process_low_end(
                 name, torrent, force=force,
@@ -8693,35 +8660,6 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             else await db.getAnimeDestinationPost(ani_id, ep_no, target_channel)
         )
         if existing_target_post:
-            # Recover an interrupted Main Channel join announcement without
-            # re-encoding or reposting the episode in its dedicated channel.
-            if (
-                target_channel != int(Var.MAIN_CHANNEL)
-                and announce_main
-                and not defer_main_announcement
-                and not await db.getAnimeMainPost(ani_id, ep_no)
-            ):
-                dedicated_message = await bot.get_messages(
-                    target_channel, message_ids=int(existing_target_post)
-                )
-                if dedicated_message and not getattr(dedicated_message, "empty", False):
-                    join_markup = await build_anime_watch_markup(target_channel)
-                    photo = (
-                        dedicated_message.photo.file_id
-                        if getattr(dedicated_message, "photo", None)
-                        else aniInfo.adata.get("poster_url")
-                    )
-                    recovered_main = await bot.send_photo(
-                        Var.MAIN_CHANNEL,
-                        photo=photo,
-                        caption=(getattr(dedicated_message, "caption", None) or f"<b>{name}</b>"),
-                        reply_markup=join_markup,
-                    )
-                    if not recovered_main or not getattr(recovered_main, "id", None):
-                        raise RuntimeError(
-                            "Dedicated episode exists, but Main Channel announcement recovery failed."
-                        )
-                    await db.saveAnimeMainPost(ani_id, ep_no, recovered_main.id)
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
@@ -8818,13 +8756,100 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # Build a searchable index of real Telegram storage messages.
                 # Match by season + episode + quality + anime-title aliases, not
                 # by MongoDB/AniList IDs or an exact generated filename alone.
-                # Bot API accounts cannot call messages.GetHistory. Reuse only
-                # durable per-quality Mongo checkpoints verified with get_messages.
-                # Do not scan FILE_STORE history here; that causes BOT_METHOD_INVALID
-                # and makes automatic uploads noisy/failure-prone.
+                import html
+                from difflib import SequenceMatcher
+
+                def _plain_storage_name(value):
+                    value = html.unescape(str(value or ""))
+                    value = re.sub(r"<[^>]+>", "", value)
+                    return ospath.basename(value).strip()
+
+                def _normal_title(value):
+                    value = _plain_storage_name(value).casefold()
+                    value = re.sub(r"\[[^\]]*\]", " ", value)
+                    value = re.sub(r"\b(?:480|720|1080|144|240)p\b|\bhdrip\b|\bhdr[iI]\b", " ", value)
+                    value = re.sub(r"\bs\d{1,2}e\d{1,3}\b|\bs\d{1,2}\s*[- ]\s*e?\d{1,3}\b", " ", value)
+                    value = re.sub(r"\bs\d{1,2}[- ]\d{1,3}\b", " ", value)
+                    value = re.sub(r"@[^\s]+", " ", value)
+                    value = re.sub(r"\.(mkv|mp4|avi|webm)$", " ", value)
+                    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+                def _parse_storage_record(value):
+                    raw = _plain_storage_name(value)
+                    ep_match = re.search(r"\[?s(\d{1,2})\s*[- ]\s*e?(\d{1,3})\]?", raw, re.I)
+                    if not ep_match:
+                        return None
+                    season_no, episode_no = int(ep_match.group(1)), int(ep_match.group(2))
+                    if re.search(r"\bhdrip\b|\[hdri\]", raw, re.I):
+                        quality_name = "HDRi"
+                    else:
+                        quality_match = re.search(r"\[(144|240|480|720|1080)p\]", raw, re.I)
+                        if not quality_match:
+                            return None
+                        quality_name = quality_match.group(1)
+                    title = raw[ep_match.end():]
+                    title = re.split(r"\[(?:144|240|480|720|1080)p\]|\[hdrip\]|\[hdri\]", title, flags=re.I)[0]
+                    return season_no, episode_no, quality_name, _normal_title(title)
+
+                season_value = aniInfo.pdata.get("anime_season", "01")
+                if isinstance(season_value, list):
+                    season_value = season_value[-1] if season_value else "01"
+                season_match = re.search(r"\d+", str(season_value or "01"))
+                target_season = int(season_match.group(0)) if season_match else 1
+                target_episode = int(ep_no) if str(ep_no or "").isdigit() else None
+
+                title_aliases = [
+                    name,
+                    cleaned_name,
+                    base_name,
+                    aniInfo.pdata.get("anime_title"),
+                ]
+                metadata_title = aniInfo.adata.get("title", {})
+                if isinstance(metadata_title, dict):
+                    title_aliases.extend(metadata_title.get(key) for key in ("english", "romaji", "native"))
+                target_titles = {_normal_title(value) for value in title_aliases if value}
+                target_titles.discard("")
+
+                storage_records = []
+                try:
+                    async for stored in bot.get_chat_history(Var.FILE_STORE, limit=5000):
+                        media = getattr(stored, "video", None) or getattr(stored, "document", None)
+                        media_name = getattr(media, "file_name", None) if media else None
+                        caption_name = getattr(stored, "caption", None)
+                        parsed = _parse_storage_record(media_name) or _parse_storage_record(caption_name)
+                        if parsed:
+                            storage_records.append((parsed, int(stored.id)))
+                except Exception as scan_error:
+                    await rep.report(
+                        f"Storage recovery scan failed; only database checkpoints can be reused: {scan_error}",
+                        "warning",
+                        log=False,
+                    )
+
+                def _find_stored_quality(quality):
+                    if target_episode is None or not target_titles:
+                        return None
+                    wanted_quality = "HDRi" if quality.casefold() in ("hdri", "hdrip") else re.sub(r"p$", "", quality.casefold())
+                    for (stored_season, stored_episode, stored_quality, stored_title), stored_id in storage_records:
+                        if (stored_season, stored_episode) != (target_season, target_episode):
+                            continue
+                        if stored_quality.casefold() != wanted_quality:
+                            continue
+                        if not stored_title:
+                            continue
+                        for wanted_title in target_titles:
+                            if stored_title == wanted_title:
+                                return stored_id
+                            wanted_tokens = set(wanted_title.split())
+                            stored_tokens = set(stored_title.split())
+                            overlap = len(wanted_tokens & stored_tokens) / max(1, min(len(wanted_tokens), len(stored_tokens)))
+                            similarity = SequenceMatcher(None, wanted_title, stored_title).ratio()
+                            if overlap >= 0.75 or similarity >= 0.82:
+                                return stored_id
+                    return None
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -8855,8 +8880,32 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             )
                             saved_msg_id = None
 
-                    # Storage history cannot be searched by Bot API. Reuse only
-                    # durable quality checkpoints from MongoDB; if absent, encode.
+                    # Recover by season/episode/quality/title from storage.
+                    # This also handles changed AniList IDs and filename aliases.
+                    if not saved_msg_id:
+                        recovered_id = _find_stored_quality(qual)
+                        if recovered_id:
+                            try:
+                                recovered_msg = await bot.get_messages(
+                                    Var.FILE_STORE, message_ids=int(recovered_id)
+                                )
+                                if recovered_msg and not getattr(recovered_msg, "empty", False):
+                                    saved_msg_id = int(recovered_id)
+                                    saved_file_ids[qual] = saved_msg_id
+                                    await db.saveAnimeFileId(ani_id, ep_no, qual, saved_msg_id)
+                                    await db.saveAnime(ani_id, ep_no, qual, None)
+                                    await rep.report(
+                                        f"Recovered existing {qual} for S{target_season:02d}E{target_episode:02d} from storage; skipping re-encode.",
+                                        "info",
+                                        log=False,
+                                    )
+                            except Exception as recover_error:
+                                await rep.report(
+                                    f"Could not verify recovered {qual} storage message {recovered_id}: {recover_error}",
+                                    "warning",
+                                    log=False,
+                                )
+
                     if saved_msg_id:
                         await add_quality_button(qual, saved_msg_id)
                         uploaded_qualities.append(qual)
@@ -8946,7 +8995,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                                     episode_post = await bot.send_photo(destination_channel, photo=photo_url, caption=caption, reply_markup=markup)
                                 if not episode_post or not getattr(episode_post, "id", None):
                                     raise RuntimeError(f"Selected anime channel did not confirm post for {name}.")
-                                if defer_main_announcement or not announce_main:
+                                if defer_main_announcement:
                                     # /search batches publish one Main Channel post
                                     # only after every selected episode is uploaded.
                                     post_msg = episode_post
@@ -9004,11 +9053,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     )
 
                 # Persist the Main Channel post ID immediately after send succeeds.
-                if (
-                    destination_channel is None
-                    or str(destination_channel) == str(Var.MAIN_CHANNEL)
-                    or (announce_main and not defer_main_announcement)
-                ):
+                if destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
@@ -9016,15 +9061,9 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # Send stickers only after the episode post is confirmed.
                 sticker_targets = []
                 if destination_channel is not None:
+                    # Both the selected anime channel and its Main Channel
+                    # join-request announcement receive one completion sticker.
                     sticker_targets = [int(destination_channel)]
-                    if (
-                        int(destination_channel) != int(Var.MAIN_CHANNEL)
-                        and announce_main
-                        and not defer_main_announcement
-                        and post_msg
-                        and getattr(post_msg, "id", None)
-                    ):
-                        sticker_targets.append(int(Var.MAIN_CHANNEL))
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
@@ -9032,14 +9071,9 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
 
                 for sticker_target in dict.fromkeys(sticker_targets):
                     await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
-                    sticker_ok = await send_sticker_to_channel(
+                    await send_sticker_to_channel(
                         sticker_target, getattr(Var, "STICKER_ID", None)
                     )
-                    if not sticker_ok:
-                        await rep.report(
-                            f"Episode post confirmed but priority sticker did not send to {sticker_target}; helper exhausted retries.",
-                            "warning"
-                        )
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
 
