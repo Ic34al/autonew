@@ -166,7 +166,7 @@ def _release_matches_episode(title, season, episode):
     clean = re.sub(r"(?i)\b(?:480p|720p|1080p|2160p|4k|x264|x265|hevc|av1)\b", " ", clean)
     clean = re.sub(r"(?i)\b(?:episode|ep)\s*0*"+str(episode)+r"\b", " ", clean)
     clean = re.sub(r"[^a-z0-9]+", " ", clean).strip()
-    return bool(re.search(rf"(?:^|\s)0*{episode}(?:\s|$)", clean)
+    return bool(re.search(rf"(?:^|\s)0*{episode}(?:\s|$)", clean))
 
 
 def _season_number_from_release(title):
