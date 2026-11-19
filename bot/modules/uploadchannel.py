@@ -838,18 +838,24 @@ async def resume_archive_batches():
     """Resume persisted /uploadchannel season batches after a dyno restart."""
     if UPLOADCHANNEL_PAUSED:
         return
-    recovery_task = asyncio.current_task()
-    if recovery_task:
-        UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     global ARCHIVE_RESUME_STARTED
     if ARCHIVE_RESUME_STARTED:
         return
     ARCHIVE_RESUME_STARTED = True
+    recovery_task = asyncio.current_task()
+    if recovery_task:
+        UPLOADCHANNEL_ACTIVE_TASKS.add(recovery_task)
     pending = await db.get_in_progress_anime_archive_batches()
     if not pending:
+        ARCHIVE_RESUME_STARTED = False
+        if recovery_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
         return
     if not getattr(Var, "USER_SESSION", None):
         await rep.report("Archive recovery is waiting: USER_SESSION is not configured.", "error")
+        ARCHIVE_RESUME_STARTED = False
+        if recovery_task:
+            UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
         return
 
     user_client = __import__("pyrogram").Client(
@@ -962,6 +968,7 @@ async def resume_archive_batches():
                             "error",
                         )
     finally:
+        ARCHIVE_RESUME_STARTED = False
         if recovery_task:
             UPLOADCHANNEL_ACTIVE_TASKS.discard(recovery_task)
         try:
