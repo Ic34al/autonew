@@ -28,6 +28,7 @@ import os
 import shutil
 import hashlib
 from bot.core.reporter import rep
+from bot.core.anime_thumbnail import create_anime_thumbnail
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
 ANILIST_URL = "https://graphql.anilist.co"
@@ -666,32 +667,76 @@ async def uploadchannel_callbacks(client, callback):
                     episode_total = available_episodes or "Unknown"
                     season_format = prequel.get("format") or "TV"
                     season_status = prequel.get("status") or "N/A"
+                    # Publish the season header only once. Existing channel history is
+                    # authoritative on retries, so a retry does not spam duplicate posters.
+                    info_exists = False
+                    async for history_message in user_client.get_chat_history(destination_id, limit=500):
+                        history_body = " ".join(str(x or "") for x in (
+                            getattr(history_message, "text", ""),
+                            getattr(history_message, "caption", ""),
+                        ))
+                        if re.search(
+                            rf"(?i)Season\\s*{season_index}\\b.*(?:Episodes|Format|Status)",
+                            history_body,
+                        ):
+                            info_exists = True
+                            break
+
+                    # Use the season's own title, not the selected sequel title,
+                    # to prevent captions like "Season 2 — Season 1".
                     season_info = (
-                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
-                        f"<b>Season title:</b> {_escape(season_title)}\n"
+                        f"<b>{_escape(season_title)} — Season {season_index}</b>\n"
                         f"<b>Year:</b> {_escape(season_year)}\n"
                         f"<b>Episodes:</b> {_escape(episode_total)}\n"
                         f"<b>Format:</b> {_escape(season_format)}\n"
                         f"<b>Status:</b> {_escape(season_status)}\n"
                         f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
                     )
-                    info_message = await bot.send_message(
-                        chat_id=destination_id,
-                        text=season_info,
-                        disable_web_page_preview=True,
-                    )
-                    if not info_message:
-                        raise RuntimeError(
-                            f"Could not publish Season {season_index} information for {selected_title}; "
-                            "the season batch was not started."
+                    if not info_exists:
+                        season_editor = TextEditor(season_title)
+                        await season_editor.load_info()
+                        poster_meta = dict(prequel)
+                        poster_meta.update(season_editor.adata or {})
+                        poster_meta.setdefault("title", prequel.get("title") or {})
+                        poster_meta.setdefault("description", prequel.get("description"))
+                        poster_meta.setdefault("bannerImage", prequel.get("bannerImage"))
+                        poster_meta.setdefault("coverImage", prequel.get("coverImage") or {})
+                        poster_meta.setdefault("season", prequel.get("season"))
+                        poster_meta.setdefault("seasonYear", season_year)
+                        poster_path = await create_anime_thumbnail(
+                            poster_meta.get("bannerImage") or
+                            (poster_meta.get("coverImage") or {}).get("extraLarge") or
+                            (poster_meta.get("coverImage") or {}).get("large"),
+                            season_title,
+                            f"Season {season_index}",
+                            output_name=f"uc_info_{archive_id}_{season_index}.jpg",
+                            metadata=poster_meta,
                         )
-                    sticker_ok = await send_sticker_to_channel(
-                        destination_id, getattr(Var, "STICKER_ID", None)
-                    )
-                    if not sticker_ok:
-                        raise RuntimeError(
-                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
+                        if poster_path and os.path.exists(poster_path):
+                            info_message = await bot.send_photo(
+                                chat_id=destination_id,
+                                photo=poster_path,
+                                caption=season_info,
+                            )
+                            os.remove(poster_path)
+                        else:
+                            info_message = await bot.send_message(
+                                chat_id=destination_id,
+                                text=season_info,
+                                disable_web_page_preview=True,
+                            )
+                        if not info_message:
+                            raise RuntimeError(
+                                f"Could not publish Season {season_index} information for {selected_title}; "
+                                "the season batch was not started."
+                            )
+                        sticker_ok = await send_sticker_to_channel(
+                            destination_id, getattr(Var, "STICKER_ID", None)
                         )
+                        if not sticker_ok:
+                            raise RuntimeError(
+                                f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
+                            )
                     if not available_episodes:
                         raise RuntimeError(
                             f"AniList has no released episode count for {season_title}; refusing to guess."
