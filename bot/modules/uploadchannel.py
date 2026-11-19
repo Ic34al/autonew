@@ -1334,6 +1334,7 @@ async def uploadchannel_callbacks(client, callback):
                         archive_id, season_index, destination_id, "in_progress",
                         "", f"episode-by-episode S{season_index} 4-quality",
                     )
+                    season_source_missing = False
                     for episode_number in range(1, available_episodes + 1):
                         if episode_number in existing_episodes:
                             continue
@@ -1342,11 +1343,36 @@ async def uploadchannel_callbacks(client, callback):
                             f"to dedicated channel {destination_id}.",
                             "info", log=False,
                         )
-                        await update_progress(f"uploading Season {season_index} Episode {episode_number} to {destination_id}")
-                        await _upload_single_episode(
-                            prequel, destination_id, season_index, episode_number, user_client,
-                            progress_callback=update_progress,
+                        await update_progress(
+                            f"searching SubsPlease RSS for Season {season_index} Episode {episode_number}"
                         )
+                        try:
+                            await _upload_single_episode(
+                                prequel, destination_id, season_index, episode_number, user_client,
+                                progress_callback=update_progress,
+                            )
+                        except RuntimeError as episode_error:
+                            error_text = str(episode_error)
+                            if "RSS source missing or ambiguous" in error_text and prequel is not selected_media:
+                                season_source_missing = True
+                                await rep.report(
+                                    f"UPLOADCHANNEL: SubsPlease RSS does not contain a safe exact match for "
+                                    f"{selected_title} Season {season_index} Episode {episode_number}. "
+                                    f"Skipping this older season and continuing to the selected season. "
+                                    f"Details: {error_text}",
+                                    "warning", log=False,
+                                )
+                                await update_progress(
+                                    f"RSS unavailable for older Season {season_index}; continuing to selected season"
+                                )
+                                break
+                            raise
+                    if season_source_missing:
+                        await db.set_anime_archive_batch(
+                            archive_id, season_index, destination_id, "source_unavailable",
+                            "", f"SubsPlease RSS unavailable for S{season_index}; skipped safely",
+                        )
+                        continue
                     await db.set_anime_archive_batch(
                         archive_id, season_index, destination_id, "complete",
                         "", f"episode-by-episode S{season_index} 4-quality",
