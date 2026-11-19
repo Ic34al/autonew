@@ -11,7 +11,7 @@ if ((${#SEARCH_ROOTS[@]})); then
   while IFS= read -r lib_dir; do
     [[ -n "$lib_dir" ]] || continue
     export LD_LIBRARY_PATH="$lib_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-  done < <(find "${SEARCH_ROOTS[@]}" -type f \\( -name '*.so' -o -name '*.so.*' \\) -print 2>/dev/null | sed 's|/[^/]*$||' | sort -u)
+  done < <(find "${SEARCH_ROOTS[@]}" -type f -name '*.so*' -print 2>/dev/null | sed 's|/[^/]*$||' | sort -u)
 fi
 
 FFMPEG_BIN="$(command -v ffmpeg || true)"
