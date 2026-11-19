@@ -422,7 +422,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
 async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     from bot import Var
-    await rep.report(f"UPLOADCHANNEL: searching RSS for {title if \"title\" in locals() else _display_title(media)} S{season_number:02d}E{episode_number:02d}.", "info")
+    await rep.report(f"UPLOADCHANNEL: searching RSS for {_display_title(media)} S{season_number:02d}E{episode_number:02d}.", "info")
     episode = await _find_episode_torrent(media, season_number, episode_number)
     if not episode:
         raise RuntimeError(
