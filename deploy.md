@@ -153,3 +153,12 @@ docker-compose up --build
 - Bot fails to connect to MongoDB: verify `MONGO_URI` and network connectivity.
 - FFmpeg errors: ensure `ffmpeg` is installed and `FFCODE_*` commands are valid.
 - Drive uploads failing: ensure `token.pickle` or service account file exists and the `GDRIVE_UPLOAD` flag is correct.
+
+### FFmpeg on Heroku (required for encoded anime qualities)
+
+The repository includes an `Aptfile` with `ffmpeg` and an `app.json` buildpack declaration for new Cedar apps. **Existing Heroku apps do not have their buildpacks changed by app.json.** For an existing Cedar app, configure the buildpacks in this order:
+
+1. `heroku-community/apt` (first)
+2. `heroku/python` (last)
+
+Then rebuild/redeploy. The Apt buildpack reads the root `Aptfile` and installs FFmpeg. Verify after release with `heroku run ffmpeg -version --app YOUR_APP_NAME` or check the startup logs. If the app uses Fir/Cloud Native Buildpacks, use a supported Debian-packages CNB instead of the classic Apt buildpack.
