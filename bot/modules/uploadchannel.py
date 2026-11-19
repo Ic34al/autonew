@@ -407,10 +407,10 @@ async def _find_episode_torrent(media, season_number, episode_number):
             # matching the requested episode, so a torrent containing E01-E08 cannot
             # be mistaken for an individual E08 release.
             if re.search(
-                r"(?i)\\b(?:batch|complete|full season|season pack|episodes?\\s*\\d+\\s*[-~–]\\s*\\d+)\\b",
+                r"(?i)\b(?:batch|complete|full season|season pack|episodes?\s*\d+\s*[-~–]\s*\d+)\b",
                 release_title,
             ) or re.search(
-                r"(?i)(?:\\b\\d{1,3}\\s*[-~–]\\s*\\d{1,3}\\b|\\bE0*\\d{1,3}\\s*[-~–]\\s*E0*\\d{1,3}\\b)",
+                r"(?i)(?:\b\d{1,3}\s*[-~–]\s*\d{1,3}\b|\bE0*\d{1,3}\s*[-~–]\s*E0*\d{1,3}\b)",
                 release_title,
             ):
                 continue
