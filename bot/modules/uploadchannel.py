@@ -487,15 +487,19 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # Episode cards are posted by the uploader, but all file-sharing deep
     # links must open the existing Monkey file-share bot. Do not derive this
     # username from BOT_TOKEN: that token belongs to Auto Anime Uploader.
-    share_bot_username = str(
-        getattr(Var, "BOT_USERNAME", "Orewa_Monkey_D_Kaizuko_Bot") or ""
-    ).strip().lstrip("@")
     expected_share_bot = "Orewa_Monkey_D_Kaizuko_Bot"
-    if share_bot_username.casefold() != expected_share_bot.casefold():
-        raise RuntimeError(
-            "File-share bot mismatch: expected @Orewa_Monkey_D_Kaizuko_Bot "
-            f"but BOT_USERNAME is @{share_bot_username or 'not configured'}. "
-            "Episode quality buttons were not created to avoid sending users to the wrong bot."
+    configured_share_bot = str(
+        getattr(Var, "FILE_SHARE_BOT_USERNAME", expected_share_bot) or ""
+    ).strip().lstrip("@")
+    # File-share links must always target the Monkey file-share bot, regardless
+    # of BOT_USERNAME (which identifies the uploader bot and can differ).
+    share_bot_username = expected_share_bot
+    if configured_share_bot.casefold() != expected_share_bot.casefold():
+        await rep.report(
+            f"FILE_SHARE_BOT_USERNAME was @{configured_share_bot or 'not configured'}; "
+            f"forcing the required file-share bot @{expected_share_bot}.",
+            "warning",
+            log=False,
         )
     quality_order = ("HDRi", "1080", "720", "480")
     buttons_by_quality = {}
