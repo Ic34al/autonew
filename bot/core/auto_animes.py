@@ -353,7 +353,7 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
             ).hexdigest()[:24]
             await db.set_batch_file_link(batch_token, qual_msg_ids)
             batch_string = f"getbatch-{batch_token}"
-            batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
+            batch_link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={await encode(batch_string)}"
             btn_text = f"• Download Ep 1 To {episode_count} Click Here •"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
             if batch_buttons:
@@ -564,43 +564,54 @@ async def find_existing_anime_channel(anime_name: str):
 _ONGOING_PRIORITY_STICKER_FILE_ID = None
 
 async def send_sticker_to_channel(channel, sticker_id=None, client=None):
-    """Always send the FIRST sticker from the user's priority sticker pack."""
+    """Send the priority Ongoing Anime Time sticker with retries and fallback."""
     global _ONGOING_PRIORITY_STICKER_FILE_ID
-    # Sticker priority is mandatory for episode/schedule posts; do not let an old
-    # SEND_STICKER=False setting suppress the explicitly requested pack.
-    try:
-        # Do not use STICKER_ID or the caller's sticker_id: those may point to
-        # an older/different sticker. The requested pack's first sticker wins.
-        if not _ONGOING_PRIORITY_STICKER_FILE_ID:
+    sender = client or bot
+    last_error = None
+    if not _ONGOING_PRIORITY_STICKER_FILE_ID:
+        try:
             sticker_set_name = "Ongoing_Anime_stickers_by_fStikBot"
             endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getStickerSet"
             async with httpx.AsyncClient(timeout=25.0) as session:
                 response = await session.get(endpoint, params={"name": sticker_set_name})
                 response.raise_for_status()
                 payload = response.json()
-            if not payload.get("ok"):
-                raise RuntimeError(payload.get("description", "Telegram getStickerSet failed"))
-            stickers = payload.get("result", {}).get("stickers") or []
-            if not stickers or not stickers[0].get("file_id"):
-                raise RuntimeError(f"Priority sticker pack {sticker_set_name} is empty")
-            _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
+            stickers = (payload.get("result") or {}).get("stickers") or []
+            if payload.get("ok") and stickers and stickers[0].get("file_id"):
+                _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
+            else:
+                raise RuntimeError(payload.get("description", "Priority sticker pack unavailable/empty"))
+        except Exception as error:
+            last_error = error
 
-        sender = client or bot
-        sent_message = await sender.send_sticker(
-            chat_id=channel,
-            sticker=_ONGOING_PRIORITY_STICKER_FILE_ID
-        )
-        if not sent_message:
-            raise RuntimeError("Telegram did not confirm the priority sticker message")
-        await rep.report(
-            f"Sent FIRST priority sticker from Ongoing_Anime_stickers_by_fStikBot "
-            f"after post to {channel} (message_id={sent_message.id})",
-            "info"
-        )
-        return True
-    except Exception as error:
-        await rep.report(f"Priority sticker delivery failed for {channel}: {error}", "error")
+    candidates = []
+    if _ONGOING_PRIORITY_STICKER_FILE_ID:
+        candidates.append(_ONGOING_PRIORITY_STICKER_FILE_ID)
+    fallback = sticker_id or getattr(Var, "STICKER_ID", None)
+    if fallback and fallback not in candidates:
+        candidates.append(fallback)
+    if not candidates:
+        await rep.report(f"Priority sticker unavailable for {channel}: {last_error}", "error")
         return False
+
+    for candidate in candidates:
+        for attempt in range(3):
+            try:
+                sent = await sender.send_sticker(chat_id=channel, sticker=candidate)
+                if sent and getattr(sent, "id", None):
+                    await rep.report(f"Priority sticker sent after post to {channel} (message_id={sent.id})", "info")
+                    return True
+                raise RuntimeError("Telegram did not confirm sticker send")
+            except FloodWait as flood:
+                last_error = flood
+                if attempt < 2:
+                    await asyncio.sleep(max(1, int(flood.value) + 1)
+            except Exception as error:
+                last_error = error
+                if attempt < 2:
+                    await asyncio.sleep(1 + attempt)
+    await rep.report(f"Priority sticker delivery failed for {channel} after retries: {last_error}", "error")
+    return False
 
 async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_number, qualities):
     """Build the exact established Main Channel caption with Telegram expandable synopsis."""
@@ -1033,7 +1044,7 @@ async def process_manga_chapter(title, chapter_url, manual=False):
                 force_document=True
             )
 
-            bot_link = f"https://telegram.me/{Var.BOT_USERNAME}?start={await encode('get-'+str(file_store_msg.id * abs(Var.FILE_STORE)))}"
+            bot_link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={await encode('get-'+str(file_store_msg.id * abs(Var.FILE_STORE)))}"
 
             manga_banner = await db.get_manga_banner(manga_name)
             poster_url = (manga_banner or 
@@ -1477,7 +1488,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -1518,7 +1529,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -2577,7 +2588,7 @@ async def _legacy_get_animes_v1(name, torrent, force=False, qualities_override=N
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -2988,7 +2999,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -3029,7 +3040,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -3788,7 +3799,7 @@ async def _legacy_get_animes_v2(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -4144,7 +4155,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -4185,7 +4196,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -4930,7 +4941,7 @@ async def _legacy_get_animes_v3(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -5268,7 +5279,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -5309,7 +5320,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -6054,7 +6065,7 @@ async def _legacy_get_animes_v4(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -6392,7 +6403,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -6433,7 +6444,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -7178,7 +7189,7 @@ async def _legacy_get_animes_v5(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -7568,7 +7579,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -7609,7 +7620,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -8813,7 +8824,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # and makes automatic uploads noisy/failure-prone.
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -9005,9 +9016,15 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # Send stickers only after the episode post is confirmed.
                 sticker_targets = []
                 if destination_channel is not None:
-                    # Both the selected anime channel and its Main Channel
-                    # join-request announcement receive one completion sticker.
                     sticker_targets = [int(destination_channel)]
+                    if (
+                        int(destination_channel) != int(Var.MAIN_CHANNEL)
+                        and announce_main
+                        and not defer_main_announcement
+                        and post_msg
+                        and getattr(post_msg, "id", None)
+                    ):
+                        sticker_targets.append(int(Var.MAIN_CHANNEL))
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
@@ -9015,9 +9032,14 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
 
                 for sticker_target in dict.fromkeys(sticker_targets):
                     await asleep(max(0, getattr(Var, "STICKER_INTERVAL", 1)))
-                    await send_sticker_to_channel(
+                    sticker_ok = await send_sticker_to_channel(
                         sticker_target, getattr(Var, "STICKER_ID", None)
                     )
+                    if not sticker_ok:
+                        await rep.report(
+                            f"Episode post confirmed but priority sticker did not send to {sticker_target}; helper exhausted retries.",
+                            "warning"
+                        )
 
                 await db.markAnimeResumeComplete(ani_id, ep_no)
 
