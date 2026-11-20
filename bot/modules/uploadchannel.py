@@ -1196,7 +1196,8 @@ async def uploadchannel_callbacks(client, callback):
                         timeout=90,
                     )
                     reused = False
-                elif not chat or int(chat.id) != wanted_id:                    raise RuntimeError(
+                elif not chat or int(chat.id) != wanted_id:
+                    raise RuntimeError(
                         f"Saved mapping for '{title}' points to {wanted_id}, but Telegram "
                         "returned a different channel. Refusing to overwrite the mapping."
                     )
@@ -1337,7 +1338,7 @@ async def uploadchannel_callbacks(client, callback):
                 # Current ANIME SOUL cards use [S01-07]; older cards may use
                 # "Season 1" plus "Episode: 07". Support both formats.
                 season_episode_tag = re.search(
-                    r"(?i)\\[S0*(\\d{1,2})[-_ ]0*(\\d{1,3})\\]", body
+                    r"(?i)\[S0*(\d{1,2})[-_ ]0*(\d{1,3})\]", body
                 )
                 if season_episode_tag:
                     if int(season_episode_tag.group(1)) == season_index:
@@ -1345,10 +1346,10 @@ async def uploadchannel_callbacks(client, callback):
                     continue
 
                 season_match = re.search(
-                    rf"(?i)\\bSeason\\s*0*{season_index}\\b", body
+                    rf"(?i)\bSeason\s*0*{season_index}\b", body
                 )
                 episode_match = re.search(
-                    r"(?i)\\bEpisode\\s*[:#]?\\s*0*(\\d{1,3})\\b", body
+                    r"(?i)\bEpisode\s*[:#]?\s*0*(\d{1,3})\b", body
                 )
                 if season_match and episode_match:
                     existing_episodes.add(int(episode_match.group(1)))
