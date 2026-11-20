@@ -8,6 +8,9 @@ from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
 import asyncio
 import re
+import shlex
+import shutil
+import imageio_ffmpeg
 from asyncio.subprocess import PIPE
 import datetime
 from bot import Var, bot_loop, ffpids_cache, LOGS, ani_cache
@@ -331,6 +334,21 @@ class FFEncoder:
             return ffargs['1080'].format(dl_npath, self.__prog_file, out_npath)
 
     async def start_encode(self):
+        # Prefer the host's FFmpeg, but fall back to the self-contained binary
+        # bundled by imageio-ffmpeg on Python-buildpack deployments.
+        ffmpeg_executable = shutil.which("ffmpeg")
+        if not ffmpeg_executable:
+            try:
+                ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
+            except Exception as exc:
+                LOGS.error(f"FFmpeg is unavailable: {exc}")
+                await rep.report(
+                    "FFmpeg is unavailable. Install the system ffmpeg package or "
+                    "ensure imageio-ffmpeg is installed; encoding was not started.",
+                    "error",
+                )
+                return None
+
         if ani_cache.get('global_pause'):
             LOGS.info('Encoding skipped because /pause is active.')
             return None
@@ -434,6 +452,17 @@ class FFEncoder:
                 await aiorename(dl_npath, self.dl_path)
             LOGS.info("Encoding cancelled before FFmpeg process start because /pause is active.")
             return None
+
+        # Replace the command name in both default and saved custom templates.
+        # shlex.quote keeps bundled executable paths with spaces safe for the shell.
+        ffmpeg_command = shlex.quote(ffmpeg_executable)
+        ffcode = re.sub(
+            r"(?<![A-Za-z0-9_./-])ffmpeg(?=\\s|$)",
+            lambda _match: ffmpeg_command,
+            ffcode,
+            flags=re.IGNORECASE,
+        )
+        LOGS.info(f"Resolved FFmpeg executable: {ffmpeg_executable}")
 
         # Capture FFmpeg stderr so failed encodes show the real cause in Anime Logs.
         self.__proc = await create_subprocess_shell(
