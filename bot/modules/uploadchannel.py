@@ -954,9 +954,9 @@ async def uploadchannel_callbacks(client, callback):
         safe_stage = _escape(stage)
         safe_title = _escape(anime_title or current_anime_title)
         status_text = (
-            f"⏳ <b>/uploadchannel progress</b>\\n"
-            f"<b>Anime:</b> {safe_title}\\n"
-            f"<b>Stage:</b> {safe_stage}\\n"
+            f"⏳ <b>/uploadchannel progress</b>\n"
+            f"<b>Anime:</b> {safe_title}\n"
+            f"<b>Stage:</b> {safe_stage}\n"
             f"<b>Channels prepared:</b> {len(created)}/{len(state['selected'])}"
         )
         try:
