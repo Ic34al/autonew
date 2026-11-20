@@ -948,6 +948,29 @@ async def uploadchannel_callbacks(client, callback):
     archive_jobs = []
     channel_stage = "starting USER_SESSION"
     current_anime_title = "unknown"
+
+    async def report_stage(stage, anime_title=None):
+        """Publish every long-running setup stage to both the command and log channel."""
+        safe_stage = _escape(stage)
+        safe_title = _escape(anime_title or current_anime_title)
+        status_text = (
+            f"⏳ <b>/uploadchannel progress</b>\\n"
+            f"<b>Anime:</b> {safe_title}\\n"
+            f"<b>Stage:</b> {safe_stage}\\n"
+            f"<b>Channels prepared:</b> {len(created)}/{len(state['selected'])}"
+        )
+        try:
+            await callback.message.edit(status_text)
+        except Exception as status_error:
+            LOGS.warning(f"Could not edit /uploadchannel progress message: {status_error}")
+        try:
+            await rep.report(
+                f"/uploadchannel: {stage} [{len(created)}/{len(state['selected'])} channels prepared]",
+                "info",
+            )
+        except Exception as log_error:
+            LOGS.warning(f"Could not publish /uploadchannel progress log: {log_error}")
+
     try:
         user_client = __import__("pyrogram").Client(
             "autonew_channel_creator",
@@ -958,15 +981,17 @@ async def uploadchannel_callbacks(client, callback):
             parse_mode=ParseMode.HTML,
         )
         channel_stage = "starting USER_SESSION client"
-        await user_client.start()
+        await report_stage(channel_stage)
+        await asyncio.wait_for(user_client.start(), timeout=120)
         channel_stage = "resolving bot account in USER_SESSION"
+        await report_stage(channel_stage)
         # Resolve the bot through its public username in the USER session.
         # A bot-session numeric ID is not necessarily an input peer known to this
         # separate MTProto session and can raise PEER_ID_INVALID.
         # The bot account authenticated by BOT_TOKEN is the only account we
         # are allowed to promote. Never let a stale BOT_USERNAME config promote
         # a different bot into every newly created channel.
-        token_bot = await bot.get_me()
+        token_bot = await asyncio.wait_for(bot.get_me(), timeout=45)
         token_bot_username = str(getattr(token_bot, "username", "") or "").strip().lstrip("@")
         configured_bot_username = str(getattr(Var, "BOT_USERNAME", "") or "").strip().lstrip("@")
         if not token_bot_username:
@@ -982,7 +1007,7 @@ async def uploadchannel_callbacks(client, callback):
                 "warning",
             )
         bot_username = token_bot_username
-        bot_user = await user_client.get_users(bot_username)
+        bot_user = await asyncio.wait_for(user_client.get_users(bot_username), timeout=45)
         if not bot_user or not getattr(bot_user, "id", None):
             raise RuntimeError(
                 f"Could not resolve the actual BOT_TOKEN account @{bot_username} in USER_SESSION."
@@ -998,6 +1023,7 @@ async def uploadchannel_callbacks(client, callback):
             title = _display_title(media)
             current_anime_title = title
             channel_stage = f"reading saved channel mapping for {title}"
+            await report_stage(channel_stage, title)
             aliases = media.get("title") or {}
             names = []
             for key in ("english", "romaji", "native"):
@@ -1039,9 +1065,10 @@ async def uploadchannel_callbacks(client, callback):
                     # First use the persisted invite if present; otherwise try the
                     # numeric peer directly (works when this session has its hash).
                     channel_stage = f"opening saved channel peer for {title}"
-                    chat = (
-                        await user_client.get_chat(saved_invite)
-                        if saved_invite else await user_client.get_chat(wanted_id)
+                    await report_stage(channel_stage, title)
+                    chat = await asyncio.wait_for(
+                        user_client.get_chat(saved_invite if saved_invite else wanted_id),
+                        timeout=45,
                     )
                 except Exception as exc:
                     resolve_error = exc
@@ -1055,7 +1082,8 @@ async def uploadchannel_callbacks(client, callback):
                         from pyrogram.raw.functions.messages import GetDialogs
                         from pyrogram.raw.types import InputPeerEmpty
                         channel_stage = f"recovering legacy peer from raw Telegram dialogs for {title}"
-                        raw_dialogs = await user_client.invoke(
+                        await report_stage(channel_stage, title)
+                        raw_dialogs = await asyncio.wait_for(user_client.invoke(
                             GetDialogs(
                                 offset_date=0,
                                 offset_id=0,
@@ -1063,7 +1091,7 @@ async def uploadchannel_callbacks(client, callback):
                                 limit=100,
                                 hash=0,
                             )
-                        )
+                        ), timeout=60)
                         for raw_chat in getattr(raw_dialogs, "chats", []) or []:
                             raw_id = getattr(raw_chat, "id", None)
                             raw_hash = getattr(raw_chat, "access_hash", None)
@@ -1100,8 +1128,10 @@ async def uploadchannel_callbacks(client, callback):
                         "warning",
                     )
                     channel_stage = f"creating replacement channel for {title}"
-                    chat = await user_client.create_channel(
-                        title, f"Official episode channel for {title}"
+                    await report_stage(channel_stage, title)
+                    chat = await asyncio.wait_for(
+                        user_client.create_channel(title, f"Official episode channel for {title}"),
+                        timeout=90,
                     )
                     reused = False
                 elif not chat or int(chat.id) != wanted_id:
@@ -1112,8 +1142,11 @@ async def uploadchannel_callbacks(client, callback):
                 else:
                     reused = True
             else:
-                chat = await user_client.create_channel(
-                    title, f"Official episode channel for {title}"
+                channel_stage = f"creating Telegram channel for {title}"
+                await report_stage(channel_stage, title)
+                chat = await asyncio.wait_for(
+                    user_client.create_channel(title, f"Official episode channel for {title}"),
+                    timeout=90,
                 )
 
             # Persist a durable invite reference for private channels. Unlike a
@@ -1122,8 +1155,12 @@ async def uploadchannel_callbacks(client, callback):
             if not persistent_invite:
                 try:
                     channel_stage = f"creating persistent invite link for {title}"
-                    invite_obj = await user_client.create_chat_invite_link(
-                        chat.id, name="Anime uploader persistent peer"
+                    await report_stage(channel_stage, title)
+                    invite_obj = await asyncio.wait_for(
+                        user_client.create_chat_invite_link(
+                            chat.id, name="Anime uploader persistent peer"
+                        ),
+                        timeout=60,
                     )
                     persistent_invite = invite_obj.invite_link
                 except Exception as invite_error:
@@ -1141,14 +1178,18 @@ async def uploadchannel_callbacks(client, callback):
             # through this session, and repair missing admin rights automatically.
             try:
                 channel_stage = f"checking bot admin rights for {title}"
-                current_member = await user_client.get_chat_member(chat.id, bot_user.id)
+                await report_stage(channel_stage, title)
+                current_member = await asyncio.wait_for(
+                    user_client.get_chat_member(chat.id, bot_user.id), timeout=45
+                )
                 current_status = str(getattr(current_member, "status", "")).lower()
             except Exception:
                 current_status = ""
 
             if not any(role in current_status for role in ("administrator", "owner", "creator")):
                 channel_stage = f"promoting bot administrator for {title}"
-                await user_client.promote_chat_member(
+                await report_stage(channel_stage, title)
+                await asyncio.wait_for(user_client.promote_chat_member(
                     chat.id,
                     bot_user.id,
                     privileges=ChatPrivileges(
@@ -1160,10 +1201,13 @@ async def uploadchannel_callbacks(client, callback):
                         can_change_info=True,
                         can_pin_messages=True,
                     ),
-                )
+                ), timeout=60)
                 # Confirm the promotion before any season/episode upload begins.
                 channel_stage = f"verifying bot administrator rights for {title}"
-                confirmed_member = await user_client.get_chat_member(chat.id, bot_user.id)
+                await report_stage(channel_stage, title)
+                confirmed_member = await asyncio.wait_for(
+                    user_client.get_chat_member(chat.id, bot_user.id), timeout=45
+                )
                 confirmed_status = str(getattr(confirmed_member, "status", "")).lower()
                 if not any(role in confirmed_status for role in ("administrator", "owner", "creator")):
                     raise RuntimeError(
@@ -1178,12 +1222,17 @@ async def uploadchannel_callbacks(client, callback):
             # Publish only the sticker and final ANIME SOUL episode cards.
             created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
+            await report_stage(
+                f"channel ready: {title} ({chat.id}); reused={reused}",
+                title,
+            )
             await asyncio.sleep(1)
 
         # Scheduled ongoing releases have priority over the archive backlog.
         # Lock only one archive episode at a time, then yield to any scheduled
         # upload that became pending while this episode was being processed.
         channel_stage = "processing archive episodes with scheduled-release priority"
+        await report_stage(channel_stage)
         # Process one selected anime completely before starting the next.
         # Older seasons first, then the currently airing season.
         for selected_media, destination_id in archive_jobs:
@@ -1210,6 +1259,7 @@ async def uploadchannel_callbacks(client, callback):
                 # Check the destination channel's history; existing episodes are skipped.
                 existing_episodes = set()
                 channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
+                await report_stage(channel_stage, selected_title)
                 async for channel_message in user_client.get_chat_history(destination_id, limit=500):
                     message_text = str(getattr(channel_message, "text", "") or "")
                     message_caption = str(getattr(channel_message, "caption", "") or "")
@@ -1254,12 +1304,8 @@ async def uploadchannel_callbacks(client, callback):
                 for episode_number in range(1, available_episodes + 1):
                     if episode_number in existing_episodes:
                         continue
-                    await rep.report(
-                        f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
-                        f"to dedicated channel {destination_id}.",
-                        "info", log=False,
-                    )
                     channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
+                    await report_stage(channel_stage, selected_title)
                     # Let a newly detected scheduled release run before
                     # the next archive episode. The current episode finishes
                     # atomically; scheduled uploads take the lock at this boundary.
@@ -1299,6 +1345,9 @@ async def uploadchannel_callbacks(client, callback):
             f"⚠️ Channel setup stopped at <b>{_escape(channel_stage)}</b> for "
             f"<b>{_escape(current_anime_title)}</b>. {len(created)} channel(s) were completed before the error.\n"
             f"<code>{_escape(exc)}</code>"
+        )
+        LOGS.exception(
+            f"/uploadchannel failed at stage '{channel_stage}' for '{current_anime_title}'"
         )
     finally:
         if user_client:
