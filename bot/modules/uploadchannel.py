@@ -716,99 +716,124 @@ async def uploadchannel_callbacks(client, callback):
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
 
-        # Hold the scheduler lock for the entire archive backlog so a new
-        # episode cannot interleave between Season 1/Season 2 or selected channels.
+        # Process only the currently releasing season selected in AniList.
+        # Older/prequel seasons are deliberately excluded from this command.
         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
         try:
-            # Process one selected anime completely before starting the next.
-            # Older seasons first, then the currently airing season.
             for selected_media, destination_id in archive_jobs:
                 selected_title = _display_title(selected_media)
-                prequels = _prequel_seasons(selected_media)
-                season_jobs = [(index, item, int(item.get("episodes") or 0))
-                               for index, item in enumerate(prequels, start=1)]
-                current_episode_count = max(0, int((selected_media.get("nextAiringEpisode") or {}).get("episode") or 1) - 1)
-                if current_episode_count:
-                    season_jobs.append((len(season_jobs) + 1, selected_media, current_episode_count))
-                if not season_jobs:
-                    raise RuntimeError(f"No released episodes are known for {selected_title}; no upload was started.")
-                for season_index, prequel, available_episodes in season_jobs:
-                    season_title = _display_title(prequel)
-                    archive_id = int(prequel.get("id") or 0)
-                    if not archive_id:
-                        raise RuntimeError(f"AniList ID is missing for archive season {season_title}.")
-                    previous = await db.get_anime_archive_batch(
-                        archive_id, season_index, destination_id
+                media_status = str(selected_media.get("status") or "").upper()
+                next_episode = int(
+                    (selected_media.get("nextAiringEpisode") or {}).get("episode") or 0
+                )
+                released_episode_count = max(0, next_episode - 1)
+                season_index = len(_prequel_seasons(selected_media)) + 1
+                anime_id = int(selected_media.get("id") or 0)
+
+                if not anime_id:
+                    raise RuntimeError(
+                        f"AniList ID is missing for {selected_title}; no episode upload was started."
                     )
-                    previous_status = (previous or {}).get("status")
-                    # Resume safely from the channel history; a stale DB status must not
-                    # suppress uploads when the destination channel is actually empty.
-                    # Check the destination channel's history; existing episodes are skipped.
-                    existing_episodes = set()
-                    async for channel_message in user_client.get_chat_history(destination_id, limit=500):
-                        body = " ".join(str(x or "") for x in (
-                            getattr(channel_message, "text", ""),
-                            getattr(channel_message, "caption", ""),
-                        ))
-                        match = re.search(
-                            rf"(?i)Season\\s*{season_index}\\s*Episode\\s*0*(\\d+)", body
-                        )
-                        if match:
-                            existing_episodes.add(int(match.group(1)))
-                    season_year = prequel.get("seasonYear") or "N/A"
-                    episode_total = available_episodes or "Unknown"
-                    season_format = prequel.get("format") or "TV"
-                    season_status = prequel.get("status") or "N/A"
-                    season_info = (
-                        f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
-                        f"<b>Season title:</b> {_escape(season_title)}\n"
-                        f"<b>Year:</b> {_escape(season_year)}\n"
-                        f"<b>Episodes:</b> {_escape(episode_total)}\n"
-                        f"<b>Format:</b> {_escape(season_format)}\n"
-                        f"<b>Status:</b> {_escape(season_status)}\n"
-                        f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
+                if media_status != "RELEASING":
+                    raise RuntimeError(
+                        f"{selected_title} is not currently RELEASING in AniList "
+                        f"(status: {media_status or 'unknown'}); refusing archive uploads."
                     )
-                    info_message = await bot.send_message(
-                        chat_id=destination_id,
-                        text=season_info,
-                        disable_web_page_preview=True,
+                if released_episode_count < 1:
+                    raise RuntimeError(
+                        f"AniList has not confirmed a released episode for {selected_title} "
+                        f"Season {season_index}; no torrent download was started."
                     )
-                    if not info_message:
-                        raise RuntimeError(
-                            f"Could not publish Season {season_index} information for {selected_title}; "
-                            "the season batch was not started."
-                        )
-                    sticker_ok = await send_sticker_to_channel(
-                        destination_id, getattr(Var, "STICKER_ID", None)
+
+                # Resume from the destination channel's existing episode cards.
+                existing_episodes = set()
+                title_key = _plain_title(selected_title)
+                async for channel_message in user_client.get_chat_history(destination_id, limit=500):
+                    body = " ".join(str(value or "") for value in (
+                        getattr(channel_message, "caption", ""),
+                        getattr(channel_message, "text", ""),
+                    ))
+                    if title_key and title_key not in _plain_title(body):
+                        continue
+
+                    tagged_episode = re.search(
+                        r"(?i)\[S0*(\d{1,2})[-_ ]0*(\d{1,3})\]", body
                     )
-                    if not sticker_ok:
-                        raise RuntimeError(
-                            f"Season {season_index} sticker failed for {selected_title}; episodes were not started."
-                        )
-                    if not available_episodes:
-                        raise RuntimeError(
-                            f"AniList has no released episode count for {season_title}; refusing to guess."
-                        )
-                    await db.set_anime_archive_batch(
-                        archive_id, season_index, destination_id, "in_progress",
-                        "", f"episode-by-episode S{season_index} 4-quality",
+                    if tagged_episode:
+                        if int(tagged_episode.group(1)) == season_index:
+                            existing_episodes.add(int(tagged_episode.group(2)))
+                        continue
+
+                    season_match = re.search(
+                        rf"(?i)\bSeason\s*0*{season_index}\b", body
                     )
-                    for episode_number in range(1, available_episodes + 1):
-                        if episode_number in existing_episodes:
-                            continue
-                        await rep.report(
-                            f"Uploading {selected_title} Season {season_index} Episode {episode_number} "
-                            f"to dedicated channel {destination_id}.",
-                            "info", log=False,
-                        )
-                        await _upload_single_episode(
-                            prequel, destination_id, season_index, episode_number
-                        )
-                    await db.set_anime_archive_batch(
-                        archive_id, season_index, destination_id, "complete",
-                        "", f"episode-by-episode S{season_index} 4-quality",
+                    episode_match = re.search(
+                        r"(?i)\bEpisode\s*[:#]?\s*0*(\d{1,3})\b", body
                     )
-    
+                    if season_match and episode_match:
+                        existing_episodes.add(int(episode_match.group(1)))
+
+                season_year = selected_media.get("seasonYear") or "N/A"
+                episode_total = selected_media.get("episodes") or "Ongoing"
+                season_info = (
+                    f"<b>{_escape(selected_title)} — Season {season_index}</b>\n"
+                    f"<b>Year:</b> {_escape(season_year)}\n"
+                    f"<b>Released episodes:</b> {_escape(released_episode_count)}\n"
+                    f"<b>Status:</b> RELEASING\n"
+                    f"<b>Qualities:</b> HDRip, 1080p, 720p, 480p"
+                )
+                info_message = await bot.send_message(
+                    chat_id=destination_id,
+                    text=season_info,
+                    disable_web_page_preview=True,
+                )
+                if not info_message:
+                    raise RuntimeError(
+                        f"Could not publish Season {season_index} information for {selected_title}; "
+                        "episode processing was not started."
+                    )
+                sticker_ok = await send_sticker_to_channel(
+                    destination_id, getattr(Var, "STICKER_ID", None)
+                )
+                if not sticker_ok:
+                    await rep.report(
+                        f"Season {season_index} sticker failed for {selected_title}; "
+                        "continuing with episode cards.",
+                        "warning",
+                        log=False,
+                    )
+
+                await db.set_anime_archive_batch(
+                    anime_id, season_index, destination_id, "in_progress",
+                    "", f"released-episodes-only S{season_index} 4-quality",
+                )
+                for episode_number in range(1, released_episode_count + 1):
+                    if episode_number in existing_episodes:
+                        continue
+                    await rep.report(
+                        f"Starting released ongoing episode {selected_title} "
+                        f"S{season_index:02d}E{episode_number:02d} in channel {destination_id}.",
+                        "info",
+                    )
+                    await _upload_single_episode(
+                        selected_media, destination_id, season_index, episode_number
+                    )
+                    await rep.report(
+                        f"Published {selected_title} S{season_index:02d}E{episode_number:02d} "
+                        f"successfully to channel {destination_id}.",
+                        "success",
+                    )
+
+                await db.set_anime_archive_batch(
+                    anime_id, season_index, destination_id, "complete",
+                    "", f"released-episodes-only S{season_index} 4-quality",
+                )
+                await rep.report(
+                    f"Completed released-only backfill for {selected_title} Season {season_index}: "
+                    f"{released_episode_count} episode(s) confirmed released; prequel seasons skipped.",
+                    "success",
+                )
+
         finally:
             AUTO_UPLOAD_PRIORITY_LOCK.release()
 
