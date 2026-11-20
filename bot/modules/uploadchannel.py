@@ -756,10 +756,22 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
     keyboard = InlineKeyboardMarkup(keyboard_rows)
 
-    # Generate the same ANIME SOUL 16:9 episode artwork used by the normal
-    # uploader. Do not post progress, season-info, or sticker messages in the
-    # anime channel: publish exactly one final photo/caption/buttons per episode,
-    # and only after every configured quality has finished uploading.
+    # Match the reference sequence: priority sticker first, then one ANIME SOUL
+    # poster/caption with all four quality buttons. Use BOT_TOKEN because its
+    # sticker file_id belongs to that bot, which is promoted as channel admin.
+    sticker_sent = await send_sticker_to_channel(
+        destination_id,
+        getattr(Var, "STICKER_ID", None),
+        client=bot,
+    )
+    if not sticker_sent:
+        await rep.report(
+            f"Priority sticker delivery failed for {title} S{season_number}E{episode_number}; "
+            "continuing with the episode card so sticker delivery cannot block the upload.",
+            "warning",
+            log=False,
+        )
+
     poster_path = os.path.join(workdir, f"anime_soul_s{season_number}e{episode_number}.jpg")
     poster = await build_anime_soul_poster(
         info, title, poster_path, episode_label=str(episode_number).zfill(2)
@@ -792,31 +804,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
         )
 
-    # The requested Ongoing Anime Time pack sticker is mandatory and is sent
-    # exactly once after the final episode card (not before, not per quality).
-    sticker_sent = await send_sticker_to_channel(
-        destination_id,
-        getattr(Var, "STICKER_ID", None),
-        client=destination_client,
+    await rep.report(
+        f"Published {title} S{season_number}E{episode_number} with four quality buttons "
+        "and AniList-ID-verified artwork/synopsis.",
+        "info",
+        log=False,
     )
-    if not sticker_sent:
-        # The episode card and all four file links are already live. A sticker
-        # API/session error must never mark the episode upload as failed or stop
-        # the remaining scheduled episodes; report it separately for retry.
-        await rep.report(
-            f"Episode card published successfully for {title} S{season_number}E{episode_number}, "
-            "but the Ongoing Anime Time sticker could not be sent. "
-            "The episode remains successful; check sticker diagnostics and retry the sticker only.",
-            "warning",
-            log=False,
-        )
-    else:
-        await rep.report(
-            f"Published {title} S{season_number}E{episode_number} with four quality buttons, "
-            "AniList-ID-verified artwork/synopsis, and the Ongoing Anime Time sticker.",
-            "info",
-            log=False,
-        )
     shutil.rmtree(workdir, ignore_errors=True)
     return True
 
@@ -1180,7 +1173,7 @@ async def uploadchannel_callbacks(client, callback):
                         f"@{bot_username} is an admin in '{title}' ({chat.id}) but Telegram denied "
                         "can_post_messages. Episode uploads cannot start until posting permission is granted."
                     )
-            # Each archive season gets its own info -> sticker -> episode-batch sequence.
+            # Publish only the sticker and final ANIME SOUL episode cards.
             created.append((title, chat.id, None, reused))
             archive_jobs.append((media, int(chat.id)))
             await asyncio.sleep(1)
@@ -1216,15 +1209,23 @@ async def uploadchannel_callbacks(client, callback):
                 existing_episodes = set()
                 channel_stage = f"reading existing episode history in {destination_id} via USER_SESSION"
                 async for channel_message in user_client.get_chat_history(destination_id, limit=500):
-                    body = " ".join(str(x or "") for x in (
-                        getattr(channel_message, "text", ""),
-                        getattr(channel_message, "caption", ""),
-                    ))
-                    match = re.search(
-                        rf"(?i)Season\s*{season_index}\s*Episode\s*0*(\d+)", body
+                    message_text = str(getattr(channel_message, "text", "") or "")
+                    message_caption = str(getattr(channel_message, "caption", "") or "")
+                    body = "\\n".join(part for part in (message_caption, message_text) if part)
+                    # ANIME SOUL posts put the season in the quoted title and
+                    # the episode in a separate "Episode: NN" detail line.
+                    # Season metadata cards ("Episodes: 12") must not count.
+                    first_message = message_caption or message_text
+                    header = first_message.splitlines()[0] if first_message else ""
+                    header_season = re.search(r"(?i)\\bSeason\\s*0*(\\d{1,2})\\b", header)
+                    episode_label = re.search(r"(?i)\\bEpisode\\s*[:#]\\s*0*(\\d{1,3})\\b", body)
+                    legacy_episode = re.search(
+                        rf"(?i)\\bSeason\\s*0*{season_index}\\s*Episode\\s*0*(\\d+)", body
                     )
-                    if match:
-                        existing_episodes.add(int(match.group(1)))
+                    if legacy_episode:
+                        existing_episodes.add(int(legacy_episode.group(1)))
+                    elif header_season and int(header_season.group(1)) == int(season_index) and episode_label:
+                        existing_episodes.add(int(episode_label.group(1)))
                 season_year = prequel.get("seasonYear") or "N/A"
                 episode_total = available_episodes or "Unknown"
                 season_format = prequel.get("format") or "TV"
