@@ -126,17 +126,15 @@ async def load_settings():
     
 
 async def main():
-    # Keep references only to tasks created by this application.
-    # Pyrogram owns and manages its internal session tasks.
+    # Keep strong references to application-owned background tasks.
     tasks = []
-    bot_start_attempted = False
     try:
         LOGS.info("Starting Web Server...")
         await start_server()
-        
+
         LOGS.info("Loading settings...")
         await load_settings()
-        
+
         LOGS.info("Starting scheduler...")
         sch.add_job(
             upcoming_animes,
@@ -147,73 +145,52 @@ async def main():
         )
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
-        
-        LOGS.info("Starting bot...")
-        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
-        # fail part-way through startup. The finally block must still stop it.
-        bot_start_attempted = True
-        await bot.start()
-        await restart()
-        
-        LOGS.info("Starting tasks...")
-        # Start the scheduled ongoing-anime RSS detector.
-        # Dual-audio releases are filtered out and handled only through /dualaudio.
-        LOGS.info("Automatic ongoing anime detection/upload is ON; dual-audio releases are manual-only.")
-        tasks = [
-            create_task(queue_loop()),
-            create_task(fetch_animes()),
-        ]
-        
-        LOGS.info('Auto Anime Bot Started!')
-        await idle()
-        
-    except Exception as e:
+
+        # Let Pyrofork own the complete Client start/stop lifecycle. This
+        # ensures its internal recv/ping workers are shut down on exceptions.
+        async with bot:
+            try:
+                await restart()
+
+                LOGS.info("Starting tasks...")
+                LOGS.info(
+                    "Automatic ongoing anime detection/upload is ON; "
+                    "dual-audio releases are manual-only."
+                )
+                tasks = [
+                    create_task(queue_loop(), name="app-queue-loop"),
+                    create_task(fetch_animes(), name="app-anime-rss"),
+                ]
+
+                LOGS.info("Auto Anime Bot Started!")
+                await idle()
+            finally:
+                # Finish our own background jobs before the Client context
+                # exits and Pyrofork disconnects its internal workers.
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    await gather(*tasks, return_exceptions=True)
+
+    except Exception:
         LOGS.exception("Application startup/runtime error")
         raise
-    
+
     finally:
-        LOGS.info('Shutting down...')
+        LOGS.info("Shutting down...")
         if sch.running:
             sch.shutdown(wait=False)
-
-        # Stop only application-owned background jobs. Do not cancel
-        # Pyrogram's recv_worker/ping_worker tasks directly.
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-
-        if tasks:
-            await gather(*tasks, return_exceptions=True)
-
-        if bot_start_attempted:
-            try:
-                await bot.stop()
-            except Exception:
-                LOGS.exception("Error while stopping Pyrogram client during shutdown")
-
         await clean_up()
-        LOGS.info('Cleanup complete!')
+        LOGS.info("Cleanup complete!")
 
 if __name__ == '__main__':
-    loop = get_event_loop()
     try:
-        loop.run_until_complete(main())
+        # Pyrofork's run() drives the same loop owned by the Client instance.
+        # Do not manually cancel library tasks or close that loop ourselves.
+        bot.run(main())
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
-    finally:
-        # Pyrogram can leave internal ping/receive tasks pending if startup
-        # fails part-way through or shutdown is interrupted. Never close the
-        # event loop while those tasks are still alive.
-        try:
-            pending = [task for task in all_tasks(loop) if not task.done()]
-            for task in pending:
-                task.cancel()
-            if pending:
-                loop.run_until_complete(gather(*pending, return_exceptions=True))
-            loop.run_until_complete(loop.shutdown_asyncgens())
-            if hasattr(loop, "shutdown_default_executor"):
-                loop.run_until_complete(loop.shutdown_default_executor())
-        except Exception:
-            LOGS.exception("Final asyncio task cleanup failed")
-        finally:
-            loop.close()
+    except Exception:
+        LOGS.exception("Fatal worker error")
+        raise
