@@ -255,13 +255,12 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
             break
         await asyncio.sleep(2)
     if not channel_valid:
-        if destination_channel is not None:
-            raise RuntimeError(
-                f"Selected archive destination {channel_to_use} is inaccessible; "
-                "batch upload stopped instead of falling back to Main Channel."
-            )
-        await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
-        channel_to_use = Var.MAIN_CHANNEL
+        # Never silently redirect an anime archive to Main Channel. The mapped
+        # destination must be accessible or the operation should stop clearly.
+        raise RuntimeError(
+            f"Archive destination {channel_to_use} is inaccessible after retries; "
+            "upload stopped without falling back to Main Channel."
+        )
 
     dl_path = await TorDownloader(unique_dir).download(torrent_url)
     if not dl_path or not ospath.exists(dl_path):
