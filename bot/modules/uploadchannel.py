@@ -700,10 +700,11 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         shutil.copy2(source, quality_source)
         encode_status = await bot.send_message(
             Var.LOG_CHANNEL,
-            f"<b>Encoding:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p",
+            f"<b>Preparing encode:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p\\n"
+            "FFmpeg has not started yet.",
         )
         encoded_path = await FFEncoder(
-            encode_status, quality_source, upload_name, quality
+            encode_status, quality_source, upload_name, quality, force_encode=True
         ).start_encode()
 
         # A custom per-anime FFmpeg command can fail on a particular source
@@ -721,7 +722,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 log=False,
             )
             encoded_path = await FFEncoder(
-                encode_status, quality_source, upload_name, quality, force_default=True
+                encode_status, quality_source, upload_name, quality,
+                force_default=True, force_encode=True,
             ).start_encode()
 
         if not encoded_path or not os.path.exists(encoded_path):
