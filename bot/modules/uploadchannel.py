@@ -424,12 +424,6 @@ async def _find_episode_torrent(media, season_number, episode_number):
 async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     from bot import Var
-    episode = await _find_episode_torrent(media, season_number, episode_number)
-    if not episode:
-        raise RuntimeError(
-            f"RSS source missing or ambiguous for Season {season_number} Episode {episode_number}; "
-            "stopping to avoid uploading the wrong episode."
-        )
     title = _display_title(media)
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{media.get('id')}_{season_number}_{episode_number}")
     workdir = os.path.join("downloads", "uc_episode_" + safe)
@@ -481,11 +475,9 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     info.pdata["anime_title"] = title
     info.pdata["episode_number"] = str(episode_number).zfill(2)
     info.pdata["anime_season"] = str(season_number).zfill(2)
-    info.pdata["audio_type"] = (
-        "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
-        else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
-        else "Japanese [English Sub]"
-    )
+    # The audio label is refined from RSS if a source download is needed.
+    # A complete FILE_STORE set can be reused without a live torrent.
+    info.pdata["audio_type"] = "Japanese [English Sub]"
     # Episode cards are posted by the uploader, but all file-sharing deep
     # links must open the existing Monkey file-share bot.
     # Do not derive this username from BOT_TOKEN.
@@ -664,7 +656,6 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                         f"S{target_season:02d}E{target_episode:02d} from FILE_STORE message {stored_id}; "
                         "skipping download/encode/upload.",
                         "info",
-                        log=False,
                     )
                     continue
             except Exception as verify_error:
@@ -677,12 +668,31 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"No reusable {quality} match found in FILE_STORE for {title} "
             f"S{target_season:02d}E{target_episode:02d}; this quality will be uploaded.",
             "warning",
-            log=False,
         )
         missing_qualities.append(quality)
 
     source = None
     if missing_qualities:
+        await rep.report(
+            f"Searching Nyaa/Anime RSS for {title} S{target_season:02d}E{target_episode:02d}; "
+            f"{len(missing_qualities)} quality file(s) still need encoding.",
+            "info",
+        )
+        episode = await _find_episode_torrent(media, season_number, episode_number)
+        if not episode:
+            raise RuntimeError(
+                f"No exact RSS torrent found for {title} S{target_season:02d}E{target_episode:02d}; "
+                "no download or encoding was started. Existing FILE_STORE qualities remain reusable."
+            )
+        info.pdata["audio_type"] = (
+            "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
+            else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
+            else "Japanese [English Sub]"
+        )
+        await rep.report(
+            f"RSS source matched: {episode['title']} — {episode['link']}",
+            "success",
+        )
         downloaded = await TorDownloader(workdir).download(episode["link"])
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
