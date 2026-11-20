@@ -428,6 +428,20 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             await progress_callback(stage)
         else:
             await rep.report(stage, "info", log=False)
+
+    async def create_optional_log_message(text):
+        """A broken LOG_CHANNEL must never stop an encode or file upload."""
+        try:
+            return await bot.send_message(Var.LOG_CHANNEL, text)
+        except Exception as log_error:
+            LOGS.warning("Could not create upload progress message in LOG_CHANNEL: %s", log_error)
+            await rep.report(
+                f"Progress message unavailable in LOG_CHANNEL; continuing upload: {log_error}",
+                "warning",
+                log=False,
+            )
+            return None
+
     from bot import Var
     title = _display_title(media)
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{media.get('id')}_{season_number}_{episode_number}")
@@ -560,12 +574,11 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     storage_records = []
     storage_chat_id = None
     # Explicit storage invite supplied by the owner; do not silently scan a stale FILE_STORE_LINK from Heroku.
-    storage_link = "https://t.me/+Rn-HvMOx3ho5ZWVl"
+    storage_link = str(getattr(Var, "FILE_STORE_LINK", "") or "").strip()
     try:
-        # FILE_STORE is a separate channel from the per-anime destination.
-        # A fresh in-memory USER_SESSION may not know its numeric peer ID, and
-        # it cannot read channel history until it has joined the storage channel.
-        # Resolve/join it through the configured public username or invite link.
+        # Resolve the configured FILE_STORE only. Never scan a hardcoded or
+        # unrelated invite: message IDs from another channel would create
+        # invalid share-bot deep links and could cause duplicate uploads.
         if storage_link:
             try:
                 storage_chat = await destination_client.join_chat(storage_link)
@@ -574,24 +587,25 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 if "user_already_participant" in join_text or "already a participant" in join_text:
                     storage_chat = await destination_client.get_chat(storage_link)
                 else:
-                    # If already joined, get_chat(link) succeeds; if not, surface
-                    # the original join failure rather than silently using a stale ID.
                     try:
                         storage_chat = await destination_client.get_chat(storage_link)
                     except Exception:
                         raise join_error
-            if not storage_chat or not getattr(storage_chat, "id", None):
-                raise RuntimeError("FILE_STORE_LINK did not resolve to a Telegram channel.")
-            storage_chat_id = int(storage_chat.id)
+        else:
             configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
-            if configured_storage_id and storage_chat_id != configured_storage_id:
-                await rep.report(
-                    f"FILE_STORE_LINK resolved to {storage_chat_id}, while FILE_STORE is "
-                    f"{configured_storage_id}. Using the channel resolved from FILE_STORE_LINK "
-                    "for safe existing-file reuse.",
-                    "warning",
-                    log=False,
-                )
+            if not configured_storage_id:
+                raise RuntimeError("FILE_STORE is not configured.")
+            storage_chat = await destination_client.get_chat(configured_storage_id)
+
+        if not storage_chat or not getattr(storage_chat, "id", None):
+            raise RuntimeError("Configured FILE_STORE did not resolve to a Telegram channel.")
+        storage_chat_id = int(storage_chat.id)
+        configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
+        if configured_storage_id and storage_chat_id != configured_storage_id:
+            raise RuntimeError(
+                f"Configured FILE_STORE link resolved to {storage_chat_id}, "
+                f"but FILE_STORE is {configured_storage_id}; refusing to scan the wrong channel."
+            )
 
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
@@ -732,10 +746,9 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
         shutil.copy2(source, quality_source)
-        encode_status = await bot.send_message(
-            Var.LOG_CHANNEL,
+        encode_status = await create_optional_log_message(
             f"<b>Preparing encode:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p\\n"
-            "FFmpeg has not started yet.",
+            "FFmpeg has not started yet."
         )
         encoded_path = await FFEncoder(
             encode_status, quality_source, upload_name, quality, force_encode=True
@@ -771,9 +784,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             "success",
         )
         await set_progress(f"Uploading {title} S{target_season:02d}E{target_episode:02d} {quality}p to FILE_STORE.")
-        uploaded = await TgUploader(await bot.send_message(
-            Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
-        )).upload(encoded_path, quality)
+        upload_status = await create_optional_log_message(
+            f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
+        )
+        uploaded = await TgUploader(upload_status).upload(encoded_path, quality)
         if not uploaded:
             raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at {quality}.")
         # Use the same single-file deep-link format as /addanime. Monkey
