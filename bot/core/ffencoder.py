@@ -134,10 +134,33 @@ class FFEncoder:
     async def get_ffmpeg_command(self, dl_npath, out_npath):
         try:
             if self.force_default:
-                LOGS.warning(
-                    f"Using safe default FFmpeg command for {self.__name} ({self.__qual}p) after custom-config failure."
+                # Do not reuse FFCODE_* environment templates for the retry:
+                # those templates may themselves contain "-map 0", which maps
+                # MKV attachments/data streams (often reported as unknown codec
+                # streams 21+). Build an independent, conservative fallback.
+                # Only the first video stream, optional audio streams, and
+                # optional subtitle streams are mapped; attachments/data are
+                # intentionally excluded.
+                resolution = self.resolution_map.get(self.__qual, "1920x1080")
+                safe_command = (
+                    "ffmpeg -hide_banner -y "
+                    "-filter_threads 1 -filter_complex_threads 1 "
+                    f"-i {shlex.quote(dl_npath)} "
+                    "-map 0:v:0 -map 0:a? -map 0:s? "
+                    "-map_metadata 0 -map_chapters 0 "
+                    "-c:v libx264 -preset veryfast "
+                    f"-s {resolution} -pix_fmt yuv420p -crf 30 "
+                    "-c:a libopus -b:a 32k -ac 2 -c:s copy "
+                    "-threads 1 -max_muxing_queue_size 2048 "
+                    f"-progress {shlex.quote(self.__prog_file)} -nostats "
+                    f"{shlex.quote(out_npath)}"
                 )
-                return ffargs[self.__qual].format(dl_npath, self.__prog_file, out_npath)
+                LOGS.warning(
+                    f"Using independent safe FFmpeg fallback for {self.__name} "
+                    f"({self.__qual}p); mapping video/audio/subtitles only and "
+                    "excluding MKV attachments/data streams."
+                )
+                return safe_command
             anime_name = self.pdata.get('title', '').strip() if self.pdata else None
             if not anime_name:
                 match = findall(r'\] (.+?) [-–] \d+', self.dl_path)
