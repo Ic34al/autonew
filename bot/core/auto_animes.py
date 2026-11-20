@@ -255,12 +255,13 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
             break
         await asyncio.sleep(2)
     if not channel_valid:
-        # Never silently redirect an anime archive to Main Channel. The mapped
-        # destination must be accessible or the operation should stop clearly.
-        raise RuntimeError(
-            f"Archive destination {channel_to_use} is inaccessible after retries; "
-            "upload stopped without falling back to Main Channel."
-        )
+        if destination_channel is not None:
+            raise RuntimeError(
+                f"Selected archive destination {channel_to_use} is inaccessible; "
+                "batch upload stopped instead of falling back to Main Channel."
+            )
+        await rep.report(f"Final channel {channel_to_use} is invalid after retries, using main channel", "error")
+        channel_to_use = Var.MAIN_CHANNEL
 
     dl_path = await TorDownloader(unique_dir).download(torrent_url)
     if not dl_path or not ospath.exists(dl_path):
@@ -585,41 +586,9 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
             _ONGOING_PRIORITY_STICKER_FILE_ID = stickers[0]["file_id"]
 
         sender = client or bot
-        sticker_to_send = _ONGOING_PRIORITY_STICKER_FILE_ID
-        # Bot API file_ids are bot-account scoped. When the channel creator
-        # USER_SESSION posts to its private channel, download the sticker bytes
-        # through the Bot API and upload those bytes through the user session.
-        if sender is not bot:
-            get_file_endpoint = f"https://api.telegram.org/bot{Var.BOT_TOKEN}/getFile"
-            async with httpx.AsyncClient(timeout=25.0) as session:
-                file_response = await session.get(
-                    get_file_endpoint,
-                    params={"file_id": _ONGOING_PRIORITY_STICKER_FILE_ID},
-                )
-                file_response.raise_for_status()
-                file_payload = file_response.json()
-                if not file_payload.get("ok"):
-                    raise RuntimeError(file_payload.get("description", "Telegram getFile failed"))
-                file_path = (file_payload.get("result") or {}).get("file_path")
-                if not file_path:
-                    raise RuntimeError("Telegram getFile returned no file_path for priority sticker")
-                download_url = f"https://api.telegram.org/file/bot{Var.BOT_TOKEN}/{file_path}"
-                sticker_response = await session.get(download_url)
-                sticker_response.raise_for_status()
-            sticker_to_send = io.BytesIO(sticker_response.content)
-            # Preserve the real Telegram sticker format (.webp, .tgs or .webm).
-            # Renaming animated/video sticker bytes to .webp makes Pyrogram's
-            # upload parser reject an otherwise valid sticker.
-            sticker_extension = os.path.splitext(str(file_path))[1].lower() or ".webp"
-            if sticker_extension not in (".webp", ".tgs", ".webm"):
-                raise RuntimeError(
-                    f"Unsupported priority sticker file format: {sticker_extension or 'unknown'}"
-                )
-            sticker_to_send.name = f"priority_sticker{sticker_extension}"
-
         sent_message = await sender.send_sticker(
             chat_id=channel,
-            sticker=sticker_to_send
+            sticker=_ONGOING_PRIORITY_STICKER_FILE_ID
         )
         if not sent_message:
             raise RuntimeError("Telegram did not confirm the priority sticker message")
