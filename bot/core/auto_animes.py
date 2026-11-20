@@ -7814,14 +7814,24 @@ async def fetch_animes():
 
     while True:
         await asleep(30)
-        if (
-            ani_cache.get("global_pause")
-            or await db.get_mode() != "anime"
-            or not ani_cache.get("fetch_animes")
-        ):
-            continue
-
         try:
+            current_mode = await db.get_mode()
+            if ani_cache.get("global_pause") or current_mode != "anime" or not ani_cache.get("fetch_animes"):
+                reasons = []
+                if ani_cache.get("global_pause"):
+                    reasons.append("global pause is enabled")
+                if current_mode != "anime":
+                    reasons.append(f"database mode is '{current_mode}'")
+                if not ani_cache.get("fetch_animes"):
+                    reasons.append("fetch_animes flag is disabled")
+                await report_schedule_status_once(
+                    ("scanner_paused", tuple(reasons)),
+                    "Automatic RSS upload scanner is waiting: " + "; ".join(reasons) + ".",
+                    "warning",
+                )
+                continue
+            last_schedule_status.pop("scanner_paused", None)
+
             today = datetime.now(ist).date()
             schedule = await fetch_today_schedule()
             if not schedule:
