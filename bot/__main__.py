@@ -1,6 +1,6 @@
 from asyncio import (
     create_task, create_subprocess_exec, create_subprocess_shell,
-    run as asyrun, gather, sleep as asleep, get_event_loop
+    run as asyrun, gather, all_tasks, sleep as asleep, get_event_loop
 )
 from aiofiles import open as aiopen
 from pyrogram import idle
@@ -201,4 +201,19 @@ if __name__ == '__main__':
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
     finally:
-        loop.close()
+        # Pyrogram can leave internal ping/receive tasks pending if startup
+        # fails part-way through or shutdown is interrupted. Never close the
+        # event loop while those tasks are still alive.
+        try:
+            pending = [task for task in all_tasks(loop) if not task.done()]
+            for task in pending:
+                task.cancel()
+            if pending:
+                loop.run_until_complete(gather(*pending, return_exceptions=True))
+            loop.run_until_complete(loop.shutdown_asyncgens())
+            if hasattr(loop, "shutdown_default_executor"):
+                loop.run_until_complete(loop.shutdown_default_executor())
+        except Exception:
+            LOGS.exception("Final asyncio task cleanup failed")
+        finally:
+            loop.close()
