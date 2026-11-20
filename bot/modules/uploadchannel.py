@@ -745,7 +745,7 @@ async def uploadchannel_callbacks(client, callback):
                     # suppress uploads when the destination channel is actually empty.
                     # Check the destination channel's history; existing episodes are skipped.
                     existing_episodes = set()
-                    async for channel_message in bot.get_chat_history(destination_id, limit=500):
+                    async for channel_message in user_client.get_chat_history(destination_id, limit=500):
                         body = " ".join(str(x or "") for x in (
                             getattr(channel_message, "text", ""),
                             getattr(channel_message, "caption", ""),
