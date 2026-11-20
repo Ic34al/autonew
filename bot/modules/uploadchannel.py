@@ -695,6 +695,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"RSS source matched: {episode['title']} — {episode['link']}",
             "success",
         )
+        await rep.report(
+            f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}.",
+            "info",
+        )
         downloaded = await TorDownloader(workdir).download(episode["link"])
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
@@ -704,8 +708,17 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
             )
         source = video_files[0]
+        await rep.report(
+            f"Torrent download completed for {title} S{target_season:02d}E{target_episode:02d}; "
+            f"found one video source. Preparing {len(missing_qualities)} missing quality encode(s).",
+            "success",
+        )
 
     for quality in missing_qualities:
+        await rep.report(
+            f"Starting FFmpeg encode for {title} S{target_season:02d}E{target_episode:02d} at {quality}p.",
+            "info",
+        )
         upload_name = await info.get_upname(quality)
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
@@ -743,6 +756,11 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 f"Encoding failed for S{season_number}E{episode_number} at {quality}, "
                 "including the safe default FFmpeg retry. Earlier uploaded qualities remain saved."
             )
+        await rep.report(
+            f"FFmpeg encode completed for {title} S{season_number:02d}E{episode_number:02d} at {quality}p; "
+            "starting Telegram FILE_STORE upload.",
+            "success",
+        )
         uploaded = await TgUploader(await bot.send_message(
             Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
         )).upload(encoded_path, quality)
@@ -1316,20 +1334,38 @@ async def uploadchannel_callbacks(client, callback):
                 for episode_number in range(1, available_episodes + 1):
                     if episode_number in existing_episodes:
                         continue
-                    channel_stage = f"uploading Season {season_index} Episode {episode_number} to {destination_id}"
+                    # Scheduled RSS releases keep priority, but never label an
+                    # archive episode as "uploading" while it is only sleeping.
+                    channel_stage = (
+                        f"waiting for scheduled-release priority before "
+                        f"Season {season_index} Episode {episode_number}"
+                    )
                     await report_stage(channel_stage, selected_title)
-                    # Let a newly detected scheduled release run before
-                    # the next archive episode. The current episode finishes
-                    # atomically; scheduled uploads take the lock at this boundary.
+                    last_wait_report = time.monotonic()
                     while (
                         AUTO_UPLOAD_PRIORITY_PENDING.is_set()
                         or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
                     ):
                         await asyncio.sleep(5)
+                        now = time.monotonic()
+                        if now - last_wait_report >= 60:
+                            remaining = max(
+                                0,
+                                int(auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL - now),
+                            )
+                            channel_stage = (
+                                f"waiting for scheduled-release priority; "
+                                f"archive S{season_index}E{episode_number} starts "
+                                f"after priority clears (cooldown remaining: {remaining}s)"
+                            )
+                            await report_stage(channel_stage, selected_title)
+                            last_wait_report = now
+
                     channel_stage = (
-                        f"acquiring upload priority lock before archive "
-                        f"S{season_index}E{episode_number}"
+                        f"starting download/encode/upload for "
+                        f"Season {season_index} Episode {episode_number}"
                     )
+                    await report_stage(channel_stage, selected_title)
                     await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                     try:
                         await _upload_single_episode(
@@ -1337,6 +1373,11 @@ async def uploadchannel_callbacks(client, callback):
                         )
                     finally:
                         AUTO_UPLOAD_PRIORITY_LOCK.release()
+                    channel_stage = (
+                        f"published Season {season_index} Episode {episode_number} "
+                        f"successfully to {destination_id}"
+                    )
+                    await report_stage(channel_stage, selected_title)
                 await db.set_anime_archive_batch(
                     archive_id, season_index, destination_id, "complete",
                     "", f"episode-by-episode S{season_index} 4-quality",
