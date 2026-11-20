@@ -142,17 +142,16 @@ async def rss_fetcher_supervisor():
 
 
 async def main():
-    # Keep references only to tasks created by this application.
-    # Pyrogram owns and manages its internal session tasks.
+    # Keep references to application-owned tasks; Pyrofork owns its
+    # internal recv/ping workers and must control their lifecycle.
     tasks = []
-    bot_start_attempted = False
     try:
         LOGS.info("Starting Web Server...")
         await start_server()
-        
+
         LOGS.info("Loading settings...")
         await load_settings()
-        
+
         LOGS.info("Starting scheduler...")
         sch.add_job(
             upcoming_animes,
@@ -163,58 +162,49 @@ async def main():
         )
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
-        
-        LOGS.info("Starting bot...")
-        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
-        # fail part-way through startup. The finally block must still stop it.
-        bot_start_attempted = True
-        await bot.start()
-        await restart()
-        
-        LOGS.info("Starting tasks...")
-        # Start the scheduled ongoing-anime RSS detector.
-        # Dual-audio releases are filtered out and handled only through /dualaudio.
-        LOGS.info("Automatic ongoing anime detection/upload is ON; dual-audio releases are manual-only.")
-        tasks = [
-            create_task(queue_loop()),
-            create_task(rss_fetcher_supervisor()),
-        ]
-        
-        LOGS.info('Auto Anime Bot Started!')
-        await idle()
-        
-    except Exception as e:
+
+        # Client context guarantees Pyrofork startup and shutdown are paired.
+        async with bot:
+            try:
+                await restart()
+
+                LOGS.info("Starting tasks...")
+                LOGS.info(
+                    "Automatic ongoing anime detection/upload is ON; "
+                    "dual-audio releases are manual-only."
+                )
+                tasks = [
+                    create_task(queue_loop(), name="app-queue-loop"),
+                    create_task(rss_fetcher_supervisor(), name="app-rss-supervisor"),
+                ]
+
+                LOGS.info("Auto Anime Bot Started!")
+                await idle()
+            finally:
+                # Await only our own tasks before the client context exits.
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    await gather(*tasks, return_exceptions=True)
+
+    except Exception:
         LOGS.exception("Application startup/runtime error")
         raise
-    
+
     finally:
-        LOGS.info('Shutting down...')
+        LOGS.info("Shutting down...")
         if sch.running:
             sch.shutdown(wait=False)
-
-        # Stop only application-owned background jobs. Do not cancel
-        # Pyrogram's recv_worker/ping_worker tasks directly.
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-
-        if tasks:
-            await gather(*tasks, return_exceptions=True)
-
-        if bot_start_attempted:
-            try:
-                await bot.stop()
-            except Exception:
-                LOGS.exception("Error while stopping Pyrogram client during shutdown")
-
         await clean_up()
-        LOGS.info('Cleanup complete!')
+        LOGS.info("Cleanup complete!")
 
 if __name__ == '__main__':
-    loop = get_event_loop()
     try:
-        loop.run_until_complete(main())
+        # Let Pyrofork drive its client coroutine on the owning event loop.
+        bot.run(main())
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
-    finally:
-        loop.close()
+    except Exception:
+        LOGS.exception("Fatal worker error")
+        raise
