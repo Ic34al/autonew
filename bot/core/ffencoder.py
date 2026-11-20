@@ -36,8 +36,7 @@ quality_settings = {
 }
 
 class FFEncoder:
-    def __init__(self, message, path, name, qual, is_movie=False, force_default=False):
-        self.force_default = bool(force_default)
+    def __init__(self, message, path, name, qual, is_movie=False):
         self.__proc = None
         self.is_cancelled = False
         self.message = message
@@ -124,11 +123,6 @@ class FFEncoder:
 
     async def get_ffmpeg_command(self, dl_npath, out_npath):
         try:
-            if self.force_default:
-                LOGS.warning(
-                    f"Using safe default FFmpeg command for {self.__name} ({self.__qual}p) after custom-config failure."
-                )
-                return ffargs[self.__qual].format(dl_npath, self.__prog_file, out_npath)
             anime_name = self.pdata.get('title', '').strip() if self.pdata else None
             if not anime_name:
                 match = findall(r'\] (.+?) [-–] \d+', self.dl_path)
