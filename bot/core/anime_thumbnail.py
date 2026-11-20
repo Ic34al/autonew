@@ -517,15 +517,9 @@ def create_dashboard(
         fill=RED,
     )
 
-    # Anime title: reduce font size for long names before truncating.
-    title_text = info["title"].upper()
+    # Anime title.
     title_font = get_font(67, True)
-    for font_size in range(67, 35, -2):
-        candidate_font = get_font(font_size, True)
-        if draw.textbbox((0, 0), title_text, font=candidate_font)[2] <= 980:
-            title_font = candidate_font
-            break
-    title = fit_text(draw, title_text, title_font, 980)
+    title = fit_text(draw, info["title"].upper(), title_font, 980)
 
     draw.text(
         (105, 285),
