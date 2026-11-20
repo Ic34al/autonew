@@ -698,7 +698,7 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
         episode_label = html.escape(str(episode_number or "—"))
     episode_word = "Episode"
     caption = (
-        f"<b>{html.escape(str(display_title))}</b>\n"
+        f"<blockquote>❝ {html.escape(str(display_title))} ❞</blockquote>\n"
         "──────────────────────\n"
         f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
         f"<b>➤ Quality: {html.escape(quality_text)}</b>\n"
