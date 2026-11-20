@@ -1050,7 +1050,7 @@ class MongoDB:
     async def add_processed_url(self, url: str):
         await self.__db.processed_urls.update_one({'_id': url}, {'$set': {'_id': url}}, upsert=True)
 
-    async def is_processed_url(self, url: str) -> bool:
+    async def is_processed_url(self, iurl: str) -> bool:
         doc = await self.__db.processed_urls.find_one({'_id': url})
         return doc is not None
 
