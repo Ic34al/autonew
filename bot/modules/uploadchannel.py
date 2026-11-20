@@ -664,10 +664,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                     f"S{target_season:02d}E{target_episode:02d}, but could not verify it; "
                     f"refusing a duplicate upload: {verify_error}"
                 ) from verify_error
+        # A cache miss is normal for a new episode/quality, not an error.
+        # The full FILE_STORE scan above succeeded; upload this quality now.
         await rep.report(
-            f"No reusable {quality} match found in FILE_STORE for {title} "
+            f"No existing {quality} copy in FILE_STORE for {title} "
             f"S{target_season:02d}E{target_episode:02d}; this quality will be uploaded.",
-            "warning",
+            "info",
         )
         missing_qualities.append(quality)
 
