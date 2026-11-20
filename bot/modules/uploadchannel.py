@@ -1019,11 +1019,18 @@ async def uploadchannel_callbacks(client, callback):
             await callback.message.edit(status_text)
         except Exception as status_error:
             LOGS.warning(f"Could not edit /uploadchannel progress message: {status_error}")
+        # Reporter intentionally suppresses routine INFO messages in Telegram.
+        # Send explicit /uploadchannel stage updates to LOG_CHANNEL so operators
+        # can distinguish waiting, downloading, encoding, uploading and publishing.
         try:
-            await rep.report(
-                f"/uploadchannel: {stage} [{len(created)}/{len(state['selected'])} channels prepared]",
-                "info",
-            )
+            if int(getattr(Var, "LOG_CHANNEL", 0) or 0):
+                await bot.send_message(
+                    Var.LOG_CHANNEL,
+                    f"<b>/uploadchannel</b>\n"
+                    f"<b>Anime:</b> {safe_title}\n"
+                    f"<b>Stage:</b> {safe_stage}\n"
+                    f"<b>Channels prepared:</b> {len(created)}/{len(state['selected'])}",
+                )
         except Exception as log_error:
             LOGS.warning(f"Could not publish /uploadchannel progress log: {log_error}")
 
