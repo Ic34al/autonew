@@ -457,7 +457,7 @@ class FFEncoder:
         # shlex.quote keeps bundled executable paths with spaces safe for the shell.
         ffmpeg_command = shlex.quote(ffmpeg_executable)
         ffcode = re.sub(
-            r"(?<![A-Za-z0-9_./-])ffmpeg(?=\\s|$)",
+            r"(?<![A-Za-z0-9_./-])ffmpeg(?=\s|$)",
             lambda _match: ffmpeg_command,
             ffcode,
             flags=re.IGNORECASE,
