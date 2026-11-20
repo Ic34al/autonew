@@ -39,8 +39,9 @@ quality_settings = {
 }
 
 class FFEncoder:
-    def __init__(self, message, path, name, qual, is_movie=False, force_default=False):
+    def __init__(self, message, path, name, qual, is_movie=False, force_default=False, force_encode=False):
         self.force_default = bool(force_default)
+        self.force_encode = bool(force_encode)
         self.__proc = None
         self.is_cancelled = False
         self.message = message
@@ -81,8 +82,13 @@ class FFEncoder:
                 break
             if self.__proc is not None and getattr(self.__proc, 'returncode', None) is not None:
                 break
-            async with aiopen(self.__prog_file, 'r+') as p:
-                text = await p.read()
+            try:
+                async with aiopen(self.__prog_file, 'r+') as p:
+                    text = await p.read()
+            except (FileNotFoundError, OSError) as exc:
+                LOGS.warning(f"FFmpeg progress file temporarily unavailable: {exc}")
+                await asleep(2)
+                continue
 
             if text:
                 time_done = int(t[-1]) / 1_000_000 if (t := findall(r"out_time_ms=(\d+)", text)) else 0.0
@@ -353,7 +359,7 @@ class FFEncoder:
             LOGS.info('Encoding skipped because /pause is active.')
             return None
         encoding_enabled = await db.get_encoding()
-        if not encoding_enabled:
+        if not encoding_enabled and not self.force_encode:
             if self.__qual != 'HDRi':
                 LOGS.info("Skipping non-HDRi encode when encoding is disabled")
                 return self.dl_path
@@ -465,12 +471,41 @@ class FFEncoder:
         LOGS.info(f"Resolved FFmpeg executable: {ffmpeg_executable}")
 
         # Capture FFmpeg stderr so failed encodes show the real cause in Anime Logs.
-        self.__proc = await create_subprocess_shell(
-            ffcode,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=PIPE,
-        )
+        try:
+            self.__proc = await create_subprocess_shell(
+                ffcode,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=PIPE,
+            )
+        except Exception as exc:
+            LOGS.exception(f"Could not start FFmpeg for {self.__name} ({self.__qual}p)")
+            try:
+                if ospath.exists(dl_npath):
+                    await aiorename(dl_npath, self.dl_path)
+            except Exception as restore_exc:
+                LOGS.exception(f"Could not restore source after FFmpeg launch failure: {restore_exc}")
+            await rep.report(
+                f"FFmpeg did not start for {self.__name} ({self.__qual}p): {exc}",
+                "error",
+            )
+            try:
+                await editMessage(
+                    self.message,
+                    f"<b>Encoding failed to start:</b> {self.__name} — {self.__qual}p\\n<pre>{str(exc)[:1500]}</pre>",
+                )
+            except Exception:
+                pass
+            return None
+
         proc_pid = self.__proc.pid
+        try:
+            await editMessage(
+                self.message,
+                f"<b>Encoding started:</b> {self.__name} — {self.__qual}p\\n"
+                "FFmpeg process is running; waiting for progress data...",
+            )
+        except Exception as status_exc:
+            LOGS.warning(f"Could not update encoding-start status: {status_exc}")
         ffpids_cache.append(proc_pid)
 
         progress_task = create_task(self.progress())
@@ -505,9 +540,23 @@ class FFEncoder:
             return None
 
         if return_code == 0:
-            if ospath.exists(out_npath):
-                await aiorename(out_npath, self.out_path)
+            if not ospath.exists(out_npath) or ospath.getsize(out_npath) <= 0:
+                LOGS.error(f"FFmpeg exited successfully but produced no output for {self.__name} ({self.__qual}p)")
+                await rep.report(
+                    f"FFmpeg reported success but produced no output file for {self.__name} ({self.__qual}p).",
+                    "error",
+                )
+                return None
+            await aiorename(out_npath, self.out_path)
             LOGS.info(f"Encoding successful! Output file: {self.out_path}")
+            try:
+                await editMessage(
+                    self.message,
+                    f"<b>Encoding completed:</b> {self.__name} — {self.__qual}p\\n"
+                    f"Output: {convertBytes(ospath.getsize(self.out_path))}",
+                )
+            except Exception as status_exc:
+                LOGS.warning(f"Could not update encoding-complete status: {status_exc}")
             return self.out_path
         else:
             error_message = f"FFmpeg exited with return code {return_code}"
