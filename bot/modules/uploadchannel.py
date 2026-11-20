@@ -421,8 +421,13 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
+    async def set_progress(stage):
+        if progress_callback:
+            await progress_callback(stage)
+        else:
+            await rep.report(stage, "info", log=False)
     from bot import Var
     title = _display_title(media)
     safe = re.sub(r"[^A-Za-z0-9_-]+", "_", f"{media.get('id')}_{season_number}_{episode_number}")
@@ -551,6 +556,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     target_season = int(season_number)
     target_episode = int(episode_number)
 
+    await set_progress(f"Checking FILE_STORE reuse for {title} S{target_season:02d}E{target_episode:02d}.")
     storage_records = []
     storage_chat_id = None
     # Explicit storage invite supplied by the owner; do not silently scan a stale FILE_STORE_LINK from Heroku.
@@ -675,6 +681,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     source = None
     if missing_qualities:
+        await set_progress(f"Searching RSS for {title} S{target_season:02d}E{target_episode:02d}.")
         await rep.report(
             f"Searching Nyaa/Anime RSS for {title} S{target_season:02d}E{target_episode:02d}; "
             f"{len(missing_qualities)} quality file(s) still need encoding.",
@@ -695,6 +702,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"RSS source matched: {episode['title']} — {episode['link']}",
             "success",
         )
+        await set_progress(f"Downloading torrent for {title} S{target_season:02d}E{target_episode:02d}.")
         await rep.report(
             f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}.",
             "info",
@@ -715,6 +723,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
 
     for quality in missing_qualities:
+        await set_progress(f"Encoding {title} S{target_season:02d}E{target_episode:02d} at {quality}p with FFmpeg.")
         await rep.report(
             f"Starting FFmpeg encode for {title} S{target_season:02d}E{target_episode:02d} at {quality}p.",
             "info",
@@ -761,6 +770,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             "starting Telegram FILE_STORE upload.",
             "success",
         )
+        await set_progress(f"Uploading {title} S{target_season:02d}E{target_episode:02d} {quality}p to FILE_STORE.")
         uploaded = await TgUploader(await bot.send_message(
             Var.LOG_CHANNEL, f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
         )).upload(encoded_path, quality)
@@ -772,6 +782,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         url = f"https://t.me/{share_bot_username}?start={await encode(start_payload)}"
         buttons_by_quality[quality] = InlineKeyboardButton(f"{quality}p" if quality != "HDRi" else "HDRip", url=url)
 
+    await set_progress(f"Preparing final episode card for {title} S{target_season:02d}E{target_episode:02d}.")
     available_qualities = {quality: True for quality in buttons_by_quality}
     caption = await build_main_channel_announcement_caption(
         info, title, str(episode_number).zfill(2), available_qualities
@@ -791,6 +802,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # Match the reference sequence: priority sticker first, then one ANIME SOUL
     # poster/caption with all four quality buttons. Use BOT_TOKEN because its
     # sticker file_id belongs to that bot, which is promoted as channel admin.
+    await set_progress(f"Publishing final episode card to channel {destination_id} for {title} S{target_season:02d}E{target_episode:02d}.")
     sticker_sent = await send_sticker_to_channel(
         destination_id,
         getattr(Var, "STICKER_ID", None),
@@ -1367,9 +1379,14 @@ async def uploadchannel_callbacks(client, callback):
                     )
                     await report_stage(channel_stage, selected_title)
                     await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+                    async def episode_progress(stage):
+                        nonlocal channel_stage
+                        channel_stage = stage
+                        await report_stage(stage, selected_title)
                     try:
                         await _upload_single_episode(
-                            prequel, destination_id, season_index, episode_number, user_client
+                            prequel, destination_id, season_index, episode_number,
+                            user_client, progress_callback=episode_progress
                         )
                     finally:
                         AUTO_UPLOAD_PRIORITY_LOCK.release()
