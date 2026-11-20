@@ -80,9 +80,12 @@ class Var:
 
     LOW_END_RENAME = True
 
-    BOT_USERNAME = getenv('BOT_USERNAME', "uchiha_Sasuke_itachi_bot")
+    BOT_USERNAME = getenv('BOT_USERNAME', "Orewa_Monkey_D_Kaizuko_Bot")
     CREATION_USERNAME = getenv('CREATION_USERNAME', "Ongoing Anime Time")
-    
+    FILE_SHARE_BOT_USERNAME = getenv(
+    "FILE_SHARE_BOT_USERNAME",
+    "Orewa_Monkey_D_Kaizuko_Bot"
+).strip().lstrip("@")
     SEND_SCHEDULE = getenv("SEND_SCHEDULE", "False").lower() == "true"
     SCHEDULE_TYPE = getenv("SCHEDULE_TYPE", "sub").lower()
 
