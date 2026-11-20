@@ -487,18 +487,23 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else "Japanese [English Sub]"
     )
     # Episode cards are posted by the uploader, but all file-sharing deep
-    # links must open the existing Monkey file-share bot. Do not derive this
-    # username from BOT_TOKEN: that token belongs to Auto Anime Uploader.
+    # links must open the existing Monkey file-share bot.
+    # Do not derive this username from BOT_TOKEN.
+    # File-share bot is independent of the uploader bot.
+
     share_bot_username = str(
-        getattr(Var, "BOT_USERNAME", "Orewa_Monkey_D_Kaizuko_Bot") or ""
+        getattr(
+            Var,
+            "FILE_SHARE_BOT_USERNAME",
+            "Orewa_Monkey_D_Kaizuko_Bot"
+        ) or ""
     ).strip().lstrip("@")
-    expected_share_bot = "Orewa_Monkey_D_Kaizuko_Bot"
-    if share_bot_username.casefold() != expected_share_bot.casefold():
+
+    if not share_bot_username:
         raise RuntimeError(
-            "File-share bot mismatch: expected @Orewa_Monkey_D_Kaizuko_Bot "
-            f"but BOT_USERNAME is @{share_bot_username or 'not configured'}. "
-            "Episode quality buttons were not created to avoid sending users to the wrong bot."
+            "FILE_SHARE_BOT_USERNAME is not configured."
         )
+
     quality_order = ("720", "1080", "480", "HDRi")
     buttons_by_quality = {}
 
