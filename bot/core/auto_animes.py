@@ -2810,7 +2810,24 @@ async def extra_utils(msg_id, out_path):
                 try:
                     await msg.copy(int(chat_id))
                 except Exception as e:
-                    await rep.report(f"Failed to backup to {chat_id}: {e}", "error")
+                    # BACKUP_FILE_STORE is an optional mirror, not the primary
+                    # FILE_STORE upload. An invalid/unreachable mirror must
+                    # never make a successfully uploaded episode look failed.
+                    error_text = str(e)
+                    if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
+                        await rep.report(
+                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
+                            "Telegram peer for this bot session. Primary FILE_STORE "
+                            "upload is unaffected; correct BACKUP_FILE_STORE and "
+                            "ensure this bot can access that channel.",
+                            "warning",
+                        )
+                    else:
+                        await rep.report(
+                            f"Optional backup to {chat_id} failed; primary FILE_STORE "
+                            f"upload is unaffected: {error_text}",
+                            "warning",
+                        )
     except Exception as e:
         await rep.report(f"Error in extra_utils: {e}", "error")
 
@@ -3965,7 +3982,24 @@ async def extra_utils(msg_id, out_path):
                 try:
                     await msg.copy(int(chat_id))
                 except Exception as e:
-                    await rep.report(f"Failed to backup to {chat_id}: {e}", "error")
+                    # BACKUP_FILE_STORE is an optional mirror, not the primary
+                    # FILE_STORE upload. An invalid/unreachable mirror must
+                    # never make a successfully uploaded episode look failed.
+                    error_text = str(e)
+                    if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
+                        await rep.report(
+                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
+                            "Telegram peer for this bot session. Primary FILE_STORE "
+                            "upload is unaffected; correct BACKUP_FILE_STORE and "
+                            "ensure this bot can access that channel.",
+                            "warning",
+                        )
+                    else:
+                        await rep.report(
+                            f"Optional backup to {chat_id} failed; primary FILE_STORE "
+                            f"upload is unaffected: {error_text}",
+                            "warning",
+                        )
     except Exception as e:
         await rep.report(f"Error in extra_utils: {e}", "error")
 
@@ -5089,7 +5123,24 @@ async def extra_utils(msg_id, out_path):
                 try:
                     await msg.copy(int(chat_id))
                 except Exception as e:
-                    await rep.report(f"Failed to backup to {chat_id}: {e}", "error")
+                    # BACKUP_FILE_STORE is an optional mirror, not the primary
+                    # FILE_STORE upload. An invalid/unreachable mirror must
+                    # never make a successfully uploaded episode look failed.
+                    error_text = str(e)
+                    if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
+                        await rep.report(
+                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
+                            "Telegram peer for this bot session. Primary FILE_STORE "
+                            "upload is unaffected; correct BACKUP_FILE_STORE and "
+                            "ensure this bot can access that channel.",
+                            "warning",
+                        )
+                    else:
+                        await rep.report(
+                            f"Optional backup to {chat_id} failed; primary FILE_STORE "
+                            f"upload is unaffected: {error_text}",
+                            "warning",
+                        )
     except Exception as e:
         await rep.report(f"Error in extra_utils: {e}", "error")
 
@@ -6213,7 +6264,24 @@ async def extra_utils(msg_id, out_path):
                 try:
                     await msg.copy(int(chat_id))
                 except Exception as e:
-                    await rep.report(f"Failed to backup to {chat_id}: {e}", "error")
+                    # BACKUP_FILE_STORE is an optional mirror, not the primary
+                    # FILE_STORE upload. An invalid/unreachable mirror must
+                    # never make a successfully uploaded episode look failed.
+                    error_text = str(e)
+                    if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
+                        await rep.report(
+                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
+                            "Telegram peer for this bot session. Primary FILE_STORE "
+                            "upload is unaffected; correct BACKUP_FILE_STORE and "
+                            "ensure this bot can access that channel.",
+                            "warning",
+                        )
+                    else:
+                        await rep.report(
+                            f"Optional backup to {chat_id} failed; primary FILE_STORE "
+                            f"upload is unaffected: {error_text}",
+                            "warning",
+                        )
     except Exception as e:
         await rep.report(f"Error in extra_utils: {e}", "error")
 
@@ -7335,7 +7403,24 @@ async def extra_utils(msg_id, out_path):
                 try:
                     await msg.copy(int(chat_id))
                 except Exception as e:
-                    await rep.report(f"Failed to backup to {chat_id}: {e}", "error")
+                    # BACKUP_FILE_STORE is an optional mirror, not the primary
+                    # FILE_STORE upload. An invalid/unreachable mirror must
+                    # never make a successfully uploaded episode look failed.
+                    error_text = str(e)
+                    if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
+                        await rep.report(
+                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
+                            "Telegram peer for this bot session. Primary FILE_STORE "
+                            "upload is unaffected; correct BACKUP_FILE_STORE and "
+                            "ensure this bot can access that channel.",
+                            "warning",
+                        )
+                    else:
+                        await rep.report(
+                            f"Optional backup to {chat_id} failed; primary FILE_STORE "
+                            f"upload is unaffected: {error_text}",
+                            "warning",
+                        )
     except Exception as e:
         await rep.report(f"Error in extra_utils: {e}", "error")
 
@@ -9137,7 +9222,24 @@ async def extra_utils(msg_id, out_path):
                 try:
                     await msg.copy(int(chat_id))
                 except Exception as e:
-                    await rep.report(f"Failed to backup to {chat_id}: {e}", "error")
+                    # BACKUP_FILE_STORE is an optional mirror, not the primary
+                    # FILE_STORE upload. An invalid/unreachable mirror must
+                    # never make a successfully uploaded episode look failed.
+                    error_text = str(e)
+                    if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
+                        await rep.report(
+                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
+                            "Telegram peer for this bot session. Primary FILE_STORE "
+                            "upload is unaffected; correct BACKUP_FILE_STORE and "
+                            "ensure this bot can access that channel.",
+                            "warning",
+                        )
+                    else:
+                        await rep.report(
+                            f"Optional backup to {chat_id} failed; primary FILE_STORE "
+                            f"upload is unaffected: {error_text}",
+                            "warning",
+                        )
     except Exception as e:
         await rep.report(f"Error in extra_utils: {e}", "error")
 
