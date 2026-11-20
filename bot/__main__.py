@@ -125,6 +125,22 @@ async def load_settings():
     LOGS.info(f"Settings loaded! Admins: {Var.ADMINS}")
     
 
+async def rss_fetcher_supervisor():
+    """Keep automatic RSS uploads alive if the scanner exits unexpectedly."""
+    retry_delay = 5
+    while True:
+        try:
+            LOGS.info("Starting supervised automatic anime RSS scanner...")
+            await fetch_animes()
+            LOGS.error("Automatic anime RSS scanner exited unexpectedly; restarting.")
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGS.exception("Automatic anime RSS scanner crashed; it will restart.")
+        await asleep(retry_delay)
+        retry_delay = min(retry_delay * 2, 60)
+
+
 async def main():
     # Keep references only to tasks created by this application.
     # Pyrogram owns and manages its internal session tasks.
@@ -161,7 +177,7 @@ async def main():
         LOGS.info("Automatic ongoing anime detection/upload is ON; dual-audio releases are manual-only.")
         tasks = [
             create_task(queue_loop()),
-            create_task(fetch_animes()),
+            create_task(rss_fetcher_supervisor()),
         ]
         
         LOGS.info('Auto Anime Bot Started!')
