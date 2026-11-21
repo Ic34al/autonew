@@ -7461,7 +7461,7 @@ def extract_release_episode(title):
     """Extract the episode number from common SubsPlease naming formats."""
     value = str(title or "")
     patterns = (
-        r'\bS\d{1,2}\s*[-.]\s*0*(\d{1,3})\b',
+        r'\bS\d{1,2}\s*[-.\-–—−]\s*0*(\d{1,3})\b',
         r'\bS\d{1,2}E0*(\d{1,3})\b',
         r'\b(?:episode|ep)\s*[-._ ]?0*(\d{1,3})\b',
         r'\s-\s0*(\d{1,3})(?:\D|$)',
