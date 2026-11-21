@@ -148,7 +148,7 @@ def _plain_title(value):
 
 def _season_number_from_release(title):
     patterns = (
-        r"\bS0*(\d{1,2})(?:E|\s*[-._ ]*\d)",
+        r"\bS0*(\d{1,2})(?:E|\s*[._\-–—− ]*\d)",
         r"\bSeason\s*0*(\d{1,2})\b",
         r"\bS0*(\d{1,2})\b",
     )
