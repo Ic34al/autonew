@@ -4425,9 +4425,9 @@ async def anime_search_cmd(client, message: Message):
         def extract_season_number(title):
             value = str(title or "").replace("—", "-").replace("–", "-").replace("−", "-")
             patterns = (
-                r"\\bS0*(\\d{1,2})(?=\\s*[-._ ]*E?\\s*0*\\d{1,3}\\b)",
-                r"\\bSeason\\s*0*(\\d{1,2})\\b",
-                r"\\b(\\d{1,2})(?:st|nd|rd|th)\\s+Season\\b",
+                r"\bS0*(\d{1,2})(?=\s*[-._ ]*E?\s*0*\d{1,3}\b)",
+                r"\bSeason\s*0*(\d{1,2})\b",
+                r"\b(\d{1,2})(?:st|nd|rd|th)\s+Season\b",
             )
             for pattern in patterns:
                 found = re.search(pattern, value, re.IGNORECASE)
