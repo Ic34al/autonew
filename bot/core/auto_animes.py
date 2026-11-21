@@ -8778,7 +8778,11 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             if target_channel == int(Var.MAIN_CHANNEL)
             else await db.getAnimeDestinationPost(ani_id, ep_no, target_channel)
         )
-        if existing_target_post:
+        # Admin-selected /search is an explicit republish request. Do not
+        # skip an existing destination post: continue to the FILE_STORE
+        # checkpoint, reuse verified qualities, and publish a fresh post with
+        # fresh Monkey file-share links.
+        if existing_target_post and not (force and manual_search):
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
