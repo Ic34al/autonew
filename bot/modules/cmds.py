@@ -388,7 +388,7 @@ async def batch(client, message: Message):
 
     string = f"get-{f_msg_id * abs(Var.FILE_STORE)}-{s_msg_id * abs(Var.FILE_STORE)}"
     base64_string = await encode(string)
-    link = f"https://t.me/{Var.BOT_USERNAME}?start={base64_string}"
+    link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={base64_string}"
     await channel_message.reply_text(f"<blockquote><b>Here's your file link:</blockquote>\n<blockquote>{link}</blockquote></b>", quote=True, disable_web_page_preview=True)
 
 
@@ -408,7 +408,7 @@ async def link_generator(client, message: Message):
             continue
 
     base64_string = await encode(f"get-{msg_id * abs(Var.FILE_STORE)}")
-    link = f"https://t.me/{Var.BOT_USERNAME}?start={base64_string}"
+    link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={base64_string}"
     await channel_message.reply_text(f"<blockquote><b>Here's your file link:</blockquote>\n<blockquote>{link}</blockquote></b>", quote=True, disable_web_page_preview=True)
 
 @bot.on_message(filters.command("forcetask") & filters.user(Var.ADMINS))
