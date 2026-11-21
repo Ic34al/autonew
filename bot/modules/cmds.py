@@ -4462,7 +4462,7 @@ async def anime_search_cmd(client, message: Message):
             current_season = 1
         else:
             return await status.edit_text(
-                f"<b>Could not determine the season for:</b> <code>{anime_name}</code>\\n"
+                f"<b>Could not determine the season for:</b> <code>{anime_name}</code>\n"
                 "No usable season-specific SubsPlease catalogue was found."
             )
 
@@ -4498,7 +4498,7 @@ async def anime_search_cmd(client, message: Message):
                 f"s{current_season:02d}:ep{episode_number:03d}"
                 if episode_number is not None else f"s{current_season:02d}:release:{torrent}"
             )
-            resolution_match = re.search(r"(360|480|720|1080|2160)\\s*p?", title, re.IGNORECASE)
+            resolution_match = re.search(r"(360|480|720|1080|2160)\s*p?", title, re.IGNORECASE)
             resolution = int(resolution_match.group(1)) if resolution_match else 0
             previous = selected.get(episode_key)
             if previous is None or resolution > previous[0]:
@@ -4519,6 +4519,7 @@ async def anime_search_cmd(client, message: Message):
         ANIME_SEARCH_RESULTS[status.id] = {
             "user_id": message.from_user.id,
             "anime": anime_name,
+            "season": current_season,
             "episodes": selected_matches,
             "selected": set(),
         }
@@ -4589,7 +4590,8 @@ def build_anime_search_keyboard(message_id, state):
             re.IGNORECASE
         )
         number = next((group for group in episode_number.groups() if group), None) if episode_number else None
-        label = f"Episode {int(number):02d}" if number else f"Release {index + 1}"
+        season = int(state.get("season") or 1)
+        label = f"S{season:02d} • Episode {int(number):02d}" if number else f"S{season:02d} • Release {index + 1}"
         prefix = "☑" if index in state["selected"] else "□"
         rows.append(InlineKeyboardButton(f"{prefix} {label}", callback_data=f"aselect:{message_id}:{index}"))
     keyboard = [rows[i:i + 2] for i in range(0, len(rows), 2)]
