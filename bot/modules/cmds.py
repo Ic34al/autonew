@@ -4059,6 +4059,10 @@ async def anime_search_cmd(client, message: Message):
             # Strip release-group prefixes like [SubsPlease] before matching.
             value = re.sub(r"^\s*\[[^]]+\]\s*", "", str(value or ""))
             value = re.sub(r"\b(480|720|1080|2160)p\b", " ", value, flags=re.IGNORECASE)
+            # Season/episode markers are parsed separately; remove them from
+            # title matching so "Show Season 4" matches "Show S04 - 08".
+            value = re.sub(r"\bseason\s*0*\d{1,2}\b|\bs\s*0*\d{1,2}(?=\s*[-._ ]|e)", " ", value, flags=re.IGNORECASE)
+            value = re.sub(r"\b(?:episode|ep)\s*0*\d{1,3}\b", " ", value, flags=re.IGNORECASE)
             return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
         aliases = {normalize(x) for x in await get_all_possible_anime_names(anime_name) if x}
@@ -4111,7 +4115,11 @@ async def anime_search_cmd(client, message: Message):
         if not urls:
             return await status.edit_text("<b>No anime RSS feeds configured.</b> Set RSS_ITEMS_ANIME in Heroku Config Vars.")
 
+        explicit_season_match = re.search(r"\b(?:season|s)\s*0*(\d{1,2})\b", anime_name, re.IGNORECASE)
+        requested_season = int(explicit_season_match.group(1)) if explicit_season_match else None
+
         matches, seen = [], set()
+        catalogue_matches = []
         for feed_url in urls:
             try:
                 entries = await getfeeds(feed_url)
@@ -4374,12 +4382,14 @@ async def anime_search_cmd(client, message: Message):
                                 resolution = str(
                                     download.get("res") or download.get("resolution") or ""
                                 ).strip()
+                                # Keep the historical catalogue separate until
+                                # the requested/current season has been resolved.
                                 release_title = f"{show_name} - Episode {episode_no}"
                                 if resolution:
                                     release_title += f" [{resolution}p]"
                                 if candidate not in seen:
                                     seen.add(candidate)
-                                    matches.append((release_title, candidate))
+                                    catalogue_matches.append((release_title, candidate))
                     except Exception as show_error:
                         await rep.report(
                             f"/search full SubsPlease catalogue failed for {show_name}: {show_error}",
@@ -4441,17 +4451,45 @@ async def anime_search_cmd(client, message: Message):
             season for title, _ in matches
             if (season := extract_season_number(title)) is not None
         }
-        if not tagged_seasons:
+        # Explicit /search season always wins. Otherwise use the newest season
+        # present in the release titles. For an untagged single-season show,
+        # SubsPlease's show catalogue is the source of its episode numbering.
+        if requested_season is not None:
+            current_season = requested_season
+        elif tagged_seasons:
+            current_season = max(tagged_seasons)
+        elif catalogue_matches or matches:
+            current_season = 1
+        else:
             return await status.edit_text(
-                f"<b>Could not verify the season for:</b> <code>{anime_name}</code>\\n"
-                "SubsPlease returned no explicit season-tagged releases. "
-                "No upload was started rather than guessing Season 1."
+                f"<b>Could not determine the season for:</b> <code>{anime_name}</code>\\n"
+                "No usable season-specific SubsPlease catalogue was found."
             )
-        current_season = max(tagged_seasons)
+
         season_matches = [
             (title, torrent) for title, torrent in matches
-            if extract_season_number(title) == current_season
+            if (
+                extract_season_number(title) == current_season
+                or (extract_season_number(title) is None and requested_season == current_season)
+            )
         ]
+        # The SubsPlease show endpoint contains the historical episode map for
+        # that show. Add every released episode with a real torrent link, not
+        # only the last few entries retained by the rolling RSS feed.
+        for title, torrent in catalogue_matches:
+            season_matches.append((
+                f"{title.rsplit(' - Episode ', 1)[0]} Season {current_season} - Episode {title.rsplit(' - Episode ', 1)[-1]}",
+                torrent
+            ))
+        # If the query explicitly names a season, untagged matching RSS entries
+        # belong to that requested season only when no conflicting season tag
+        # is present for the same release.
+        if requested_season is not None and not tagged_seasons:
+            season_matches.extend(
+                (f"{title} Season {current_season}", torrent)
+                for title, torrent in matches
+                if extract_season_number(title) is None
+            )
 
         selected = {}
         for title, torrent in season_matches:
