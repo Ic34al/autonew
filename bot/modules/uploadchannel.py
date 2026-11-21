@@ -385,6 +385,13 @@ async def _find_episode_torrent(media, season_number, episode_number):
             if not title_match:
                 continue
 
+            # Keep the 16-Nov safety gate: never treat a season pack or
+            # numbered episode range as one exact single-episode release.
+            if re.search(r"(?i)\\b(?:batch|complete\\s+series|full\\s+season|season\\s+pack)\\b", title):
+                continue
+            if re.search(r"(?i)\\b0*\\d{1,3}\\s*[-–~]\\s*0*\\d{1,3}\\b", title):
+                continue
+
             # Reuse the SubsPlease naming parser already used by the
             # 16-Nov scheduled uploader. It recognizes "S2 - 01", not just
             # "S02E01" or "Episode 01".
