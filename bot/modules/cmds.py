@@ -4422,13 +4422,45 @@ async def anime_search_cmd(client, message: Message):
                         return number
             return None
 
+        def extract_season_number(title):
+            value = str(title or "").replace("—", "-").replace("–", "-").replace("−", "-")
+            patterns = (
+                r"\\bS0*(\\d{1,2})(?=\\s*[-._ ]*E?\\s*0*\\d{1,3}\\b)",
+                r"\\bSeason\\s*0*(\\d{1,2})\\b",
+                r"\\b(\\d{1,2})(?:st|nd|rd|th)\\s+Season\\b",
+            )
+            for pattern in patterns:
+                found = re.search(pattern, value, re.IGNORECASE)
+                if found:
+                    return int(found.group(1))
+            return None
+
+        # Separate seasons before deduplicating episode numbers. Never let
+        # Season 1 Episode 01 replace Season 4 Episode 01.
+        tagged_seasons = {
+            season for title, _ in matches
+            if (season := extract_season_number(title)) is not None
+        }
+        if not tagged_seasons:
+            return await status.edit_text(
+                f"<b>Could not verify the season for:</b> <code>{anime_name}</code>\\n"
+                "SubsPlease returned no explicit season-tagged releases. "
+                "No upload was started rather than guessing Season 1."
+            )
+        current_season = max(tagged_seasons)
+        season_matches = [
+            (title, torrent) for title, torrent in matches
+            if extract_season_number(title) == current_season
+        ]
+
         selected = {}
-        for title, torrent in matches:
+        for title, torrent in season_matches:
             episode_number = extract_episode_number(title)
-            # Keep unnumbered releases separate; never merge them under a
-            # guessed season number or a common fallback key.
-            episode_key = f"ep{episode_number:03d}" if episode_number is not None else f"release:{torrent}"
-            resolution_match = re.search(r"(360|480|720|1080|2160)\s*p?", title, re.IGNORECASE)
+            episode_key = (
+                f"s{current_season:02d}:ep{episode_number:03d}"
+                if episode_number is not None else f"s{current_season:02d}:release:{torrent}"
+            )
+            resolution_match = re.search(r"(360|480|720|1080|2160)\\s*p?", title, re.IGNORECASE)
             resolution = int(resolution_match.group(1)) if resolution_match else 0
             previous = selected.get(episode_key)
             if previous is None or resolution > previous[0]:
@@ -4441,6 +4473,7 @@ async def anime_search_cmd(client, message: Message):
                 key=lambda item: (item[1] is None, item[1] if item[1] is not None else 9999, item[2].lower())
             )
         ]
+
         if not selected_matches:
             return await status.edit_text("<b>No selectable episodes were found.</b>")
 
@@ -4458,7 +4491,7 @@ async def anime_search_cmd(client, message: Message):
             chosen = state["selected"]
             for index, (title, _) in enumerate(episodes):
                 episode_number = extract_episode_number(title)
-                label = f"Episode {episode_number:02d}" if episode_number is not None else f"Release {index + 1}"
+                label = f"S{current_season:02d} • Episode {episode_number:02d}" if episode_number is not None else f"S{current_season:02d} • Release {index + 1}"
                 prefix = "☑" if index in chosen else "□"
                 rows.append(InlineKeyboardButton(f"{prefix} {label}", callback_data=f"aselect:{message_id}:{index}"))
             keyboard = [rows[i:i + 2] for i in range(0, len(rows), 2)]
@@ -4471,6 +4504,7 @@ async def anime_search_cmd(client, message: Message):
 
         await status.edit_text(
             f"<b>Search results:</b> <code>{anime_name}</code>\n"
+            f"<b>Season selected:</b> <code>{current_season}</code> (newest season-tagged releases found)\n"
             f"<b>Episodes found:</b> {len(selected_matches)}\n"
             "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\n\n"
             "Choose only the episodes you want to upload, then tap <b>Upload Selected</b>.",
