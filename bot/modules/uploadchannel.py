@@ -798,7 +798,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         buttons_by_quality[quality] = InlineKeyboardButton(f"{quality}p" if quality != "HDRi" else "HDRip", url=url)
 
     await set_progress(f"Preparing final episode card for {title} S{target_season:02d}E{target_episode:02d}.")
-    available_qualities = {quality: True for quality in buttons_by_quality}    caption = await build_main_channel_announcement_caption(
+    available_qualities = {quality: True for quality in buttons_by_quality}
+    caption = await build_main_channel_announcement_caption(
         info, title, str(episode_number).zfill(2), available_qualities
     )
     keyboard_rows = [
