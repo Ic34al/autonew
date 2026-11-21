@@ -300,15 +300,32 @@ async def _find_episode_torrent(media, season_number, episode_number):
     season = int(season_number)
     episode = int(episode_number)
     queries = []
+    search_aliases = []
     for alias in aliases:
-        # Avoid quoted-only searches: Nyaa title punctuation and release-group
-        # formatting varies. Keep each query title-specific and episode-specific.
+        # AniList often labels this "... 2nd Season", while SubsPlease uses
+        # the base romaji title followed by "S2 - 01". Search both forms so
+        # older episodes remain discoverable outside the latest RSS window.
+        base_alias = re.sub(
+            r"(?i)\s+(?:season\s+\d{1,2}|s\d{1,2}|\d{1,2}(?:st|nd|rd|th)?\s+season)\s*$",
+            "",
+            alias,
+        ).strip()
+        for candidate in (alias, base_alias):
+            if candidate and candidate.casefold() not in {
+                item.casefold() for item in search_aliases
+            }:
+                search_aliases.append(candidate)
+
+    for alias in search_aliases:
+        # Include SubsPlease's exact "S2 - 01" naming as well as S02E01.
         queries.extend([
             f"{alias} S{season:02d}E{episode:02d} 720p",
             f"{alias} S{season}E{episode:02d} 720p",
+            f"{alias} S{season} - {episode:02d} 720p",
             f"{alias} Season {season} Episode {episode} 720p",
             f"{alias} {episode:02d} 720p",
         ])
+    queries = list(dict.fromkeys(queries))
     feeds = [
         f"https://nyaa.si/?page=rss&q={quote_plus(query)}&c=1_2&f=0"
         for query in queries
@@ -338,47 +355,57 @@ async def _find_episode_torrent(media, season_number, episode_number):
             scanned += 1
 
             normalized_release = _plain_title(title)
-            # First prefer a full normalized alias match. For abbreviated
-            # release titles, permit a strong token overlap only (>=75% of
-            # a meaningful alias and at least four matching words).
+            # Match the 16-Nov scheduled uploader's 60% meaningful-token
+            # overlap. SubsPlease uses the Japanese/romaji base title and
+            # appends "S2 - 01", while AniList may say "... 2nd Season".
             title_match = any(
                 _plain_title(alias) in normalized_release
                 for alias in aliases
                 if _plain_title(alias)
             )
             if not title_match:
-                release_tokens = set(normalized_release.split())
+                release_tokens = {
+                    token for token in normalized_release.split()
+                    if len(token) > 2 and not token.isdigit()
+                }
                 for alias in aliases:
                     alias_tokens = {
                         token for token in _plain_title(alias).split()
-                        if len(token) > 2 and token not in {
+                        if len(token) > 2 and not token.isdigit()
+                        and token not in {
                             "the", "and", "for", "with", "from", "that", "this",
                             "her", "his", "their", "you", "your", "into",
                         }
                     }
-                    if len(alias_tokens) >= 4:
+                    if len(alias_tokens) >= 2:
                         overlap = len(alias_tokens & release_tokens)
-                        if overlap >= 4 and overlap / len(alias_tokens) >= 0.75:
+                        if overlap / len(alias_tokens) >= 0.60:
                             title_match = True
                             break
             if not title_match:
                 continue
 
-            ep_patterns = (
-                rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
-                rf"(?i)\b{season}x0*{episode}\b",
-                rf"(?i)\bSeason[\s._-]*0*{season}[\s._-]*Episode[\s._-]*0*{episode}\b",
-                rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
-                rf"(?i)\bEp[\s._-]*0*{episode}\b",
+            # Reuse the SubsPlease naming parser already used by the
+            # 16-Nov scheduled uploader. It recognizes "S2 - 01", not just
+            # "S02E01" or "Episode 01".
+            release_episode = None
+            try:
+                release_episode = auto_anime_core.extract_release_episode(title)
+            except (AttributeError, TypeError, ValueError):
+                release_episode = None
+            episode_match = (
+                release_episode is not None
+                and int(release_episode) == episode
             )
-            episode_match = any(re.search(pattern, title) for pattern in ep_patterns)
-            # Many Season 1 releases are numbered simply "- 01". Accept that
-            # format only for S1 and only after a strong anime-title match.
-            if season == 1 and not episode_match:
-                episode_match = bool(re.search(
-                    rf"(?i)(?:^|[\s._\-\[])0*{episode}(?:[\s._\-\]\[]|$)",
-                    title,
-                ))
+            if not episode_match:
+                ep_patterns = (
+                    rf"(?i)\bS0*{season}[\s._-]*E0*{episode}\b",
+                    rf"(?i)\b{season}x0*{episode}\b",
+                    rf"(?i)\bSeason[\s._-]*0*{season}[\s._-]*Episode[\s._-]*0*{episode}\b",
+                    rf"(?i)\bEpisode[\s._-]*0*{episode}\b",
+                    rf"(?i)\bEp[\s._-]*0*{episode}\b",
+                )
+                episode_match = any(re.search(pattern, title) for pattern in ep_patterns)
             if not episode_match:
                 continue
 
