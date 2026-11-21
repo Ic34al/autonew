@@ -360,7 +360,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
             # appends "S2 - 01", while AniList may say "... 2nd Season".
             title_match = any(
                 _plain_title(alias) in normalized_release
-                for alias in aliases
+                for alias in search_aliases
                 if _plain_title(alias)
             )
             if not title_match:
@@ -368,7 +368,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
                     token for token in normalized_release.split()
                     if len(token) > 2 and not token.isdigit()
                 }
-                for alias in aliases:
+                for alias in search_aliases:
                     alias_tokens = {
                         token for token in _plain_title(alias).split()
                         if len(token) > 2 and not token.isdigit()
