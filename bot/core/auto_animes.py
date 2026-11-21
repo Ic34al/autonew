@@ -2506,12 +2506,17 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             if channel_to_use == int(Var.MAIN_CHANNEL)
             else await db.getAnimeDestinationPost(ani_id, ep_no, channel_to_use)
         )
-        if existing_target_post:
+        if existing_target_post and not (force and manual_search):
             await db.markAnimeResumeComplete(ani_id, ep_no)
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
-            return "uploaded"
             return "already_published"
+
+        # A deliberate admin /search force-run may republish the episode even
+        # when a post already exists in this destination. Continue into the
+        # quality checkpoint below: verified FILE_STORE qualities are reused,
+        # missing qualities are encoded/uploaded, and a fresh episode card is
+        # published. Normal RSS runs still stop at the duplicate guard.
 
         # Keep the torrent source in MongoDB so a restart can rediscover this
         # episode even after it falls out of the RSS feed window.
