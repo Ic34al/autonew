@@ -398,7 +398,8 @@ async def _find_episode_torrent(media, season_number, episode_number):
                     or "bittorrent" in content_type
                     or "x-bittorrent" in content_type
                 ):
-                    torrent_link = href                    break
+                    torrent_link = href
+                    break
             torrent_link = torrent_link or link
             if not torrent_link:
                 continue
