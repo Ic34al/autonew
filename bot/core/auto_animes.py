@@ -358,7 +358,7 @@ async def process_batch_anime(anime_name, torrent_url, audio, destination_channe
             ).hexdigest()[:24]
             await db.set_batch_file_link(batch_token, qual_msg_ids)
             batch_string = f"getbatch-{batch_token}"
-            batch_link = f"https://t.me/{Var.BOT_USERNAME}?start={await encode(batch_string)}"
+            batch_link = f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={await encode(batch_string)}"
             btn_text = f"• Download Ep 1 To {episode_count} Click Here •"
             batch_buttons.append(InlineKeyboardButton(btn_text, url=batch_link))
             if batch_buttons:
@@ -1070,7 +1070,7 @@ async def process_manga_chapter(title, chapter_url, manual=False):
                 force_document=True
             )
 
-            bot_link = f"https://telegram.me/{Var.BOT_USERNAME}?start={await encode('get-'+str(file_store_msg.id * abs(Var.FILE_STORE)))}"
+            bot_link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={await encode('get-'+str(file_store_msg.id * abs(Var.FILE_STORE)))}"
 
             manga_banner = await db.get_manga_banner(manga_name)
             poster_url = (manga_banner or 
@@ -1514,7 +1514,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -1555,7 +1555,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -2588,7 +2588,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -3015,7 +3015,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -3056,7 +3056,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -3815,7 +3815,7 @@ async def get_animes(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -4188,7 +4188,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -4229,7 +4229,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -4974,7 +4974,7 @@ async def get_animes(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -5329,7 +5329,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -5370,7 +5370,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -6115,7 +6115,7 @@ async def get_animes(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -6470,7 +6470,7 @@ async def process_low_end(name, torrent_url, force=False):
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -6511,7 +6511,7 @@ async def process_low_end(name, torrent_url, force=False):
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -7256,7 +7256,7 @@ async def get_animes(name, torrent, force=False):
                 saved_file_ids = await db.getAnimeFileIds(ani_id, ep_no)
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
@@ -7663,7 +7663,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
                         await db.saveAnime(ani_id, ep_no, qual, None)
                         saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
+                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
                         if len(btns) != 0 and len(btns[-1]) == 1:
                             btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
                         else:
@@ -7704,7 +7704,7 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 all_buttons.append(
                     InlineKeyboardButton(
                         text=btn_formatter[qual],
-                        url=f"https://t.me/{Var.BOT_USERNAME}?start={encoded}"
+                        url=f"https://t.me/{Var.FILE_SHARE_BOT_USERNAME}?start={encoded}"
                     )
                 )
 
@@ -8963,7 +8963,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     return None
 
                 async def add_quality_button(qual, msg_id):
-                    link = f"https://telegram.me/{Var.BOT_USERNAME}?start={{}}".format(
+                    link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(
                         await encode('get-' + str(int(msg_id) * abs(Var.FILE_STORE)))
                     )
                     label = RAW_BTN if qual == "HDRi" else btn_formatter.get(qual, qual + "p")
