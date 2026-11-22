@@ -240,24 +240,49 @@ class MongoDB:
         )
 
     async def getAnimeFileIds(self, ani_id, ep):
-        """Get saved Telegram file IDs for an episode."""
+        """Get saved FILE_STORE IDs, tolerating legacy Mongo ID/episode key types."""
         if ani_id is None or ep is None:
             return {}
 
-        anime_data = await self.__animes.find_one(
-            {"_id": ani_id},
-            {f"{str(ep)}.file_ids": 1},
-        )
+        anime_ids = [ani_id]
+        try:
+            numeric_id = int(ani_id)
+            if numeric_id not in anime_ids:
+                anime_ids.append(numeric_id)
+        except (TypeError, ValueError):
+            pass
+        string_id = str(ani_id)
+        if string_id not in anime_ids:
+            anime_ids.append(string_id)
 
-        if not anime_data:
-            return {}
+        episode_keys = []
+        raw_ep = str(ep).strip()
+        for candidate in (raw_ep, raw_ep.lstrip("0") or "0"):
+            if candidate not in episode_keys:
+                episode_keys.append(candidate)
+        try:
+            numeric_ep = int(float(raw_ep))
+            for candidate in (str(numeric_ep), f"{numeric_ep:02d}"):
+                if candidate not in episode_keys:
+                    episode_keys.append(candidate)
+        except (TypeError, ValueError):
+            pass
 
-        episode_data = anime_data.get(str(ep), {})
-        if not isinstance(episode_data, dict):
-            return {}
-
-        file_ids = episode_data.get("file_ids", {})
-        return file_ids if isinstance(file_ids, dict) else {}
+        for anime_key in anime_ids:
+            for episode_key in episode_keys:
+                anime_data = await self.__animes.find_one(
+                    {"_id": anime_key},
+                    {f"{episode_key}.file_ids": 1},
+                )
+                if not anime_data:
+                    continue
+                episode_data = anime_data.get(episode_key, {})
+                if not isinstance(episode_data, dict):
+                    continue
+                file_ids = episode_data.get("file_ids", {})
+                if isinstance(file_ids, dict) and file_ids:
+                    return file_ids
+        return {}
 
     async def saveAnimeResume(self, ani_id, ep, name, torrent_url, destination_channel=None):
         """Persist an unfinished episode and its resolved destination for restart recovery."""
