@@ -8768,89 +8768,14 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
-        # Older channel posts may predate the MongoDB post checkpoint. Before
-        # automatic RSS downloads, verify the actual destination history too.
-        # /search is an intentional republish command and bypasses this guard.
-        if not force and not manual_search and ep_no and str(ep_no).isdigit():
-            import html as _html
-            season_value = aniInfo.pdata.get("anime_season") or "01"
-            if isinstance(season_value, list):
-                season_value = season_value[-1] if season_value else "01"
-            season_match = re.search(r"\d+", str(season_value))
-            target_season = int(season_match.group(0)) if season_match else 1
-            target_episode = int(ep_no)
-
-            def _history_text(value):
-                value = _html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
-                return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
-
-            metadata_titles = aniInfo.adata.get("title") or {}
-            title_candidates = [
-                metadata_titles.get(key) for key in ("english", "romaji", "native")
-            ] if isinstance(metadata_titles, dict) else []
-            title_candidates.extend((cleaned_name, base_name))
-            title_keys = {_history_text(value) for value in title_candidates if value}
-            title_keys.discard("")
-            duplicate_post = None
-            try:
-                async for channel_message in bot.get_chat_history(target_channel, limit=1000):
-                    body = " ".join(str(value or "") for value in (
-                        getattr(channel_message, "caption", ""),
-                        getattr(channel_message, "text", ""),
-                    ))
-                    normalized_body = _history_text(body)
-                    if not normalized_body or not any(key in normalized_body for key in title_keys):
-                        continue
-
-                    tagged = re.search(
-                        r"(?i)\[s0*(\d{1,2})[-_ ]0*(\d{1,3})\]", body
-                    )
-                    if tagged:
-                        same_episode = (
-                            int(tagged.group(1)) == target_season
-                            and int(tagged.group(2)) == target_episode
-                        )
-                    else:
-                        season_in_post = re.search(
-                            r"(?i)\bseason\s*0*(\d{1,2})\b", body
-                        )
-                        episode_in_post = re.search(
-                            r"(?i)\bepisode\s*[:#]?\s*0*(\d{1,3})\b", body
-                        )
-                        same_episode = bool(
-                            season_in_post and episode_in_post
-                            and int(season_in_post.group(1)) == target_season
-                            and int(episode_in_post.group(1)) == target_episode
-                        )
-                    if same_episode:
-                        duplicate_post = channel_message
-                        break
-            except Exception as history_error:
-                raise RuntimeError(
-                    f"Could not safely check destination history for {name} "
-                    f"S{target_season:02d}E{target_episode:02d}; refusing duplicate-prone upload: "
-                    f"{type(history_error).__name__}: {history_error}"
-                ) from history_error
-
-            if duplicate_post:
-                duplicate_id = int(duplicate_post.id)
-                if target_channel == int(Var.MAIN_CHANNEL):
-                    await db.saveAnimeMainPost(ani_id, ep_no, duplicate_id)
-                else:
-                    await db.saveAnimeDestinationPost(
-                        ani_id, ep_no, target_channel, duplicate_id
-                    )
-                    await db.saveAnimeDedicatedPost(ani_id, ep_no, duplicate_id)
-                await db.markAnimeResumeComplete(ani_id, ep_no)
-                ani_cache['completed'].add(episode_key)
-                ani_cache['ongoing'].discard(episode_key)
-                LOGS.info(
-                    "Duplicate episode already exists; skipping %s S%02dE%02d "
-                    "in channel %s (message %s).",
-                    name, target_season, target_episode, target_channel, duplicate_id,
-                )
-                return "already_published"
-
+        # Telegram Bot API accounts cannot read channel history (messages.GetHistory).
+        # Duplicate prevention must use the durable MongoDB post checkpoint above.
+        # Never call bot.get_chat_history here: it raises BOT_METHOD_INVALID for bots
+        # and previously stopped valid uploads before download/encoding.
+        #
+        # Legacy posts created before checkpoints need a one-time admin migration:
+        # record their message IDs in the anime post collection. The bot cannot
+        # discover those old posts through the Bot API.
         # Keep the torrent source in MongoDB so a restart can rediscover this
         # episode even after it falls out of the RSS feed window.
         await db.saveAnimeResume(ani_id, ep_no, name, torrent, destination_channel=target_channel)
@@ -8998,21 +8923,9 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 target_titles = {_normal_title(value) for value in title_aliases if value}
                 target_titles.discard("")
 
+                # Bot accounts cannot enumerate chat history. Reuse only durable
+                # FILE_STORE message IDs saved in MongoDB; never attempt get_chat_history.
                 storage_records = []
-                try:
-                    async for stored in bot.get_chat_history(Var.FILE_STORE, limit=5000):
-                        media = getattr(stored, "video", None) or getattr(stored, "document", None)
-                        media_name = getattr(media, "file_name", None) if media else None
-                        caption_name = getattr(stored, "caption", None)
-                        parsed = _parse_storage_record(media_name) or _parse_storage_record(caption_name)
-                        if parsed:
-                            storage_records.append((parsed, int(stored.id)))
-                except Exception as scan_error:
-                    await rep.report(
-                        f"Storage recovery scan failed; only database checkpoints can be reused: {scan_error}",
-                        "warning",
-                        log=False,
-                    )
 
                 def _find_stored_quality(quality):
                     if target_episode is None or not target_titles:
