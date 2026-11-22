@@ -42,6 +42,17 @@ _ANILIST_DETAILS_CACHE = {}
 _FILE_STORE_CHAT_CACHE = {}
 ANIME_INFO_CARD_VERSION = "anime-soul-split-v2"
 ANIME_EPISODE_CARD_VERSION = "anime-soul-episode-v2"
+
+
+def _coerce_path(value):
+    """Normalize filesystem paths and file handles returned by media helpers."""
+    if hasattr(value, "name") and not isinstance(value, (str, bytes, os.PathLike)):
+        value = value.name
+    if isinstance(value, (str, bytes, os.PathLike)):
+        return os.fspath(value)
+    return value
+
+
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -769,9 +780,9 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
     
             info_poster_path = os.path.join(workdir, f"anime_soul_info_s{season_number}.jpg")
-            info_poster = await build_anime_soul_poster(
+            info_poster = _coerce_path(await build_anime_soul_poster(
                 info, title, info_poster_path, info_card=True
-            )
+            ))
             if not info_poster or not os.path.exists(info_poster):
                 raise RuntimeError(
                     f"Could not generate the ANIME SOUL split-screen synopsis thumbnail for {title}."
@@ -1187,7 +1198,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}.",
             "info",
         )
-        downloaded = await TorDownloader(workdir).download(episode["link"])
+        downloaded = _coerce_path(await TorDownloader(workdir).download(episode["link"]))
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
         video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
@@ -1227,7 +1238,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 force_encode=True, bypass_pause=True, quiet_errors=True,
             )
             try:
-                encoded_path = await encoder.start_encode()
+                encoded_path = _coerce_path(await encoder.start_encode())
                 if encoded_path and os.path.exists(encoded_path) and os.path.getsize(encoded_path) > 0:
                     encode_error = None
                     break
@@ -1288,9 +1299,9 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # Required sequence: synopsis card -> sticker -> episode card -> sticker.
     await set_progress(f"Publishing episode card to channel {destination_id} for {title} S{target_season:02d}E{target_episode:02d}.")
     poster_path = os.path.join(workdir, f"anime_soul_s{season_number}e{episode_number}.jpg")
-    poster = await build_anime_soul_poster(
+    poster = _coerce_path(await build_anime_soul_poster(
         info, title, poster_path, episode_label=str(episode_number).zfill(2)
-    )
+    ))
     if poster and os.path.exists(poster):
         # Send the filesystem path, not a BufferedReader. Pyrogram opens it
         # itself and can determine the upload size correctly.
