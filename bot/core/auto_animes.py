@@ -2450,7 +2450,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
         draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
         draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
-        draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+        episode_badge = "SERIES INFO" if info_card else f"EPISODE {episode}"
+    draw.text((rx+238, pill_y+13), episode_badge, font=font(23, True), fill=(18,20,28))
         draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
         draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
 
@@ -3515,7 +3516,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
-async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None, info_card=False):
     """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
     import io
     import textwrap
@@ -3532,6 +3533,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
 
     season = clean_value(anime_info.pdata.get("anime_season"), "01")
     episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    if info_card:
+        episode = "INFO"
     try:
         season = str(int(season))
     except Exception:
@@ -3668,8 +3671,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         draw.text((42, left_title_y), title_line, font=left_title_font,
                   fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
         left_title_y += left_title_font.size + 8
-    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
-              font=font(23, True), fill=(255,220,70))
+    left_badge = f"SEASON {season}   •   SERIES INFO" if info_card else f"SEASON {season}   •   EPISODE {episode}"
+    draw.text((48, 850), left_badge, font=font(23, True), fill=(255,220,70))
 
     # Right-side streaming dashboard header and content geometry.
     rx = split_x + 58
