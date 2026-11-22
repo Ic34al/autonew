@@ -626,7 +626,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False, preflight_only=False):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False, preflight_only=False, force_repost=False):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     async def set_progress(stage):
         if progress_callback:
@@ -810,24 +810,32 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             )
     
         async def send_checkpointed_sticker(stage_key):
+            sticker_episode_key = str(episode_number) if stage_key != "info" else "info"
             saved_sticker = await db.getAnimeArchiveStickerPost(
-                media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
+                media.get("id"), season_number, sticker_episode_key,
                 destination_id, stage_key,
             )
-            if saved_sticker:
+            if saved_sticker and not force_repost:
                 return
             sticker_message_id = await send_sticker_to_channel(
                 destination_id, getattr(Var, "STICKER_ID", None), client=bot
             )
             if sticker_message_id:
+                # Replace the old checkpoint only after Telegram confirms the new sticker.
+                if force_repost and saved_sticker and int(saved_sticker) != int(sticker_message_id):
+                    try:
+                        await bot.delete_messages(destination_id, int(saved_sticker))
+                    except Exception as cleanup_error:
+                        LOGS.warning("Could not remove replaced sticker %s: %s", saved_sticker, cleanup_error)
                 await db.saveAnimeArchiveStickerPost(
-                    media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
+                    media.get("id"), season_number, sticker_episode_key,
                     destination_id, stage_key, sticker_message_id,
                 )
     
-        if not await db.getAnimeArchiveStickerPost(
+        saved_info_sticker = await db.getAnimeArchiveStickerPost(
             media.get("id"), season_number, "info", destination_id, "info"
-        ):
+        )
+        if not saved_info_sticker or (force_repost and int(episode_number) == 1):
             await send_checkpointed_sticker("info")
     
         if info_only:
@@ -1311,8 +1319,18 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
         )
 
-    # Commit the destination-specific idempotency checkpoint immediately after
-    # Telegram confirms the card. A retry/restart will skip this exact episode.
+    # In explicit full-repost mode, replace the old episode card only after
+    # Telegram confirms the new card, so a failed repost never loses the old post.
+    previous_episode_post_id = await db.getAnimeArchiveEpisodePost(
+        media.get("id"), season_number, episode_number, destination_id
+    )
+    if force_repost and previous_episode_post_id and int(previous_episode_post_id) != int(published.id):
+        try:
+            await bot.delete_messages(destination_id, int(previous_episode_post_id))
+        except Exception as cleanup_error:
+            LOGS.warning("Could not remove replaced episode post %s: %s", previous_episode_post_id, cleanup_error)
+
+    # Commit the latest confirmed Telegram post ID.
     await db.saveAnimeArchiveEpisodePost(
         media.get("id"), season_number, episode_number, destination_id, published.id,
         card_version=ANIME_EPISODE_CARD_VERSION,
@@ -1799,61 +1817,16 @@ async def uploadchannel_callbacks(client, callback):
             episodes_ready_to_reuse = []
             episodes_requiring_encode = []
 
-            for episode_number in range(1, released_episode_count + 1):
-                saved_post_id = await db.getAnimeArchiveEpisodePost(
-                    anime_id, season_index, episode_number, destination_id
-                )
-                channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
-                    anime_id, destination_id
-                )
-                destination_post_id = await db.getAnimeDestinationPostExact(
-                    anime_id, str(episode_number), destination_id
-                )
-                if not destination_post_id and int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
-                    destination_post_id = await db.getAnimeMainPost(anime_id, str(episode_number))
-                existing_post_id = saved_post_id or destination_post_id
-                if existing_post_id:
-                    episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
-                        anime_id, season_index, episode_number, destination_id
-                    )
-                    if (
-                        not channel_info_post_id
-                        or episode_card_version != ANIME_EPISODE_CARD_VERSION
-                    ):
-                        await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-                        try:
-                            channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
-                                anime_id, destination_id
-                            )
-                            episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
-                                anime_id, season_index, episode_number, destination_id
-                            )
-                            if (
-                                not channel_info_post_id
-                                or episode_card_version != ANIME_EPISODE_CARD_VERSION
-                            ):
-                                await _upload_single_episode(
-                                    selected_media, destination_id, season_index,
-                                    episode_number, user_client,
-                                    progress_callback=report_stage, reuse_only=True,
-                                )
-                        finally:
-                            AUTO_UPLOAD_PRIORITY_LOCK.release()
-                    if not saved_post_id:
-                        await db.saveAnimeArchiveEpisodePost(
-                            anime_id, season_index, episode_number,
-                            destination_id, existing_post_id, migrated=True
-                        )
-                    await report_stage(
-                        f"kept existing {selected_title} S{season_index:02d}E{episode_number:02d}; "
-                        "skipped duplicate episode publication",
-                        selected_title,
-                    )
-                    continue
+            # Full repost mode: every released episode is checked, including
+            # episodes with existing Telegram post checkpoints. This command is
+            # an explicit request to rebuild the channel sequence from E01 onward.
+            episodes_ready_to_reuse = []
+            episodes_requiring_encode = []
 
+            for episode_number in range(1, released_episode_count + 1):
                 await report_stage(
                     f"checking saved FILE_STORE qualities for {selected_title} "
-                    f"S{season_index:02d}E{episode_number:02d}",
+                    f"S{season_index:02d}E{episode_number:02d}; existing posts will be replaced",
                     selected_title,
                 )
                 ready = await _upload_single_episode(
@@ -1866,32 +1839,32 @@ async def uploadchannel_callbacks(client, callback):
                     episodes_requiring_encode.append(episode_number)
 
             await report_stage(
-                f"reuse-first check complete: {len(episodes_ready_to_reuse)} episode(s) "
-                f"can reuse saved qualities; {len(episodes_requiring_encode)} need encoding",
+                f"full repost preflight complete: {len(episodes_ready_to_reuse)} episode(s) "
+                f"can reuse saved qualities; {len(episodes_requiring_encode)} need missing qualities encoded",
                 selected_title,
             )
 
-            # Publish all episodes whose qualities are already saved, in episode order.
+            # First repost every episode with all four verified saved qualities.
+            # Force sticker refresh and replace the old episode post after the
+            # new photo card is confirmed; do not skip because a DB post ID exists.
             for episode_number in episodes_ready_to_reuse:
                 await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                 try:
-                    if await db.getAnimeArchiveEpisodePost(
-                        anime_id, season_index, episode_number, destination_id
-                    ):
-                        continue
                     await _upload_single_episode(
                         selected_media, destination_id, season_index, episode_number,
-                        user_client, progress_callback=report_stage, reuse_only=True,
+                        user_client, progress_callback=report_stage,
+                        reuse_only=True, force_repost=True,
                     )
                 finally:
                     AUTO_UPLOAD_PRIORITY_LOCK.release()
                 await report_stage(
-                    f"published reused {selected_title} S{season_index:02d}E{episode_number:02d}; "
-                    "no torrent download or re-encoding",
+                    f"reposted {selected_title} S{season_index:02d}E{episode_number:02d} "
+                    "using saved FILE_STORE qualities",
                     selected_title,
                 )
 
-            # Only after all reusable episodes are published, process missing qualities.
+            # Only after all reusable episodes are reposted, encode any genuinely
+            # missing qualities and then publish the remaining episode cards.
             for episode_number in episodes_requiring_encode:
                 channel_stage = (
                     f"final encoding pass: {selected_title} "
@@ -1900,11 +1873,6 @@ async def uploadchannel_callbacks(client, callback):
                 await report_stage(channel_stage, selected_title)
                 await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                 try:
-                    if await db.getAnimeArchiveEpisodePost(
-                        anime_id, season_index, episode_number, destination_id
-                    ):
-                        continue
-
                     async def episode_progress(stage):
                         nonlocal channel_stage
                         channel_stage = stage
@@ -1913,11 +1881,12 @@ async def uploadchannel_callbacks(client, callback):
                     await _upload_single_episode(
                         selected_media, destination_id, season_index, episode_number,
                         user_client, progress_callback=episode_progress,
+                        force_repost=True,
                     )
                 finally:
                     AUTO_UPLOAD_PRIORITY_LOCK.release()
                 await report_stage(
-                    f"encoded and published remaining {selected_title} "
+                    f"encoded missing qualities and reposted {selected_title} "
                     f"S{season_index:02d}E{episode_number:02d}",
                     selected_title,
                 )
