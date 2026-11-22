@@ -8900,6 +8900,13 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             f"{lookup_error}", "warning", log=False
                         )
 
+            # Reapply the RSS numbering after the fallback TextEditor instance
+            # replaces the original metadata object.
+            if ep_no:
+                aniInfo.pdata["episode_number"] = str(ep_no)
+            if season_match:
+                aniInfo.pdata["anime_season"] = str(int(season_match.group(1))).zfill(2)
+
             # A valid episode number from the exact RSS release is enough to
             # process a manual request. Use a deterministic title/season key if
             # AniList has no match, so duplicate protection and resume tracking
