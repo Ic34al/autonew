@@ -41,6 +41,7 @@ _FILE_STORE_INDEX_CACHE = {}
 _ANILIST_DETAILS_CACHE = {}
 _FILE_STORE_CHAT_CACHE = {}
 ANIME_INFO_CARD_VERSION = "anime-soul-split-v2"
+ANIME_EPISODE_CARD_VERSION = "anime-soul-episode-v2"
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -625,7 +626,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     async def set_progress(stage):
         if progress_callback:
@@ -1134,6 +1135,16 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
         missing_qualities.append(quality)
 
+    # A repost/backfill must reuse the already uploaded FILE_STORE qualities.
+    # Never download or encode again in this mode: if any quality is genuinely
+    # missing, stop safely rather than create a duplicate or spend time re-encoding.
+    if reuse_only and missing_qualities:
+        raise RuntimeError(
+            f"Cannot safely republish {title} S{target_season:02d}E{target_episode:02d}: "
+            f"FILE_STORE is missing verified qualities: {', '.join(missing_qualities)}. "
+            "No torrent download or encoding was started."
+        )
+
     source = None
     if missing_qualities:
         await set_progress(f"Searching RSS for {title} S{target_season:02d}E{target_episode:02d}.")
@@ -1297,8 +1308,15 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # Commit the destination-specific idempotency checkpoint immediately after
     # Telegram confirms the card. A retry/restart will skip this exact episode.
     await db.saveAnimeArchiveEpisodePost(
-        media.get("id"), season_number, episode_number, destination_id, published.id
+        media.get("id"), season_number, episode_number, destination_id, published.id,
+        card_version=ANIME_EPISODE_CARD_VERSION,
     )
+    if int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
+        await db.saveAnimeMainPost(media.get("id"), str(episode_number), published.id)
+    else:
+        await db.saveAnimeDestinationPost(
+            media.get("id"), str(episode_number), destination_id, published.id
+        )
     await send_checkpointed_sticker("episode")
 
     await rep.report(
@@ -1777,6 +1795,9 @@ async def uploadchannel_callbacks(client, callback):
                 info_post_id = await db.getAnimeArchiveInfoPost(
                     anime_id, season_index, episode_number, destination_id
                 )
+                channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
+                    anime_id, destination_id
+                )
                 # Migrate the normal uploader's existing destination post into
                 # the archive checkpoint. Only add the missing info card; never
                 # repost the episode card or download/encode its files.
@@ -1787,14 +1808,28 @@ async def uploadchannel_callbacks(client, callback):
                     destination_post_id = await db.getAnimeMainPost(anime_id, str(episode_number))
                 existing_post_id = saved_post_id or destination_post_id
                 if existing_post_id:
-                    if not info_post_id:
+                    episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
+                        anime_id, season_index, episode_number, destination_id
+                    )
+                    card_republished = False
+                    if (
+                        not channel_info_post_id
+                        or episode_card_version != ANIME_EPISODE_CARD_VERSION
+                    ):
                         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                         try:
-                            # Recheck after acquiring the process-wide lock.
-                            info_post_id = await db.getAnimeArchiveInfoPost(
+                            # Recheck both card checkpoints after acquiring the
+                            # process-wide lock. Upgrade legacy posts exactly once.
+                            channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
+                                anime_id, destination_id
+                            )
+                            episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
                                 anime_id, season_index, episode_number, destination_id
                             )
-                            if not info_post_id:
+                            if (
+                                not channel_info_post_id
+                                or episode_card_version != ANIME_EPISODE_CARD_VERSION
+                            ):
                                 await _upload_single_episode(
                                     selected_media,
                                     destination_id,
@@ -1802,19 +1837,20 @@ async def uploadchannel_callbacks(client, callback):
                                     episode_number,
                                     user_client,
                                     progress_callback=report_stage,
-                                    info_only=True,
+                                    reuse_only=True,
                                 )
+                                card_republished = True
                         finally:
                             AUTO_UPLOAD_PRIORITY_LOCK.release()
-                    if not saved_post_id:
+                    if not card_republished and not saved_post_id:
                         await db.saveAnimeArchiveEpisodePost(
                             anime_id, season_index, episode_number,
                             destination_id, existing_post_id, migrated=True
                         )
                     await report_stage(
-                        f"reused existing episode post for {selected_title} "
-                        f"S{season_index:02d}E{episode_number:02d}; "
-                        "added only the missing synopsis card and skipped torrent/encoding",
+                        f"{'upgraded and republished' if card_republished else 'reused'} "
+                        f"{selected_title} S{season_index:02d}E{episode_number:02d}; "
+                        "verified FILE_STORE qualities reused, no torrent download or re-encoding",
                         selected_title,
                     )
                     continue
