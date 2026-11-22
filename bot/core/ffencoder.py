@@ -9,6 +9,7 @@ from asyncio import sleep as asleep, gather, create_subprocess_shell, create_tas
 import asyncio
 import re
 import shlex
+import uuid
 import shutil
 import imageio_ffmpeg
 from asyncio.subprocess import PIPE
@@ -58,7 +59,10 @@ class FFEncoder:
         self.dl_path = path
         self.__total_time = None
         self.out_path = ospath.join("encode", name)
-        self.__prog_file = 'prog.txt'
+        # Unique temp paths prevent concurrent anime jobs from clobbering
+        # another encode's input, progress file, or output.
+        self._run_token = uuid.uuid4().hex[:12]
+        self.__prog_file = f"prog_{self._run_token}.txt"
         self.__start_time = time()
         self.editor = TextEditor(name)
         self.pdata = self.editor.pdata
@@ -398,8 +402,8 @@ class FFEncoder:
             LOGS.info("Progress Temp Generated !")
             pass
 
-        dl_npath = ospath.join("encode", "ffanimeadvin.mkv")
-        out_npath = ospath.join("encode", "ffanimeadvout.mkv")
+        dl_npath = ospath.join("encode", f"ffanimeadvin_{self._run_token}.mkv")
+        out_npath = ospath.join("encode", f"ffanimeadvout_{self._run_token}.mkv")
         await aiorename(self.dl_path, dl_npath)
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
