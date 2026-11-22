@@ -38,6 +38,7 @@ UPLOAD_CHANNEL_SESSIONS = {}
 # Per-process FILE_STORE search cache: one Telegram server-side lookup per anime,
 # reused for all episodes in the same backfill run.
 _FILE_STORE_INDEX_CACHE = {}
+_ANILIST_DETAILS_CACHE = {}
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -677,18 +678,24 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
       }
     }
     """
+    anime_metadata_id = int(media.get("id") or 0)
+    cached_metadata = _ANILIST_DETAILS_CACHE.get(anime_metadata_id)
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as metadata_client:
-            metadata_response = await metadata_client.post(
-                ANILIST_URL,
-                json={"query": details_query, "variables": {"id": int(media.get("id") or 0)}},
-                headers={"Accept": "application/json", "Content-Type": "application/json"},
-            )
-            metadata_response.raise_for_status()
-            exact_metadata = (metadata_response.json().get("data") or {}).get("Media") or {}
-        if not exact_metadata or int(exact_metadata.get("id") or 0) != int(media.get("id") or 0):
-            raise RuntimeError("AniList did not return the exact requested media ID.")
-        info.adata = exact_metadata
+        if cached_metadata and int(cached_metadata.get("id") or 0) == anime_metadata_id:
+            info.adata = cached_metadata
+        else:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as metadata_client:
+                metadata_response = await metadata_client.post(
+                    ANILIST_URL,
+                    json={"query": details_query, "variables": {"id": anime_metadata_id}},
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                )
+                metadata_response.raise_for_status()
+                exact_metadata = (metadata_response.json().get("data") or {}).get("Media") or {}
+            if not exact_metadata or int(exact_metadata.get("id") or 0) != anime_metadata_id:
+                raise RuntimeError("AniList did not return the exact requested media ID.")
+            _ANILIST_DETAILS_CACHE[anime_metadata_id] = exact_metadata
+            info.adata = exact_metadata
     except Exception as metadata_error:
         raise RuntimeError(
             f"Could not retrieve exact AniList artwork/synopsis for {title} "
