@@ -683,6 +683,42 @@ class TextEditor:
                     }
                     break
 
+            # Some SubsPlease releases append labels such as
+            # "- Omake Shorts" that are not part of the AniList series title.
+            # Retry with a conservative suffix-stripped title before giving up.
+            raw_title = self.pdata.get("anime_title") or self.__name
+            fallback_title = re.sub(
+                r"\\s*[-:–—]\\s*(?:(?:omake|bonus|extra)\\s+)?shorts?\\s*$",
+                "",
+                str(raw_title),
+                flags=re.IGNORECASE,
+            ).strip()
+            if fallback_title and fallback_title.casefold() != str(raw_title).casefold():
+                media = await fetch_anilist_v2(
+                    fallback_title,
+                    datetime.now().year,
+                    is_movie=is_movie,
+                )
+                if media and _anime_title_match_score(fallback_title, media) >= 0.62:
+                    self.adata = {
+                        "id": media.get("id"),
+                        "title": media.get("title", {}),
+                        "description": media.get("description"),
+                        "episodes": media.get("episodes"),
+                        "averageScore": media.get("averageScore"),
+                        "coverImage": media.get("coverImage", {}),
+                        "bannerImage": media.get("bannerImage"),
+                        "genres": media.get("genres", []),
+                        "status": media.get("status"),
+                        "siteUrl": media.get("siteUrl"),
+                        "format": media.get("format"),
+                        "startDate": media.get("startDate"),
+                        "endDate": media.get("endDate"),
+                        "season": media.get("season"),
+                        "seasonYear": media.get("seasonYear"),
+                        "studios": media.get("studios", {}),
+                        "duration": media.get("duration"),
+                    }
             return
 
         if manual_name:
@@ -721,6 +757,26 @@ class TextEditor:
                     continue
                 self.adata = media
                 break
+
+        # Retry known release suffixes (e.g. "Omake Shorts") against the
+        # base series title. Keep the same strict title-match threshold so
+        # this cannot silently attach an unrelated AniList ID.
+        if not self.adata.get("id"):
+            raw_title = self.pdata.get("anime_title") or self.__name
+            fallback_title = re.sub(
+                r"\\s*[-:–—]\\s*(?:(?:omake|bonus|extra)\\s+)?shorts?\\s*$",
+                "",
+                str(raw_title),
+                flags=re.IGNORECASE,
+            ).strip()
+            if fallback_title and fallback_title.casefold() != str(raw_title).casefold():
+                media = await AniLister(
+                    fallback_title,
+                    datetime.now().year,
+                    is_movie=is_movie,
+                ).get_anidata()
+                if media and _anime_title_match_score(fallback_title, media) >= 0.62:
+                    self.adata = media
 
     async def load_jikan(self):
         async with ClientSession() as sess:
