@@ -7542,6 +7542,16 @@ async def find_matching_quality_release(rss_url, requested_title):
 
 async def process_low_end(name, torrent_url, force=False, destination_channel=None, mapped_channel=None):
     try:
+        # A pause may be enabled after the RSS scanner queued this task.
+        # Recheck here so queued/stale tasks cannot start a fresh download.
+        if ani_cache.get("global_pause"):
+            await rep.report(
+                f"Paused before processing; not downloading this release: {name}",
+                "warning",
+                log=False,
+            )
+            return "paused"
+
         aniInfo = TextEditor(name)
         await aniInfo.load_info()
         ani_id, ep_no = aniInfo.adata.get('id'), aniInfo.pdata.get("episode_number")
@@ -7644,6 +7654,17 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             btns = []
             post_id = None
             for qual in ["480", "720", "1080"]:
+                # Pause can be toggled while a multi-quality episode is running.
+                # Stop before starting the next quality download/encode.
+                if ani_cache.get("global_pause"):
+                    if stat_msg:
+                        await editMessage(
+                            stat_msg,
+                            f"<blockquote>â£ <b>Anime Name:</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Paused; remaining qualities will resume later.</i></pre>",
+                        )
+                        await stat_msg.delete()
+                    return "paused"
+
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -7673,6 +7694,13 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                     continue
 
                 await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading...</i></pre>")
+                # Do not continue a queued download if pause was enabled
+                # while the RSS match or previous quality was being processed.
+                if ani_cache.get("global_pause"):
+                    if stat_msg:
+                        await stat_msg.delete()
+                    return "paused"
+
                 dl_path = await download_torrent(feed["link"])
                 if not dl_path:
                     await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to download {qual}p</i></pre>")
@@ -7685,6 +7713,10 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         is_movie = anime_format == "movie"
                         await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
                         await asleep(1.5)
+                        if ani_cache.get("global_pause"):
+                            if stat_msg:
+                                await stat_msg.delete()
+                            return "paused"
                         await rep.report("Starting Encode...", "info")
                         try:
                             out_path = await FFEncoder(stat_msg, dl_path, filename, qual, is_movie=is_movie).start_encode()
