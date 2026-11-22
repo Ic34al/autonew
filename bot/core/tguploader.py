@@ -109,6 +109,18 @@ class TgUploader:
 
                 if ani_cache.get('global_pause') or self.cancelled:
                     raise RuntimeError('Upload cancelled by /pause; this quality will be retried after /resume.')
+
+                # Telegram's returned media metadata is authoritative for the
+                # completed stored file size (unlike an FFmpeg bitrate estimate).
+                media = getattr(msg, "document", None) or getattr(msg, "video", None)
+                actual_size = getattr(media, "file_size", None) if media else None
+                if actual_size:
+                    await rep.report(
+                        f"Telegram confirmed {qual} file size for {self.__name}: "
+                        f"{convertBytes(actual_size)} ({int(actual_size)} bytes).",
+                        "success",
+                        log=False,
+                    )
                 return msg
 
             except FloodWait as e:
