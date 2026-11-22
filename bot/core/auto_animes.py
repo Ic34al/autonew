@@ -8379,71 +8379,9 @@ async def create_anime_channel(name, aniInfo):
         except Exception as e:
             await rep.report(f"Failed to add/promote bot in channel: {e}", "error")
 
-        try:
-            titles = aniInfo.adata.get("title", {})
-            genres = ', '.join(aniInfo.adata.get("genres", [])[:3])
-            anime_type = aniInfo.adata.get("format", "Unknown")
-            avg_rating = aniInfo.adata.get("averageScore", "N/A")
-            status = aniInfo.adata.get("status", "Unknown")
-            start_date = aniInfo.adata.get("startDate", {})
-            end_date = aniInfo.adata.get("endDate", {})
-            runtime = aniInfo.adata.get("duration", "Unknown")
-            episodes = aniInfo.adata.get("episodes", "Unknown")
-            desc = aniInfo.adata.get("description", "No description available").replace("<br>", "").replace("<i>", "").replace("</i>", "").strip()
-            desc = (desc[:200] + "...") if len(desc) > 200 else desc 
-            site_url = aniInfo.adata.get("siteUrl", "https://anilist.co")
-            media_id = aniInfo.adata.get("id")
-
-            english = titles.get("english", "Unknown")
-            romaji = titles.get("romaji", "Unknown")
-            display_title = english if english != "Unknown" else romaji
-
-            graphic_poster_url = f"https://img.anili.st/media/{media_id}"
-
-            import aiohttp
-            async with aiohttp.ClientSession() as session:
-                async with session.head(graphic_poster_url) as resp:
-                    if resp.status != 200:
-                        graphic_poster_url = poster_url or "https://imgs.search.brave.com/33oSQBqhBoRB6akjKPud5oFd-PxnMFEm1AjnBTS2ZhE/rs:fit:860:0:0:0/g:ce/aHR0cHM6Ly9pbWcu/ZnJlZXBpay5jb20v/dmVjdG9yLXByZW1p/dW0vaWx1c3RyYWNp/b24tYW5pbWUtZXJy/b3ItNDA0LXBhZ2lu/YS1uby1lbmNvbnRy/YWRhXzE1MDk3Mi0y/NTY0LmpwZw"
-
-            if is_movie:
-                caption = f"""<b><blockquote>{display_title}</blockquote>
-
-<blockquote>â£ Genres : {genres}
-â£ Type : {anime_type}
-â£ Average Rating : {avg_rating}
-â£ Status : {status}
-â£ Release Date : {start_date.get("year", '')}-{start_date.get("month", '')}-{start_date.get("day", '')}
-â£ Duration : {runtime} minutes</blockquote>
-<blockquote expandable>â£ Synopsis : <i>{desc}</i></blockquote expandable>
-</b>"""
-            else:
-                caption = f"""<b><blockquote>{display_title}</blockquote>
-
-<blockquote>â£ Genres : {genres}
-â£ Type : {anime_type}
-â£ Average Rating : {avg_rating}
-â£ Status : {status}
-â£ First aired : {start_date.get("year", '')}-{start_date.get("month", '')}-{start_date.get("day", '')}
-â£ Last aired : {end_date.get("year", '')}-{end_date.get("month", '')}-{end_date.get("day", '')}
-â£ Runtime : {runtime} minutes
-â£ No of episodes : {episodes}</blockquote>
-<blockquote expandable>â£ Synopsis : <i>{desc}</i></blockquote expandable>
-</b>"""
-
-            await user_client.send_photo(
-                chat_id=channel_id,
-                photo=graphic_poster_url,
-                caption=caption
-            )
-
-            STICKER_ID = "CAACAgUAAxkBAAIERmhruO6M5RpLtZjb2yrvPJxTuw0IAAIzEwACTrLwVSdrhgIPuK1TNgQ"
-            await user_client.send_sticker(channel_id, STICKER_ID)
-
-            await rep.report("Intro poster, caption, and sticker sent to channel", "info")
-
-        except Exception as e:
-            await rep.report(f"Failed to send intro content: {e}", "warning")
+        # Keep the channel clean: do not publish a standalone series-info
+        # poster/sticker. The first channel post is the actual ANIME SOUL
+        # episode card, matching the proven 16-Nov workflow.
 
         await db.add_anime_channel_mapping(channel_name, channel_id)
 
@@ -8781,6 +8719,89 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
+        # Older channel posts may predate the MongoDB post checkpoint. Before
+        # automatic RSS downloads, verify the actual destination history too.
+        # /search is an intentional republish command and bypasses this guard.
+        if not force and not manual_search and ep_no and str(ep_no).isdigit():
+            import html as _html
+            season_value = aniInfo.pdata.get("anime_season") or "01"
+            if isinstance(season_value, list):
+                season_value = season_value[-1] if season_value else "01"
+            season_match = re.search(r"\\d+", str(season_value))
+            target_season = int(season_match.group(0)) if season_match else 1
+            target_episode = int(ep_no)
+
+            def _history_text(value):
+                value = _html.unescape(re.sub(r"<[^>]+>", " ", str(value or "")))
+                return " ".join(re.sub(r"[^a-z0-9]+", " ", value.casefold()).split())
+
+            metadata_titles = aniInfo.adata.get("title") or {}
+            title_candidates = [
+                metadata_titles.get(key) for key in ("english", "romaji", "native")
+            ] if isinstance(metadata_titles, dict) else []
+            title_candidates.extend((cleaned_name, base_name))
+            title_keys = {_history_text(value) for value in title_candidates if value}
+            title_keys.discard("")
+            duplicate_post = None
+            try:
+                async for channel_message in bot.get_chat_history(target_channel, limit=1000):
+                    body = " ".join(str(value or "") for value in (
+                        getattr(channel_message, "caption", ""),
+                        getattr(channel_message, "text", ""),
+                    ))
+                    normalized_body = _history_text(body)
+                    if not normalized_body or not any(key in normalized_body for key in title_keys):
+                        continue
+
+                    tagged = re.search(
+                        r"(?i)\\[s0*(\\d{1,2})[-_ ]0*(\\d{1,3})\\]", body
+                    )
+                    if tagged:
+                        same_episode = (
+                            int(tagged.group(1)) == target_season
+                            and int(tagged.group(2)) == target_episode
+                        )
+                    else:
+                        season_in_post = re.search(
+                            r"(?i)\\bseason\\s*0*(\\d{1,2})\\b", body
+                        )
+                        episode_in_post = re.search(
+                            r"(?i)\\bepisode\\s*[:#]?\\s*0*(\\d{1,3})\\b", body
+                        )
+                        same_episode = bool(
+                            season_in_post and episode_in_post
+                            and int(season_in_post.group(1)) == target_season
+                            and int(episode_in_post.group(1)) == target_episode
+                        )
+                    if same_episode:
+                        duplicate_post = channel_message
+                        break
+            except Exception as history_error:
+                raise RuntimeError(
+                    f"Could not safely check destination history for {name} "
+                    f"S{target_season:02d}E{target_episode:02d}; refusing duplicate-prone upload: "
+                    f"{type(history_error).__name__}: {history_error}"
+                ) from history_error
+
+            if duplicate_post:
+                duplicate_id = int(duplicate_post.id)
+                if target_channel == int(Var.MAIN_CHANNEL):
+                    await db.saveAnimeMainPost(ani_id, ep_no, duplicate_id)
+                else:
+                    await db.saveAnimeDestinationPost(
+                        ani_id, ep_no, target_channel, duplicate_id
+                    )
+                    await db.saveAnimeDedicatedPost(ani_id, ep_no, duplicate_id)
+                await db.markAnimeResumeComplete(ani_id, ep_no)
+                ani_cache['completed'].add(episode_key)
+                ani_cache['ongoing'].discard(episode_key)
+                LOGS.info(
+                    "Duplicate episode already exists; skipping %s S%02dE%02d "
+                    "in channel %s (message %s).",
+                    name, target_season, target_episode, target_channel, duplicate_id,
+                )
+                return "already_published"
+
         # Keep the torrent source in MongoDB so a restart can rediscover this
         # episode even after it falls out of the RSS feed window.
         await db.saveAnimeResume(ani_id, ep_no, name, torrent, destination_channel=target_channel)
@@ -9043,12 +9064,47 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     )
                     await rep.report(f"Starting Encode for {qual}...", "info")
 
-                    out_path = await FFEncoder(
-                        stat_msg, dl_path, filename, qual, is_movie=is_movie
-                    ).start_encode()
-                    if not out_path or not ospath.exists(out_path):
+                    out_path = None
+                    encode_error = None
+                    max_encode_attempts = 3
+                    for encode_attempt in range(1, max_encode_attempts + 1):
+                        await editMessage(
+                            stat_msg,
+                            f"<b>Encoding:</b> {name} — {qual}p "
+                            f"(attempt {encode_attempt}/{max_encode_attempts})",
+                        )
+                        encoder = FFEncoder(
+                            stat_msg, dl_path, filename, qual,
+                            is_movie=is_movie,
+                            force_default=(encode_attempt > 1),
+                            quiet_errors=True,
+                        )
+                        try:
+                            out_path = await encoder.start_encode()
+                            if out_path and ospath.exists(out_path) and ospath.getsize(out_path) > 0:
+                                encode_error = None
+                                break
+                            encode_error = getattr(encoder, "last_error", None) or (
+                                f"FFmpeg produced no valid {qual}p output."
+                            )
+                        except Exception as current_encode_error:
+                            encode_error = (
+                                f"{type(current_encode_error).__name__}: {current_encode_error}"
+                            )
+                            out_path = None
+                        if encode_attempt < max_encode_attempts:
+                            await editMessage(
+                                stat_msg,
+                                f"<b>Encoding retry:</b> {name} — {qual}p "
+                                f"(attempt {encode_attempt + 1}/{max_encode_attempts})",
+                            )
+                            await asyncio.sleep(2 * encode_attempt)
+
+                    if not out_path or not ospath.exists(out_path) or ospath.getsize(out_path) <= 0:
                         raise RuntimeError(
-                            f"{qual} encoding failed for {name}; earlier uploaded qualities are saved and will be reused on retry."
+                            f"{qual} encoding failed for {name} after {max_encode_attempts} attempts. "
+                            f"Last FFmpeg error: {encode_error or 'no output produced'}. "
+                            "Previously uploaded qualities remain saved."
                         )
 
                     await editMessage(
