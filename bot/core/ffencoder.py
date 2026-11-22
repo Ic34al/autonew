@@ -502,7 +502,7 @@ class FFEncoder:
         if ffcode:
             ffcode, preset_count = re.subn(
                 r"(?i)(-preset\s+)(ultrafast|superfast|veryfast|faster|fast|medium|slow|slower|veryslow)",
-                r"\\1ultrafast",
+                r"\1ultrafast",
                 ffcode,
             )
             ffcode, thread_count = re.subn(
