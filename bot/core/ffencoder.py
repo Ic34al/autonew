@@ -40,9 +40,16 @@ quality_settings = {
 }
 
 class FFEncoder:
-    def __init__(self, message, path, name, qual, is_movie=False, force_default=False, force_encode=False):
+    def __init__(
+        self, message, path, name, qual, is_movie=False,
+        force_default=False, force_encode=False, bypass_pause=False,
+        quiet_errors=False,
+    ):
         self.force_default = bool(force_default)
         self.force_encode = bool(force_encode)
+        self.bypass_pause = bool(bypass_pause)
+        self.quiet_errors = bool(quiet_errors)
+        self.last_error = None
         self.__proc = None
         self.is_cancelled = False
         self.message = message
@@ -91,7 +98,7 @@ class FFEncoder:
                     text = await p.read()
             except (FileNotFoundError, OSError) as exc:
                 LOGS.warning(f"FFmpeg progress file temporarily unavailable: {exc}")
-                await asleep(2)
+                await asleep(8)
                 continue
 
             if text:
@@ -374,16 +381,19 @@ class FFEncoder:
             try:
                 ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
             except Exception as exc:
-                LOGS.error(f"FFmpeg is unavailable: {exc}")
-                await rep.report(
-                    "FFmpeg is unavailable. Install the system ffmpeg package or "
-                    "ensure imageio-ffmpeg is installed; encoding was not started.",
-                    "error",
-                )
+                self.last_error = f"FFmpeg is unavailable: {exc}"
+                LOGS.error(self.last_error)
+                if not self.quiet_errors:
+                    await rep.report(
+                        "FFmpeg is unavailable. Install the system ffmpeg package or "
+                        "ensure imageio-ffmpeg is installed; encoding was not started.",
+                        "error",
+                    )
                 return None
 
-        if ani_cache.get('global_pause'):
-            LOGS.info('Encoding skipped because /pause is active.')
+        if ani_cache.get('global_pause') and not self.bypass_pause:
+            self.last_error = "Encoding skipped because /pause is active."
+            LOGS.info(self.last_error)
             return None
         encoding_enabled = await db.get_encoding()
         if not encoding_enabled and not self.force_encode:
@@ -505,16 +515,18 @@ class FFEncoder:
                 stderr=PIPE,
             )
         except Exception as exc:
+            self.last_error = f"Could not start FFmpeg: {type(exc).__name__}: {exc}"
             LOGS.exception(f"Could not start FFmpeg for {self.__name} ({self.__qual}p)")
             try:
                 if ospath.exists(dl_npath):
                     await aiorename(dl_npath, self.dl_path)
             except Exception as restore_exc:
                 LOGS.exception(f"Could not restore source after FFmpeg launch failure: {restore_exc}")
-            await rep.report(
-                f"FFmpeg did not start for {self.__name} ({self.__qual}p): {exc}",
-                "error",
-            )
+            if not self.quiet_errors:
+                await rep.report(
+                    f"FFmpeg did not start for {self.__name} ({self.__qual}p): {exc}",
+                    "error",
+                )
             try:
                 await editMessage(
                     self.message,
@@ -590,25 +602,29 @@ class FFEncoder:
             if stderr_tail:
                 # Keep reports readable while preserving the useful final diagnostics.
                 diagnostic = stderr_tail[-3500:]
+                self.last_error = f"{error_message}: {diagnostic}"
                 LOGS.error(
                     f"Encoding failed for {self.__name} ({self.__qual}p): "
                     f"{error_message}\\n{diagnostic}"
                 )
-                await rep.report(
-                    f"{self.__qual}p encoding failed for {self.__name}. "
-                    f"{error_message}\\n<pre>{diagnostic}</pre>",
-                    "error",
-                )
+                if not self.quiet_errors:
+                    await rep.report(
+                        f"{self.__qual}p encoding failed for {self.__name}. "
+                        f"{error_message}\\n<pre>{diagnostic}</pre>",
+                        "error",
+                    )
             else:
+                self.last_error = f"{error_message}; FFmpeg returned no stderr output."
                 LOGS.error(
                     f"Encoding failed for {self.__name} ({self.__qual}p): "
-                    f"{error_message}; FFmpeg returned no stderr output."
+                    f"{self.last_error}"
                 )
-                await rep.report(
-                    f"{self.__qual}p encoding failed for {self.__name}: "
-                    f"{error_message}. FFmpeg returned no diagnostic output.",
-                    "error",
-                )
+                if not self.quiet_errors:
+                    await rep.report(
+                        f"{self.__qual}p encoding failed for {self.__name}: "
+                        f"{error_message}. FFmpeg returned no diagnostic output.",
+                        "error",
+                    )
             return None
     
     async def cancel_encode(self):
