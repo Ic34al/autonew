@@ -545,15 +545,18 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 # SubsPlease search results usually expose episode as "08";
                 # some API responses include the season marker in title/episode.
                 episode_text = episode_name or release_label
-                episode_match = re.search(
-                    r"(?i)(?:\\bS\\s*0*%d\\s*[-._ ]*E?\\s*0*|"
-                    r"\\bEpisode\\s*|\\bEp\\s*)0*(\\d{1,3})\\b" % season,
+                season_episode_match = re.search(
+                    r"(?i)\bS\s*0*(\d{1,2})\s*[-._ ]*E\s*0*(\d{1,3})\b",
                     episode_text,
                 )
-                if episode_match:
-                    found_episode = int(episode_match.group(1))
-                elif re.fullmatch(r"0*\\d{1,3}(?:v\\d+)?", episode_text, re.I):
-                    found_episode = int(re.match(r"0*(\\d+)", episode_text).group(1))
+                if season_episode_match:
+                    detected_inline_season = int(season_episode_match.group(1))
+                    if detected_inline_season != season:
+                        continue
+                    found_episode = int(season_episode_match.group(2))
+                elif re.fullmatch(r"0*\d{1,3}(?:v\d+)?", episode_text, re.I):
+                    numeric_episode = re.match(r"0*(\d+)", episode_text)
+                    found_episode = int(numeric_episode.group(1)) if numeric_episode else None
                 else:
                     found_episode = auto_anime_core.extract_release_episode(
                         f"{show_name} {episode_text} {release_label}"
