@@ -7846,6 +7846,11 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 )
                 if not dedicated_post or not getattr(dedicated_post, "id", None):
                     raise RuntimeError(f"Dedicated channel did not confirm post for {name}.")
+                # Persist the first destination immediately after Telegram
+                # confirms it, before attempting the second channel post.
+                await db.saveAnimeDedicatedPost(ani_id, ep_no, dedicated_post.id)
+                await db.saveAnimeDestinationPost(ani_id, ep_no, channel_to_use, dedicated_post.id)
+
                 announcement_markup = await build_anime_watch_markup(channel_to_use)
                 final_post = await bot.send_photo(
                     Var.MAIN_CHANNEL, photo=photo_url,
@@ -7853,11 +7858,6 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 )
                 if not final_post or not getattr(final_post, "id", None):
                     raise RuntimeError(f"Main Channel announcement was not confirmed for {name}.")
-                # Save each confirmed destination immediately. If the later
-                # Main Channel announcement fails, the next scan must still
-                # recognize the dedicated-channel post and not duplicate it.
-                await db.saveAnimeDedicatedPost(ani_id, ep_no, dedicated_post.id)
-                await db.saveAnimeDestinationPost(ani_id, ep_no, channel_to_use, dedicated_post.id)
                 await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
             else:
                 final_post = await bot.send_photo(
