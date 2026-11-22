@@ -1731,12 +1731,12 @@ async def uploadchannel_callbacks(client, callback):
                 # Migrate the normal uploader's existing destination post into
                 # the archive checkpoint. Only add the missing info card; never
                 # repost the episode card or download/encode its files.
-                legacy_post_id = await db.getAnimeDestinationPost(
+                destination_post_id = await db.getAnimeDestinationPostExact(
                     anime_id, str(episode_number), destination_id
                 )
-                if not legacy_post_id and int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
-                    legacy_post_id = await db.getAnimeMainPost(anime_id, str(episode_number))
-                existing_post_id = saved_post_id or legacy_post_id
+                if not destination_post_id and int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
+                    destination_post_id = await db.getAnimeMainPost(anime_id, str(episode_number))
+                existing_post_id = saved_post_id or destination_post_id
                 if existing_post_id:
                     if not info_post_id:
                         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
