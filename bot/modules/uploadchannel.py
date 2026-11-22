@@ -776,22 +776,22 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 raise RuntimeError(
                     f"Could not generate the ANIME SOUL split-screen synopsis thumbnail for {title}."
                 )
-            with open(info_poster, "rb") as info_photo:
-                if info_post_id:
-                    info_post = await bot.edit_message_media(
-                        chat_id=destination_id,
-                        message_id=int(info_post_id),
-                        media=InputMediaPhoto(
-                            media=info_photo, caption=info_caption, parse_mode=ParseMode.HTML
-                        ),
-                    )
-                else:
-                    info_post = await bot.send_photo(
-                        chat_id=destination_id,
-                        photo=info_photo,
-                        caption=info_caption,
-                        parse_mode=ParseMode.HTML,
-                    )
+            # Pass the path directly; Pyrogram handles opening/stat'ing it.
+            if info_post_id:
+                info_post = await bot.edit_message_media(
+                    chat_id=destination_id,
+                    message_id=int(info_post_id),
+                    media=InputMediaPhoto(
+                        media=info_poster, caption=info_caption, parse_mode=ParseMode.HTML
+                    ),
+                )
+            else:
+                info_post = await bot.send_photo(
+                    chat_id=destination_id,
+                    photo=info_poster,
+                    caption=info_caption,
+                    parse_mode=ParseMode.HTML,
+                )
             if not info_post or not getattr(info_post, "id", None):
                 raise RuntimeError(f"Telegram did not confirm ANIME SOUL synopsis card for {title}.")
             info_post_id = int(info_post.id)
@@ -1292,16 +1292,17 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         info, title, poster_path, episode_label=str(episode_number).zfill(2)
     )
     if poster and os.path.exists(poster):
-        with open(poster, "rb") as photo_file:
-            # Inline keyboards are a Bot API feature. USER_SESSION creates
-            # channels and manages their permissions, but the actual episode
-            # card must be posted by the promoted BOT_TOKEN account.
-            published = await bot.send_photo(
-                chat_id=destination_id,
-                photo=photo_file,
-                caption=caption,
-                reply_markup=keyboard,
-            )
+        # Send the filesystem path, not a BufferedReader. Pyrogram opens it
+        # itself and can determine the upload size correctly.
+        # Inline keyboards are a Bot API feature. USER_SESSION creates
+        # channels and manages their permissions, but the actual episode
+        # card must be posted by the promoted BOT_TOKEN account.
+        published = await bot.send_photo(
+            chat_id=destination_id,
+            photo=poster,
+            caption=caption,
+            reply_markup=keyboard,
+        )
     else:
         cover = (info.adata.get("coverImage") or {}).get("extraLarge") or (info.adata.get("coverImage") or {}).get("large")
         if not cover:
