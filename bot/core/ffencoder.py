@@ -10,6 +10,7 @@ import asyncio
 import re
 import shlex
 import uuid
+import os
 import shutil
 import imageio_ffmpeg
 from asyncio.subprocess import PIPE
@@ -433,6 +434,29 @@ class FFEncoder:
                 )
             return None
         ffmpeg_executable = verified_ffmpeg
+
+        # Also expose the verified binary as the literal command "ffmpeg".
+        # Saved anime-specific FFmpeg templates and shell fragments may invoke
+        # that command directly; deployments which ignore Dockerfile packages
+        # otherwise fail with shell exit 127 even though imageio-ffmpeg exists.
+        try:
+            shim_dir = "/tmp/autoanime-ffmpeg-bin"
+            os.makedirs(shim_dir, exist_ok=True)
+            shim_path = ospath.join(shim_dir, "ffmpeg")
+            target_path = ospath.abspath(verified_ffmpeg)
+            if ospath.lexists(shim_path):
+                if not ospath.islink(shim_path) or os.readlink(shim_path) != target_path:
+                    os.remove(shim_path)
+            if not ospath.lexists(shim_path):
+                os.symlink(target_path, shim_path)
+            os.environ["PATH"] = shim_dir + os.pathsep + os.environ.get("PATH", "")
+            ffmpeg_executable = shim_path
+        except Exception as exc:
+            self.last_error = f"Could not expose verified FFmpeg on PATH: {type(exc).__name__}: {exc}"
+            LOGS.error(self.last_error)
+            if not self.quiet_errors:
+                await rep.report(self.last_error, "error")
+            return None
 
         if ani_cache.get('global_pause') and not self.bypass_pause:
             self.last_error = "Encoding skipped because /pause is active."
