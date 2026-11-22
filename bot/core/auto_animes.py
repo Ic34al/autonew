@@ -8897,7 +8897,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             # still work across workers and restarts.
             if ep_no and not ani_id:
                 season_match = re.search(
-                    r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])",
+                    r"\bS\s*0*(\d{1,2})\s*(?:E|[-._ ])",
                     str(name),
                     re.IGNORECASE,
                 )
