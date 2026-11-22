@@ -493,18 +493,20 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         else:
             await rep.report(stage, "info", log=False)
 
+    progress_message = None
+
     async def create_optional_log_message(text):
-        """A broken LOG_CHANNEL must never stop an encode or file upload."""
+        """Create one per-episode status message and edit it for each quality."""
+        nonlocal progress_message
         try:
-            return await bot.send_message(Var.LOG_CHANNEL, text)
+            if progress_message is None:
+                progress_message = await bot.send_message(Var.LOG_CHANNEL, text)
+            else:
+                await progress_message.edit_text(text)
+            return progress_message
         except Exception as log_error:
-            LOGS.warning("Could not create upload progress message in LOG_CHANNEL: %s", log_error)
-            await rep.report(
-                f"Progress message unavailable in LOG_CHANNEL; continuing upload: {log_error}",
-                "warning",
-                log=False,
-            )
-            return None
+            LOGS.warning("Could not update upload status message: %s", log_error)
+            return progress_message
 
     from bot import Var
     title = _display_title(media)
@@ -847,10 +849,6 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     for quality in missing_qualities:
         await set_progress(f"Encoding {title} S{target_season:02d}E{target_episode:02d} at {quality}p with FFmpeg.")
-        await rep.report(
-            f"Starting FFmpeg encode for {title} S{target_season:02d}E{target_episode:02d} at {quality}p.",
-            "info",
-        )
         upload_name = await info.get_upname(quality)
         quality_source = os.path.join("encode", f"uc_source_{safe}_{quality}.mkv")
         os.makedirs("encode", exist_ok=True)
@@ -859,9 +857,11 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"<b>Preparing encode:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p\\n"
             "FFmpeg has not started yet."
         )
-        encoded_path = await FFEncoder(
-            encode_status, quality_source, upload_name, quality, force_encode=True
-        ).start_encode()
+        encoder = FFEncoder(
+            encode_status, quality_source, upload_name, quality,
+            force_encode=True, bypass_pause=True, quiet_errors=True,
+        )
+        encoded_path = await encoder.start_encode()
 
         # A custom per-anime FFmpeg command can fail on a particular source
         # (e.g. missing subtitle/audio streams). Retry once with the repository's
@@ -877,21 +877,23 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 "warning",
                 log=False,
             )
-            encoded_path = await FFEncoder(
+            fallback_encoder = FFEncoder(
                 encode_status, quality_source, upload_name, quality,
                 force_default=True, force_encode=True,
-            ).start_encode()
+                bypass_pause=True, quiet_errors=True,
+            )
+            encoded_path = await fallback_encoder.start_encode()
 
         if not encoded_path or not os.path.exists(encoded_path):
-            raise RuntimeError(
-                f"Encoding failed for S{season_number}E{episode_number} at {quality}, "
-                "including the safe default FFmpeg retry. Earlier uploaded qualities remain saved."
+            diagnostic = (
+                getattr(fallback_encoder, "last_error", None)
+                or getattr(encoder, "last_error", None)
+                or "FFmpeg did not produce an output file."
             )
-        await rep.report(
-            f"FFmpeg encode completed for {title} S{season_number:02d}E{episode_number:02d} at {quality}p; "
-            "starting Telegram FILE_STORE upload.",
-            "success",
-        )
+            raise RuntimeError(
+                f"Encoding failed for S{season_number}E{episode_number} at {quality}: "
+                f"{diagnostic}. Earlier uploaded qualities remain saved."
+            )
         await set_progress(f"Uploading {title} S{target_season:02d}E{target_episode:02d} {quality}p to FILE_STORE.")
         upload_status = await create_optional_log_message(
             f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
@@ -1135,20 +1137,7 @@ async def uploadchannel_callbacks(client, callback):
             await callback.message.edit(status_text)
         except Exception as status_error:
             LOGS.warning(f"Could not edit /uploadchannel progress message: {status_error}")
-        # Reporter intentionally suppresses routine INFO messages in Telegram.
-        # Send explicit /uploadchannel stage updates to LOG_CHANNEL so operators
-        # can distinguish waiting, downloading, encoding, uploading and publishing.
-        try:
-            if int(getattr(Var, "LOG_CHANNEL", 0) or 0):
-                await bot.send_message(
-                    Var.LOG_CHANNEL,
-                    f"<b>/uploadchannel</b>\n"
-                    f"<b>Anime:</b> {safe_title}\n"
-                    f"<b>Stage:</b> {safe_stage}\n"
-                    f"<b>Channels prepared:</b> {len(created)}/{len(state['selected'])}",
-                )
-        except Exception as log_error:
-            LOGS.warning(f"Could not publish /uploadchannel progress log: {log_error}")
+
 
     try:
         user_client = __import__("pyrogram").Client(
@@ -1490,17 +1479,6 @@ async def uploadchannel_callbacks(client, callback):
                         selected_title,
                     )
                     continue
-
-                while (
-                    AUTO_UPLOAD_PRIORITY_PENDING.is_set()
-                    or time.monotonic() < auto_anime_core.AUTO_UPLOAD_PRIORITY_COOLDOWN_UNTIL
-                ):
-                    channel_stage = (
-                        f"waiting for scheduled RSS upload priority before "
-                        f"{selected_title} S{season_index:02d}E{episode_number:02d}"
-                    )
-                    await report_stage(channel_stage, selected_title)
-                    await asyncio.sleep(5)
 
                 channel_stage = (
                     f"starting RSS download for {selected_title} "
