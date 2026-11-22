@@ -197,10 +197,12 @@ async def _fetch_currently_airing():
                 media_id = item.get("id")
                 day = _airing_day(item)
                 title = _display_title(item)
-                if not day or not title or not media_id or media_id in seen:
+                if not title or not media_id or media_id in seen:
                     continue
                 seen.add(media_id)
-                item["_weekday"] = day
+                # Keep AniList RELEASING entries even when the API has not
+                # published a nextAiringEpisode timestamp yet.
+                item["_weekday"] = day or "Schedule unknown"
                 result.append(item)
     return result
 
@@ -1442,7 +1444,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
 
 def _selection_keyboard(items, selected, page=0):
-    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday", "Schedule unknown"]
     page_size = 14
     page = max(0, min(int(page), max(0, (len(items) - 1) // page_size)))
     visible_indices = set(range(page * page_size, min(len(items), (page + 1) * page_size)))
