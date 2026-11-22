@@ -2820,12 +2820,10 @@ async def extra_utils(msg_id, out_path):
                     # never make a successfully uploaded episode look failed.
                     error_text = str(e)
                     if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
-                        await rep.report(
-                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
-                            "Telegram peer for this bot session. Primary FILE_STORE "
-                            "upload is unaffected; correct BACKUP_FILE_STORE and "
-                            "ensure this bot can access that channel.",
-                            "warning",
+                        LOGS.warning(
+                            "Optional BACKUP_FILE_STORE %s is not a valid Telegram peer "
+                            "for this bot session; primary FILE_STORE upload is unaffected.",
+                            chat_id,
                         )
                     else:
                         await rep.report(
@@ -3992,12 +3990,10 @@ async def extra_utils(msg_id, out_path):
                     # never make a successfully uploaded episode look failed.
                     error_text = str(e)
                     if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
-                        await rep.report(
-                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
-                            "Telegram peer for this bot session. Primary FILE_STORE "
-                            "upload is unaffected; correct BACKUP_FILE_STORE and "
-                            "ensure this bot can access that channel.",
-                            "warning",
+                        LOGS.warning(
+                            "Optional BACKUP_FILE_STORE %s is not a valid Telegram peer "
+                            "for this bot session; primary FILE_STORE upload is unaffected.",
+                            chat_id,
                         )
                     else:
                         await rep.report(
@@ -5133,12 +5129,10 @@ async def extra_utils(msg_id, out_path):
                     # never make a successfully uploaded episode look failed.
                     error_text = str(e)
                     if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
-                        await rep.report(
-                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
-                            "Telegram peer for this bot session. Primary FILE_STORE "
-                            "upload is unaffected; correct BACKUP_FILE_STORE and "
-                            "ensure this bot can access that channel.",
-                            "warning",
+                        LOGS.warning(
+                            "Optional BACKUP_FILE_STORE %s is not a valid Telegram peer "
+                            "for this bot session; primary FILE_STORE upload is unaffected.",
+                            chat_id,
                         )
                     else:
                         await rep.report(
@@ -6274,12 +6268,10 @@ async def extra_utils(msg_id, out_path):
                     # never make a successfully uploaded episode look failed.
                     error_text = str(e)
                     if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
-                        await rep.report(
-                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
-                            "Telegram peer for this bot session. Primary FILE_STORE "
-                            "upload is unaffected; correct BACKUP_FILE_STORE and "
-                            "ensure this bot can access that channel.",
-                            "warning",
+                        LOGS.warning(
+                            "Optional BACKUP_FILE_STORE %s is not a valid Telegram peer "
+                            "for this bot session; primary FILE_STORE upload is unaffected.",
+                            chat_id,
                         )
                     else:
                         await rep.report(
@@ -7413,12 +7405,10 @@ async def extra_utils(msg_id, out_path):
                     # never make a successfully uploaded episode look failed.
                     error_text = str(e)
                     if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
-                        await rep.report(
-                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
-                            "Telegram peer for this bot session. Primary FILE_STORE "
-                            "upload is unaffected; correct BACKUP_FILE_STORE and "
-                            "ensure this bot can access that channel.",
-                            "warning",
+                        LOGS.warning(
+                            "Optional BACKUP_FILE_STORE %s is not a valid Telegram peer "
+                            "for this bot session; primary FILE_STORE upload is unaffected.",
+                            chat_id,
                         )
                     else:
                         await rep.report(
@@ -9241,12 +9231,10 @@ async def extra_utils(msg_id, out_path):
                     # never make a successfully uploaded episode look failed.
                     error_text = str(e)
                     if "CHANNEL_INVALID" in error_text or "PEER_ID_INVALID" in error_text:
-                        await rep.report(
-                            f"Optional BACKUP_FILE_STORE {chat_id} is not a valid "
-                            "Telegram peer for this bot session. Primary FILE_STORE "
-                            "upload is unaffected; correct BACKUP_FILE_STORE and "
-                            "ensure this bot can access that channel.",
-                            "warning",
+                        LOGS.warning(
+                            "Optional BACKUP_FILE_STORE %s is not a valid Telegram peer "
+                            "for this bot session; primary FILE_STORE upload is unaffected.",
+                            chat_id,
                         )
                     else:
                         await rep.report(
