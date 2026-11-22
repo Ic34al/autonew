@@ -429,12 +429,11 @@ class FFEncoder:
         dl_npath = ospath.join("encode", f"ffanimeadvin_{self._run_token}.mkv")
         out_npath = ospath.join("encode", f"ffanimeadvout_{self._run_token}.mkv")
         # Remove only this attempt's temporary output; never reuse a partial MKV.
-        for stale_path in (out_npath, self.out_path):
-            try:
-                if ospath.exists(stale_path):
-                    await aioremove(stale_path)
-            except FileNotFoundError:
-                pass
+        try:
+            if ospath.exists(out_npath):
+                await aioremove(out_npath)
+        except FileNotFoundError:
+            pass
         await aiorename(self.dl_path, dl_npath)
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
