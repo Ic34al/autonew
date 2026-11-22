@@ -91,10 +91,7 @@ class FFEncoder:
             if ani_cache.get('global_pause') and not self.bypass_pause:
                 self.is_cancelled = True
                 if self.__proc is not None and self.__proc.returncode is None:
-                    try:
-                        self.__proc.kill()
-                    except ProcessLookupError:
-                        pass
+                    await self._terminate_process_group()
                 break
             if self.__proc is not None and getattr(self.__proc, 'returncode', None) is not None:
                 break
@@ -498,10 +495,10 @@ class FFEncoder:
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
 
-        # Fast-encode profile: the user prefers shorter encode time over compact
-        # output files. Apply to saved custom templates as well as defaults.
-        # Keep filter threads bounded for small Heroku dynos, but let the video
-        # encoder use FFmpeg's available CPU threads instead of forcing one.
+        # Fast-encode profile: ultrafast reduces CPU time, while one encoder
+        # thread per process prevents two simultaneous anime jobs from creating
+        # competing x264 thread pools and exhausting a small dyno's CPU/RAM.
+        # The archive worker already runs two FFmpeg processes concurrently.
         if ffcode:
             ffcode, preset_count = re.subn(
                 r"(?i)(-preset\s+)(ultrafast|superfast|veryfast|faster|fast|medium|slow|slower|veryslow)",
@@ -510,7 +507,7 @@ class FFEncoder:
             )
             ffcode, thread_count = re.subn(
                 r"(?i)(?<![\w-])-threads\s+1(?!\d)",
-                "-threads 0",
+                "-threads 1",
                 ffcode,
             )
             LOGS.info(
@@ -562,17 +559,17 @@ class FFEncoder:
 
             if output_name in ffcode:
                 ffcode = ffcode.replace(
-                    output_name, f"-threads 0 {output_name}", 1
+                    output_name, f"-threads 1 {output_name}", 1
                 )
             elif double_output_name in ffcode:
                 ffcode = ffcode.replace(
                     double_output_name,
-                    f"-threads 0 {double_output_name}",
+                    f"-threads 1 {double_output_name}",
                     1,
                 )
             elif out_npath in ffcode:
                 ffcode = ffcode.replace(
-                    out_npath, f"-threads 0 {out_npath}", 1
+                    out_npath, f"-threads 1 {out_npath}", 1
                 )
         LOGS.info(f'Using FFmpeg command: {ffcode}')
         if not ffcode:
@@ -728,6 +725,10 @@ class FFEncoder:
                 ffcode,
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=PIPE,
+                # FFmpeg is launched through a shell because saved templates
+                # may contain shell syntax. A new session lets cancellation
+                # terminate the shell AND its FFmpeg child process reliably.
+                start_new_session=True,
             )
         except Exception as exc:
             FFENCODE_SEMAPHORE.release()
@@ -768,6 +769,36 @@ class FFEncoder:
 
         try:
             _, stderr_output = await self.__proc.communicate()
+        except asyncio.CancelledError:
+            # A cancelled worker must not leave an orphaned FFmpeg child,
+            # hold a semaphore slot, or strand the renamed source file.
+            self.is_cancelled = True
+            try:
+                await self._terminate_process_group()
+                await asyncio.wait_for(self.__proc.communicate(), timeout=10)
+            except Exception as cleanup_error:
+                LOGS.warning(
+                    f"Cancellation cleanup for {self.__name} ({self.__qual}p) "
+                    f"was incomplete: {type(cleanup_error).__name__}: {cleanup_error}"
+                )
+            try:
+                ffpids_cache.remove(proc_pid)
+            except ValueError:
+                pass
+            try:
+                if ospath.exists(dl_npath) and not ospath.exists(self.dl_path):
+                    await aiorename(dl_npath, self.dl_path)
+                if ospath.exists(out_npath):
+                    await aioremove(out_npath)
+            except Exception as restore_error:
+                LOGS.exception(
+                    f"Could not restore files after cancelled encode for {self.__name}: {restore_error}"
+                )
+            LOGS.warning(
+                f"Encoding task cancelled for {self.__name} ({self.__qual}p); "
+                "FFmpeg process group stopped and source restored."
+            )
+            raise
         finally:
             FFENCODE_SEMAPHORE.release()
             try:
@@ -844,10 +875,40 @@ class FFEncoder:
                     )
             return None
     
+    async def _terminate_process_group(self):
+        """Stop FFmpeg and any shell descendants without leaving orphan workers."""
+        proc = self.__proc
+        if proc is None or proc.returncode is not None:
+            return
+        try:
+            os.killpg(proc.pid, __import__("signal").SIGTERM)
+        except ProcessLookupError:
+            return
+        except Exception as exc:
+            LOGS.warning(f"Could not SIGTERM FFmpeg process group {proc.pid}: {exc}")
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                return
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+            return
+        except asyncio.TimeoutError:
+            pass
+        try:
+            os.killpg(proc.pid, __import__("signal").SIGKILL)
+        except ProcessLookupError:
+            pass
+        except Exception:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=5)
+        except asyncio.TimeoutError:
+            LOGS.error(f"FFmpeg process group {proc.pid} did not exit after SIGKILL.")
+
     async def cancel_encode(self):
         self.is_cancelled = True
-        if self.__proc is not None:
-            try:
-                self.__proc.kill()
-            except:
-                pass
+        await self._terminate_process_group()
