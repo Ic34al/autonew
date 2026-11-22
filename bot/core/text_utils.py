@@ -688,7 +688,7 @@ class TextEditor:
             # Retry with a conservative suffix-stripped title before giving up.
             raw_title = self.pdata.get("anime_title") or self.__name
             fallback_title = re.sub(
-                r"\\s*[-:–—]\\s*(?:(?:omake|bonus|extra)\\s+)?shorts?\\s*$",
+                r"\s*[-:–—]\s*(?:(?:omake|bonus|extra)\s+)?shorts?\s*$",
                 "",
                 str(raw_title),
                 flags=re.IGNORECASE,
@@ -764,7 +764,7 @@ class TextEditor:
         if not self.adata.get("id"):
             raw_title = self.pdata.get("anime_title") or self.__name
             fallback_title = re.sub(
-                r"\\s*[-:–—]\\s*(?:(?:omake|bonus|extra)\\s+)?shorts?\\s*$",
+                r"\s*[-:–—]\s*(?:(?:omake|bonus|extra)\s+)?shorts?\s*$",
                 "",
                 str(raw_title),
                 flags=re.IGNORECASE,
