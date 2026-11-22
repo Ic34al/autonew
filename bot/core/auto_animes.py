@@ -639,7 +639,7 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
         await rep.report(f"Priority sticker delivery failed for {channel}: {error}", "error")
         return False
 
-async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_number, qualities):
+async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_number, qualities, bold_title=False):
     """Build the exact established Main Channel caption with Telegram expandable synopsis."""
     import html
     data = getattr(aniInfo, "adata", {}) or {}
@@ -698,7 +698,7 @@ async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_n
         episode_label = html.escape(str(episode_number or "—"))
     episode_word = "Episode"
     caption = (
-        f"<blockquote>❝ {html.escape(str(display_title))} ❞</blockquote>\n"
+        f"<blockquote>❝ {"<b>" if bold_title else ""}{html.escape(str(display_title))}{"</b>" if bold_title else ""} ❞</blockquote>\n"
         "──────────────────────\n"
         f"<b>➥ Audio: {html.escape(str(audio_value))}</b>\n"
         f"<b>➤ Quality: {html.escape(quality_text)}</b>\n"
