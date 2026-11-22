@@ -2569,7 +2569,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 fallback_id = fallback_info.adata.get("id")
                 if fallback_id:
                     season_match = re.search(
-                        r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])",
+                        r"\bS\s*0*(\d{1,2})\s*(?:E|[-._ ])",
                         str(name),
                         re.IGNORECASE,
                     )
