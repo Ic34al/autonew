@@ -697,6 +697,63 @@ class FFEncoder:
                 f"CRF {crf_value}, audio {audio_bitrate}."
             )
 
+        # Keep every encoded quality safely below Telegram's 2,000 MiB Bot API
+        # ceiling. Use a 1,800 MiB target (including a 10% safety margin) and
+        # VBV rate control so CRF retains quality until the calculated ceiling.
+        # This is duration-based: long episodes/movies receive a lower ceiling,
+        # while short episodes keep the bitrate needed for their resolution.
+        try:
+            source_duration = float(await mediainfo(dl_npath, get_duration=True))
+            if source_duration > 0:
+                target_bytes = 1800 * 1024 * 1024
+                target_total_bps = int((target_bytes * 8 / source_duration) * 0.90)
+                # Reserve 768 kb/s for audio, muxing and stream overhead.
+                video_maxrate = max(200_000, target_total_bps - 768_000)
+                video_bufsize = video_maxrate * 2
+
+                # A stream-copy template cannot obey a bitrate ceiling. Convert
+                # that case to H.264; other configured video codecs are retained.
+                ffcode = re.sub(
+                    r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+copy(?=\\s|$)",
+                    "-c:v libx264",
+                    ffcode,
+                )
+                if re.search(r"(?i)(?<![\\w-])-maxrate\\s+\\S+", ffcode):
+                    ffcode = re.sub(
+                        r"(?i)(?<![\\w-])-maxrate\\s+\\S+",
+                        f"-maxrate {video_maxrate}",
+                        ffcode,
+                    )
+                else:
+                    ffcode = ffcode.replace(
+                        f"'{out_npath}'", f"-maxrate {video_maxrate} '{out_npath}'", 1
+                    ) if f"'{out_npath}'" in ffcode else ffcode.replace(
+                        f'"{out_npath}"', f'-maxrate {video_maxrate} "{out_npath}"', 1
+                    )
+                if re.search(r"(?i)(?<![\\w-])-bufsize\\s+\\S+", ffcode):
+                    ffcode = re.sub(
+                        r"(?i)(?<![\\w-])-bufsize\\s+\\S+",
+                        f"-bufsize {video_bufsize}",
+                        ffcode,
+                    )
+                else:
+                    ffcode = ffcode.replace(
+                        f"'{out_npath}'", f"-bufsize {video_bufsize} '{out_npath}'", 1
+                    ) if f"'{out_npath}'" in ffcode else ffcode.replace(
+                        f'"{out_npath}"', f'-bufsize {video_bufsize} "{out_npath}"', 1
+                    )
+                LOGS.info(
+                    f"Telegram-safe size profile for {self.__name} ({self.__qual}p): "
+                    f"duration={source_duration:.1f}s, video maxrate={video_maxrate} bps, "
+                    f"target output<=1800 MiB."
+                )
+        except Exception as size_profile_error:
+            LOGS.warning(
+                f"Could not calculate Telegram-safe bitrate for {self.__name} "
+                f"({self.__qual}p): {type(size_profile_error).__name__}: {size_profile_error}. "
+                "Keeping the configured quality profile."
+            )
+
         # /pause may be pressed while the FFmpeg command is being prepared.
         # Restore the source file and do not start a new encode in that case.
         if ani_cache.get('global_pause') and not self.bypass_pause:
