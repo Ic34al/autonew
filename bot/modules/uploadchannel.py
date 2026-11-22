@@ -1908,7 +1908,18 @@ async def uploadchannel_callbacks(client, callback):
         # uploading Season 1 just because the prequel exists in AniList.
         channel_stage = "processing released episodes of the selected ongoing season"
         await report_stage(channel_stage)
-        for selected_media, destination_id in archive_jobs:
+        # Run at most two different anime backfills concurrently. Each worker
+        # still processes that anime's episodes in strict episode order; a
+        # third/fourth selected anime remains queued until a worker completes.
+        archive_worker_semaphore = asyncio.Semaphore(2)
+
+        async def process_archive_job(selected_media, destination_id):
+            async with archive_worker_semaphore:
+                selected_title = _display_title(selected_media)
+                await report_stage(
+                    f"archive worker started ({len(archive_jobs)} selected; concurrency limit 2)",
+                    selected_title,
+                )
             selected_title = _display_title(selected_media)
             media_status = str(selected_media.get("status") or "").upper()
             next_airing = selected_media.get("nextAiringEpisode") or {}
@@ -1919,7 +1930,7 @@ async def uploadchannel_callbacks(client, callback):
                 or (len(_prequel_seasons(selected_media)) + 1)
             )
             anime_id = int(selected_media.get("id") or 0)
-
+    
             if not anime_id:
                 raise RuntimeError(
                     f"AniList ID is missing for selected anime {selected_title}; no upload was started."
@@ -1934,7 +1945,7 @@ async def uploadchannel_callbacks(client, callback):
                     f"AniList has not confirmed a released episode for {selected_title} "
                     f"Season {season_index}; no torrent download was started."
                 )
-
+    
             # Never call get_chat_history here: the deployed uploader may be
             # running as a Telegram bot, and bots receive BOT_METHOD_INVALID.
             # Use only durable MongoDB checkpoints for duplicate detection.
@@ -1954,12 +1965,12 @@ async def uploadchannel_callbacks(client, callback):
                 anime_id, season_index, destination_id, "in_progress",
                 "", f"released-episodes-only S{season_index} 4-quality",
             )
-
+    
             # Preflight all released episodes first, but do not publish any episode
             # until the synopsis card and its sticker have been confirmed in-channel.
             episodes_ready_to_reuse = []
             episodes_requiring_encode = []
-
+    
             for episode_number in range(1, released_episode_count + 1):
                 await report_stage(
                     f"checking saved FILE_STORE qualities for {selected_title} "
@@ -1974,7 +1985,7 @@ async def uploadchannel_callbacks(client, callback):
                     episodes_ready_to_reuse.append(episode_number)
                 else:
                     episodes_requiring_encode.append(episode_number)
-
+    
             # Explicitly publish/reuse the single synopsis thumbnail first, then
             # its sticker. info_only exits before any episode download or upload.
             await report_stage(
@@ -1985,26 +1996,24 @@ async def uploadchannel_callbacks(client, callback):
                 selected_media, destination_id, season_index, 1,
                 user_client, progress_callback=report_stage, info_only=True,
             )
-
+    
             await report_stage(
                 f"synopsis card and opening sticker confirmed; publishing episodes "
                 f"in order for {selected_title}",
                 selected_title,
             )
-
+    
             # Merge both work queues and process strictly E01, E02, E03...
             # This prevents the old two-pass behavior from publishing a later
             # reusable episode before an earlier episode that needs encoding.
             reusable_set = set(episodes_ready_to_reuse)
             encode_set = set(episodes_requiring_encode)
             for episode_number in sorted(reusable_set | encode_set):
-                await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-                try:
                     async def episode_progress(stage):
                         nonlocal channel_stage
                         channel_stage = stage
                         await report_stage(stage, selected_title)
-
+    
                     if episode_number in reusable_set:
                         await _upload_single_episode(
                             selected_media, destination_id, season_index, episode_number,
@@ -2019,14 +2028,12 @@ async def uploadchannel_callbacks(client, callback):
                             force_repost=True,
                         )
                         action = "encoded missing qualities and published"
-                finally:
-                    AUTO_UPLOAD_PRIORITY_LOCK.release()
-
+    
                 await report_stage(
                     f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
                     selected_title,
                 )
-
+    
             await db.set_anime_archive_batch(
                 anime_id, season_index, destination_id, "complete",
                 "", f"released-episodes-only S{season_index} 4-quality",
@@ -2035,6 +2042,27 @@ async def uploadchannel_callbacks(client, callback):
                 f"ONGOING SEASON BACKFILL COMPLETE: {selected_title} Season {season_index}; "
                 f"processed only the {released_episode_count} episode(s) confirmed released by AniList",
                 selected_title,
+            )
+    
+    
+
+        results = await asyncio.gather(
+            *(process_archive_job(media, destination_id) for media, destination_id in archive_jobs),
+            return_exceptions=True,
+        )
+        failures = [
+            f"{_display_title(archive_jobs[index][0])}: {type(result).__name__}: {result}"
+            for index, result in enumerate(results)
+            if isinstance(result, BaseException)
+        ]
+        if failures:
+            await rep.report(
+                "One or more /uploadchannel anime workers failed:\n" + "\n".join(failures),
+                "error",
+            )
+            raise RuntimeError(
+                f"{len(failures)} of {len(archive_jobs)} anime backfill worker(s) failed. "
+                "Other workers were allowed to finish. " + "; ".join(failures)
             )
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
