@@ -21,6 +21,9 @@ from .reporter import rep
 from .text_utils import TextEditor
 from bot.core.database import db
 
+# Global process-wide cap: no more than two FFmpeg processes may run at once.
+FFENCODE_SEMAPHORE = asyncio.Semaphore(2)
+
 ffargs = {
     'HDRi': Var.FFCODE_HDRi,
     '1080': Var.FFCODE_1080,
@@ -718,6 +721,7 @@ class FFEncoder:
         LOGS.info(f"Resolved FFmpeg executable: {ffmpeg_executable}")
 
         # Capture FFmpeg stderr so failed encodes show the real cause in Anime Logs.
+        await FFENCODE_SEMAPHORE.acquire()
         try:
             self.__proc = await create_subprocess_shell(
                 ffcode,
@@ -725,6 +729,7 @@ class FFEncoder:
                 stderr=PIPE,
             )
         except Exception as exc:
+            FFENCODE_SEMAPHORE.release()
             self.last_error = f"Could not start FFmpeg: {type(exc).__name__}: {exc}"
             LOGS.exception(f"Could not start FFmpeg for {self.__name} ({self.__qual}p)")
             try:
@@ -763,6 +768,7 @@ class FFEncoder:
         try:
             _, stderr_output = await self.__proc.communicate()
         finally:
+            FFENCODE_SEMAPHORE.release()
             try:
                 progress_task.cancel()
                 await progress_task
