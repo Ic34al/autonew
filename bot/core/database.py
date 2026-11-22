@@ -146,6 +146,22 @@ class MongoDB:
         legacy_post = episode_data.get("dedicated_msg_id") or episode_data.get("msg_id")
         return legacy_post
 
+    async def getAnimeDestinationPostExact(self, ani_id, ep, channel_id):
+        """Return only a post explicitly recorded for this destination channel."""
+        if ani_id is None or ep is None or channel_id is None:
+            return None
+        anime_data = await self.__animes.find_one(
+            {"_id": ani_id},
+            {f"{str(ep)}.destination_posts.{int(channel_id)}": 1},
+        )
+        if not anime_data:
+            return None
+        episode_data = anime_data.get(str(ep), {})
+        if not isinstance(episode_data, dict):
+            return None
+        posts = episode_data.get("destination_posts", {})
+        return posts.get(str(int(channel_id))) if isinstance(posts, dict) else None
+
     async def getAnimeMainPost(self, ani_id, ep):
         if ani_id is None or ep is None:
             return None
