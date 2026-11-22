@@ -9077,6 +9077,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             stat_msg, dl_path, filename, qual,
                             is_movie=is_movie,
                             force_default=(encode_attempt > 1),
+                            fallback_mode=encode_attempt - 1,
                             quiet_errors=True,
                         )
                         try:
