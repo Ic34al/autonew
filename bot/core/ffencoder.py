@@ -614,7 +614,7 @@ class FFEncoder:
         # sources while falsely labelling them HDRip.
         if ffcode and self.__qual == "HDRi":
             ffcode, removed_scale = re.subn(
-                r"(?i)(?<!\\S)-s\\s+\\d{2,5}x\\d{2,5}(?=\\s|$)",
+                r"(?i)(?<!\S)-s\s+\\d{2,5}x\\d{2,5}(?=\s|$)",
                 "",
                 ffcode,
             )
@@ -718,13 +718,13 @@ class FFEncoder:
             # A stream-copy video cannot be rate-limited. Transcode it rather
             # than allowing an oversized source stream through unchanged.
             ffcode = re.sub(
-                r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+copy(?=\\s|$)",
+                r"(?i)(?<![\w-])-(?:c:v|codec:v)\s+copy(?=\s|$)",
                 "-c:v libx264",
                 ffcode,
             )
 
             for option, value in (("-maxrate", video_maxrate), ("-bufsize", video_bufsize)):
-                option_pattern = rf"(?i)(?<![\\w-]){re.escape(option)}\\s+\\S+"
+                option_pattern = rf"(?i)(?<![\w-]){re.escape(option)}\s+\S+"
                 if re.search(option_pattern, ffcode):
                     ffcode = re.sub(option_pattern, f"{option} {value}", ffcode)
                     continue
