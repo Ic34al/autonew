@@ -8318,7 +8318,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
-async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None, info_card=False):
     """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
     import io
     import textwrap
@@ -8334,35 +8334,79 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         return str(value or default).strip()
 
     season = clean_value(anime_info.pdata.get("anime_season"), "01")
-    episode = clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
+    episode = None if info_card else clean_value(episode_label or anime_info.pdata.get("episode_number"), "01")
     try:
         season = str(int(season))
     except Exception:
         pass
-    try:
-        episode = str(int(episode)).zfill(2)
-    except Exception:
-        pass
+    if episode is not None:
+        try:
+            episode = str(int(episode)).zfill(2)
+        except Exception:
+            pass
 
     cover_data = data.get("coverImage") or {}
-    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
-    banner_url = data.get("bannerImage")
-    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
-    artwork_url = cover_url or banner_url
-    if not artwork_url:
-        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+    # Try every artwork source, with retries. Never silently substitute a
+    # previous anime's cached/local thumbnail.
+    artwork_urls = []
+    for candidate in (
+        cover_data.get("extraLarge"),
+        cover_data.get("large"),
+        data.get("poster_url"),
+        data.get("bannerImage"),
+    ):
+        if candidate and candidate not in artwork_urls:
+            artwork_urls.append(candidate)
+
+    if not artwork_urls:
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable for '{title}': AniList returned no artwork URL.",
+            "warning"
+        )
         return None
 
+    art = None
+    last_art_error = None
     try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(25.0, connect=10.0),
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(artwork_url)
-            response.raise_for_status()
-            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+        for artwork_url in artwork_urls:
+            cached_bytes = _ANIME_SOUL_ART_CACHE.get(artwork_url)
+            if cached_bytes:
+                art = Image.open(io.BytesIO(cached_bytes)).convert("RGB")
+                art.load()
+                break
+        if art is None:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(25.0, connect=10.0),
+                follow_redirects=True,
+            ) as client:
+                for artwork_url in artwork_urls:
+                    for attempt in range(1, 3):
+                        try:
+                            response = await client.get(artwork_url)
+                            response.raise_for_status()
+                            _ANIME_SOUL_ART_CACHE[artwork_url] = response.content
+                            art = Image.open(io.BytesIO(response.content)).convert("RGB")
+                            art.load()
+                            break
+                        except Exception as exc:
+                            last_art_error = exc
+                            await rep.report(
+                                f"Thumbnail attempt {attempt}/2 failed for '{title}' "
+                                f"({artwork_url}): {exc}",
+                                "warning"
+                            )
+                            if attempt < 2:
+                                await asyncio.sleep(attempt)
+                    if art is not None:
+                        break
     except Exception as exc:
-        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+        last_art_error = exc
+
+    if art is None:
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable after retries for '{title}': {last_art_error}",
+            "warning"
+        )
         return None
 
     W, H = 1600, 900
@@ -8471,8 +8515,14 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         draw.text((42, left_title_y), title_line, font=left_title_font,
                   fill=(255,255,255), stroke_width=2, stroke_fill=(0,0,0))
         left_title_y += left_title_font.size + 8
-    draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
-              font=font(23, True), fill=(255,220,70))
+    if info_card:
+        year_label = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or ""
+        season_label = str(data.get("season") or "").replace("_", " ").title()
+        left_meta = " • ".join(x for x in (season_label, str(year_label)) if x) or f"SEASON {season}"
+        draw.text((48, 850), left_meta.upper(), font=font(23, True), fill=(255,220,70))
+    else:
+        draw.text((48, 850), f"SEASON {season}   •   EPISODE {episode}",
+                  font=font(23, True), fill=(255,220,70))
 
     # Right-side streaming dashboard header and content geometry.
     rx = split_x + 58
@@ -8499,12 +8549,19 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     rule_y = title_y + 8
     draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
     pill_y = rule_y + 32
-    draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
-    draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
-    draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
-    draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
-    draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
-    draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
+    if info_card:
+        season_label = str(data.get("season") or "ANIME").replace("_", " ").title()
+        year_label = (data.get("seasonYear") or (data.get("startDate") or {}).get("year") or "")
+        draw.text((rx, pill_y), f"{season_label.upper()}  {year_label}".strip(),
+                  font=font(23, True), fill=(165,48,62))
+        pill_y += 38
+    else:
+        draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
+        draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
+        draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
+        draw.text((rx+238, pill_y+13), f"EPISODE {episode}", font=font(23, True), fill=(18,20,28))
+        draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
+        draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
 
     # Place the AniList synopsis below the variable-height title block.
     synopsis = re.sub(r"<[^>]+>", " ", str(data.get("description") or "Discover the story in this anime."))
@@ -8532,11 +8589,12 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     year = (data.get("startDate") or {}).get("year") or data.get("seasonYear") or "—"
     genres = ", ".join((data.get("genres") or [])[:2]) or "Anime"
     status = str(data.get("status") or "—").replace("_", " ").title()
+    anime_type = str(data.get("format") or data.get("type") or "TV")
     metadata = [
-        ("YEAR", str(year)),
         ("STUDIO", str(studio)),
         ("GENRES", genres),
         ("STATUS", status),
+        ("TYPE" if info_card else "YEAR", anime_type if info_card else str(year)),
     ]
     col_w = right_w // 4
     for i, (label, value) in enumerate(metadata):
@@ -8547,7 +8605,6 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
     canvas.save(output_path, "JPEG", quality=94, optimize=True, progressive=True)
     return output_path
-
 
 async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
     # Manual selected-channel batches can hold automatic processing while active.
