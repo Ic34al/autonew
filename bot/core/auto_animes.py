@@ -8875,7 +8875,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 aniInfo.pdata["episode_number"] = ep_no
 
             season_match = re.search(
-                r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])",
+                r"\bS\s*0*(\d{1,2})\s*(?:E|[-._ ])",
                 str(name),
                 re.IGNORECASE,
             )
