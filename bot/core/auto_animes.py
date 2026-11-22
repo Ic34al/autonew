@@ -7567,10 +7567,13 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             # an "unknown" key because every scan would look like a new episode.
             ep_no = extract_release_episode(name)
         if not ani_id or not ep_no:
-            raise RuntimeError(
-                f"Refusing automatic upload because AniList ID/episode number "
-                f"could not be verified for release: {name}"
+            await rep.report(
+                f"Automatic upload held: AniList ID/episode number could not be verified "
+                f"for release '{name}'. No download or channel post was started.",
+                "warning",
+                log=False,
             )
+            return "metadata_unresolved"
 
         episode_key = f"{ani_id}:{ep_no}"
         episode_lock_token = uuid.uuid4().hex
@@ -8329,6 +8332,10 @@ async def fetch_animes():
                         )
                     elif result == "in_progress":
                         retry_after[link] = asyncio.get_running_loop().time() + 90
+                    elif result == "metadata_unresolved":
+                        # Metadata lookup failures are not torrent/encode failures.
+                        # Back off for six hours to avoid flooding logs every scan.
+                        retry_after[link] = asyncio.get_running_loop().time() + (6 * 60 * 60)
                     else:
                         # Keep failed download/encode/publish items retryable.
                         retry_after[link] = asyncio.get_running_loop().time() + 60
