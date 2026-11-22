@@ -1920,95 +1920,95 @@ async def uploadchannel_callbacks(client, callback):
                     f"archive worker started ({len(archive_jobs)} selected; concurrency limit 2)",
                     selected_title,
                 )
-            selected_title = _display_title(selected_media)
-            media_status = str(selected_media.get("status") or "").upper()
-            next_airing = selected_media.get("nextAiringEpisode") or {}
-            next_episode_number = int(next_airing.get("episode") or 0)
-            released_episode_count = max(0, next_episode_number - 1)
-            season_index = (
-                _season_number_from_release(selected_title)
-                or (len(_prequel_seasons(selected_media)) + 1)
-            )
-            anime_id = int(selected_media.get("id") or 0)
-    
-            if not anime_id:
-                raise RuntimeError(
-                    f"AniList ID is missing for selected anime {selected_title}; no upload was started."
+                selected_title = _display_title(selected_media)
+                media_status = str(selected_media.get("status") or "").upper()
+                next_airing = selected_media.get("nextAiringEpisode") or {}
+                next_episode_number = int(next_airing.get("episode") or 0)
+                released_episode_count = max(0, next_episode_number - 1)
+                season_index = (
+                    _season_number_from_release(selected_title)
+                    or (len(_prequel_seasons(selected_media)) + 1)
                 )
-            if media_status != "RELEASING":
-                raise RuntimeError(
-                    f"{selected_title} is not currently RELEASING in AniList "
-                    f"(status: {media_status or 'unknown'}); only ongoing-season releases are eligible."
-                )
-            if released_episode_count < 1:
-                raise RuntimeError(
-                    f"AniList has not confirmed a released episode for {selected_title} "
-                    f"Season {season_index}; no torrent download was started."
-                )
-    
-            # Never call get_chat_history here: the deployed uploader may be
-            # running as a Telegram bot, and bots receive BOT_METHOD_INVALID.
-            # Use only durable MongoDB checkpoints for duplicate detection.
-            existing_episodes = set()
-            for episode_number in range(1, released_episode_count + 1):
-                if await db.getAnimeArchiveEpisodePost(
-                    anime_id, season_index, episode_number, destination_id
-                ):
-                    existing_episodes.add(episode_number)
-            await report_stage(
-                f"ongoing season confirmed: {selected_title} S{season_index:02d}; "
-                f"{released_episode_count} episode(s) released, "
-                f"{len(existing_episodes)} already published",
-                selected_title,
-            )
-            await db.set_anime_archive_batch(
-                anime_id, season_index, destination_id, "in_progress",
-                "", f"released-episodes-only S{season_index} 4-quality",
-            )
-    
-            # Preflight all released episodes first, but do not publish any episode
-            # until the synopsis card and its sticker have been confirmed in-channel.
-            episodes_ready_to_reuse = []
-            episodes_requiring_encode = []
-    
-            for episode_number in range(1, released_episode_count + 1):
+                anime_id = int(selected_media.get("id") or 0)
+        
+                if not anime_id:
+                    raise RuntimeError(
+                        f"AniList ID is missing for selected anime {selected_title}; no upload was started."
+                    )
+                if media_status != "RELEASING":
+                    raise RuntimeError(
+                        f"{selected_title} is not currently RELEASING in AniList "
+                        f"(status: {media_status or 'unknown'}); only ongoing-season releases are eligible."
+                    )
+                if released_episode_count < 1:
+                    raise RuntimeError(
+                        f"AniList has not confirmed a released episode for {selected_title} "
+                        f"Season {season_index}; no torrent download was started."
+                    )
+        
+                # Never call get_chat_history here: the deployed uploader may be
+                # running as a Telegram bot, and bots receive BOT_METHOD_INVALID.
+                # Use only durable MongoDB checkpoints for duplicate detection.
+                existing_episodes = set()
+                for episode_number in range(1, released_episode_count + 1):
+                    if await db.getAnimeArchiveEpisodePost(
+                        anime_id, season_index, episode_number, destination_id
+                    ):
+                        existing_episodes.add(episode_number)
                 await report_stage(
-                    f"checking saved FILE_STORE qualities for {selected_title} "
-                    f"S{season_index:02d}E{episode_number:02d}",
+                    f"ongoing season confirmed: {selected_title} S{season_index:02d}; "
+                    f"{released_episode_count} episode(s) released, "
+                    f"{len(existing_episodes)} already published",
                     selected_title,
                 )
-                ready = await _upload_single_episode(
-                    selected_media, destination_id, season_index, episode_number,
-                    user_client, progress_callback=report_stage, preflight_only=True,
+                await db.set_anime_archive_batch(
+                    anime_id, season_index, destination_id, "in_progress",
+                    "", f"released-episodes-only S{season_index} 4-quality",
                 )
-                if ready:
-                    episodes_ready_to_reuse.append(episode_number)
-                else:
-                    episodes_requiring_encode.append(episode_number)
-    
-            # Explicitly publish/reuse the single synopsis thumbnail first, then
-            # its sticker. info_only exits before any episode download or upload.
-            await report_stage(
-                f"publishing the ANIME SOUL synopsis card first for {selected_title}",
-                selected_title,
-            )
-            await _upload_single_episode(
-                selected_media, destination_id, season_index, 1,
-                user_client, progress_callback=report_stage, info_only=True,
-            )
-    
-            await report_stage(
-                f"synopsis card and opening sticker confirmed; publishing episodes "
-                f"in order for {selected_title}",
-                selected_title,
-            )
-    
-            # Merge both work queues and process strictly E01, E02, E03...
-            # This prevents the old two-pass behavior from publishing a later
-            # reusable episode before an earlier episode that needs encoding.
-            reusable_set = set(episodes_ready_to_reuse)
-            encode_set = set(episodes_requiring_encode)
-            for episode_number in sorted(reusable_set | encode_set):
+        
+                # Preflight all released episodes first, but do not publish any episode
+                # until the synopsis card and its sticker have been confirmed in-channel.
+                episodes_ready_to_reuse = []
+                episodes_requiring_encode = []
+        
+                for episode_number in range(1, released_episode_count + 1):
+                    await report_stage(
+                        f"checking saved FILE_STORE qualities for {selected_title} "
+                        f"S{season_index:02d}E{episode_number:02d}",
+                        selected_title,
+                    )
+                    ready = await _upload_single_episode(
+                        selected_media, destination_id, season_index, episode_number,
+                        user_client, progress_callback=report_stage, preflight_only=True,
+                    )
+                    if ready:
+                        episodes_ready_to_reuse.append(episode_number)
+                    else:
+                        episodes_requiring_encode.append(episode_number)
+        
+                # Explicitly publish/reuse the single synopsis thumbnail first, then
+                # its sticker. info_only exits before any episode download or upload.
+                await report_stage(
+                    f"publishing the ANIME SOUL synopsis card first for {selected_title}",
+                    selected_title,
+                )
+                await _upload_single_episode(
+                    selected_media, destination_id, season_index, 1,
+                    user_client, progress_callback=report_stage, info_only=True,
+                )
+        
+                await report_stage(
+                    f"synopsis card and opening sticker confirmed; publishing episodes "
+                    f"in order for {selected_title}",
+                    selected_title,
+                )
+        
+                # Merge both work queues and process strictly E01, E02, E03...
+                # This prevents the old two-pass behavior from publishing a later
+                # reusable episode before an earlier episode that needs encoding.
+                reusable_set = set(episodes_ready_to_reuse)
+                encode_set = set(episodes_requiring_encode)
+                for episode_number in sorted(reusable_set | encode_set):
                     async def episode_progress(stage):
                         nonlocal channel_stage
                         channel_stage = stage
@@ -2029,22 +2029,22 @@ async def uploadchannel_callbacks(client, callback):
                         )
                         action = "encoded missing qualities and published"
     
+                    await report_stage(
+                        f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
+                        selected_title,
+                    )
+        
+                await db.set_anime_archive_batch(
+                    anime_id, season_index, destination_id, "complete",
+                    "", f"released-episodes-only S{season_index} 4-quality",
+                )
                 await report_stage(
-                    f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
+                    f"ONGOING SEASON BACKFILL COMPLETE: {selected_title} Season {season_index}; "
+                    f"processed only the {released_episode_count} episode(s) confirmed released by AniList",
                     selected_title,
                 )
-    
-            await db.set_anime_archive_batch(
-                anime_id, season_index, destination_id, "complete",
-                "", f"released-episodes-only S{season_index} 4-quality",
-            )
-            await report_stage(
-                f"ONGOING SEASON BACKFILL COMPLETE: {selected_title} Season {season_index}; "
-                f"processed only the {released_episode_count} episode(s) confirmed released by AniList",
-                selected_title,
-            )
-    
-    
+        
+        
 
         results = await asyncio.gather(
             *(process_archive_job(media, destination_id) for media, destination_id in archive_jobs),
