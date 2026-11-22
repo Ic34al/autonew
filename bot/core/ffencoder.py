@@ -473,6 +473,16 @@ class FFEncoder:
                 LOGS.info(f"FFmpeg command after auto-fix: {fixed}")
                 ffcode = fixed
 
+        # Commands use the generic ffmpeg executable name. Replace it with
+        # the resolved binary, including imageio-ffmpeg's bundled executable.
+        if ffcode:
+            ffcode = re.sub(
+                r"^ffmpeg(?=\\s)",
+                shlex.quote(ffmpeg_executable),
+                ffcode,
+                count=1,
+            )
+
         if not ffcode or (self.__prog_file not in ffcode) or ('-progress' not in ffcode) or (out_npath not in ffcode):
             LOGS.error("FFmpeg command validation failed: progress file missing in command")
             await rep.report(
