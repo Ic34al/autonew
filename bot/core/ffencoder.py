@@ -559,17 +559,17 @@ class FFEncoder:
 
             if output_name in ffcode:
                 ffcode = ffcode.replace(
-                    output_name, f"-threads 1 {output_name}", 1
+                    output_name, f"-threads 0 {output_name}", 1
                 )
             elif double_output_name in ffcode:
                 ffcode = ffcode.replace(
                     double_output_name,
-                    f"-threads 1 {double_output_name}",
+                    f"-threads 0 {double_output_name}",
                     1,
                 )
             elif out_npath in ffcode:
                 ffcode = ffcode.replace(
-                    out_npath, f"-threads 1 {out_npath}", 1
+                    out_npath, f"-threads 0 {out_npath}", 1
                 )
         LOGS.info(f'Using FFmpeg command: {ffcode}')
         if not ffcode:
