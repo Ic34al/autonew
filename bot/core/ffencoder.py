@@ -697,62 +697,64 @@ class FFEncoder:
                 f"CRF {crf_value}, audio {audio_bitrate}."
             )
 
-        # Keep every encoded quality safely below Telegram's 2,000 MiB Bot API
-        # ceiling. Use a 1,800 MiB target (including a 10% safety margin) and
-        # VBV rate control so CRF retains quality until the calculated ceiling.
-        # This is duration-based: long episodes/movies receive a lower ceiling,
-        # while short episodes keep the bitrate needed for their resolution.
+        # Keep outputs comfortably below Telegram's 2,000 MiB Bot API limit.
+        # A 1,600 MiB target leaves room for container metadata, multiple audio
+        # streams and Telegram's own size accounting. CRF remains the quality
+        # controller; VBV maxrate/bufsize only constrain peaks for long sources.
+        # This is applied to the final command after custom templates are loaded,
+        # so anime-specific settings cannot silently bypass the upload-size cap.
         try:
             source_duration = float(await mediainfo(dl_npath, get_duration=True))
-            if source_duration > 0:
-                target_bytes = 1800 * 1024 * 1024
-                target_total_bps = int((target_bytes * 8 / source_duration) * 0.90)
-                # Reserve 768 kb/s for audio, muxing and stream overhead.
-                video_maxrate = max(200_000, target_total_bps - 768_000)
-                video_bufsize = video_maxrate * 2
+            if source_duration <= 0:
+                raise ValueError(f"Invalid source duration: {source_duration!r}")
 
-                # A stream-copy template cannot obey a bitrate ceiling. Convert
-                # that case to H.264; other configured video codecs are retained.
-                ffcode = re.sub(
-                    r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+copy(?=\\s|$)",
-                    "-c:v libx264",
-                    ffcode,
-                )
-                if re.search(r"(?i)(?<![\\w-])-maxrate\\s+\\S+", ffcode):
-                    ffcode = re.sub(
-                        r"(?i)(?<![\\w-])-maxrate\\s+\\S+",
-                        f"-maxrate {video_maxrate}",
-                        ffcode,
-                    )
-                else:
-                    ffcode = ffcode.replace(
-                        f"'{out_npath}'", f"-maxrate {video_maxrate} '{out_npath}'", 1
-                    ) if f"'{out_npath}'" in ffcode else ffcode.replace(
-                        f'"{out_npath}"', f'-maxrate {video_maxrate} "{out_npath}"', 1
-                    )
-                if re.search(r"(?i)(?<![\\w-])-bufsize\\s+\\S+", ffcode):
-                    ffcode = re.sub(
-                        r"(?i)(?<![\\w-])-bufsize\\s+\\S+",
-                        f"-bufsize {video_bufsize}",
-                        ffcode,
-                    )
-                else:
-                    ffcode = ffcode.replace(
-                        f"'{out_npath}'", f"-bufsize {video_bufsize} '{out_npath}'", 1
-                    ) if f"'{out_npath}'" in ffcode else ffcode.replace(
-                        f'"{out_npath}"', f'-bufsize {video_bufsize} "{out_npath}"', 1
-                    )
-                LOGS.info(
-                    f"Telegram-safe size profile for {self.__name} ({self.__qual}p): "
-                    f"duration={source_duration:.1f}s, video maxrate={video_maxrate} bps, "
-                    f"target output<=1800 MiB."
-                )
-        except Exception as size_profile_error:
-            LOGS.warning(
-                f"Could not calculate Telegram-safe bitrate for {self.__name} "
-                f"({self.__qual}p): {type(size_profile_error).__name__}: {size_profile_error}. "
-                "Keeping the configured quality profile."
+            target_bytes = 1600 * 1024 * 1024
+            target_total_bps = int((target_bytes * 8 / source_duration) * 0.88)
+            # Reserve bandwidth for audio (including alternate tracks), subtitles,
+            # container overhead and bitrate variation.
+            video_maxrate = max(250_000, target_total_bps - 1_200_000)
+            video_bufsize = video_maxrate * 2
+
+            # A stream-copy video cannot be rate-limited. Transcode it rather
+            # than allowing an oversized source stream through unchanged.
+            ffcode = re.sub(
+                r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+copy(?=\\s|$)",
+                "-c:v libx264",
+                ffcode,
             )
+
+            for option, value in (("-maxrate", video_maxrate), ("-bufsize", video_bufsize)):
+                option_pattern = rf"(?i)(?<![\\w-]){re.escape(option)}\\s+\\S+"
+                if re.search(option_pattern, ffcode):
+                    ffcode = re.sub(option_pattern, f"{option} {value}", ffcode)
+                    continue
+
+                output_token = shlex.quote(out_npath)
+                if output_token not in ffcode:
+                    output_token = next(
+                        (token for token in (f"'{out_npath}'", f'"{out_npath}"', out_npath)
+                         if token in ffcode),
+                        None,
+                    )
+                if not output_token:
+                    raise RuntimeError("Cannot insert Telegram size limits: output path not found.")
+                ffcode = ffcode.replace(output_token, f"{option} {value} {output_token}", 1)
+
+            LOGS.info(
+                f"Telegram-safe size profile for {self.__name} ({self.__qual}p): "
+                f"duration={source_duration:.1f}s, video maxrate={video_maxrate} bps, "
+                "target output<=1600 MiB."
+            )
+        except Exception as size_profile_error:
+            # Do not silently proceed with a potentially unbounded custom encode.
+            self.last_error = (
+                f"Could not apply Telegram-safe output-size profile: "
+                f"{type(size_profile_error).__name__}: {size_profile_error}"
+            )
+            LOGS.exception(f"Could not apply Telegram-safe bitrate for {self.__name} ({self.__qual}p)")
+            if not self.quiet_errors:
+                await rep.report(self.last_error, "error")
+            return None
 
         # /pause may be pressed while the FFmpeg command is being prepared.
         # Restore the source file and do not start a new encode in that case.
