@@ -955,8 +955,20 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 search_queries = []
                 for alias in title_aliases:
                     query = str(alias or "").strip()
-                    if query and query not in search_queries:
-                        search_queries.append(query[:64])
+                    if not query:
+                        continue
+                    # Telegram caption search is more reliable with a short
+                    # distinctive title prefix than with a long subtitle.
+                    # Search both the full alias and compact prefixes so old
+                    # FILE_STORE captions still surface for reuse.
+                    candidates = [query[:64]]
+                    words = re.findall(r"[A-Za-z0-9]+", query)
+                    if len(words) >= 3:
+                        candidates.extend((" ".join(words[:4]), " ".join(words[:3])))
+                    for candidate in candidates:
+                        candidate = candidate.strip()[:64]
+                        if candidate and candidate not in search_queries:
+                            search_queries.append(candidate)
                 if not search_queries:
                     raise RuntimeError(f"No searchable title aliases are available for {title}.")
     
