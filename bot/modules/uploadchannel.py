@@ -861,38 +861,42 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             encode_status, quality_source, upload_name, quality,
             force_encode=True, bypass_pause=True, quiet_errors=True,
         )
-        encoded_path = await encoder.start_encode()
-
-        # A custom per-anime FFmpeg command can fail on a particular source
-        # (e.g. missing subtitle/audio streams). Retry once with the repository's
-        # known default quality command; preserve all earlier successful quality
-        # uploads and do not restart the episode.
-        if not encoded_path or not os.path.exists(encoded_path):
-            partial_output = os.path.join("encode", "ffanimeadvout.mkv")
-            if os.path.exists(partial_output):
-                os.remove(partial_output)
-            await rep.report(
-                f"Custom FFmpeg encode failed for S{season_number}E{episode_number} at {quality}; "
-                "retrying once with the safe default FFmpeg profile.",
-                "warning",
-                log=False,
-            )
-            fallback_encoder = FFEncoder(
+        encoded_path = None
+        encode_error = None
+        max_encode_attempts = 3
+        for encode_attempt in range(1, max_encode_attempts + 1):
+            if encode_attempt > 1:
+                await create_optional_log_message(
+                    f"<b>Retrying encode:</b> {_escape(title)} "
+                    f"S{target_season:02d}E{target_episode:02d} — {quality}p "
+                    f"({encode_attempt}/{max_encode_attempts})"
+                )
+            encoder = FFEncoder(
                 encode_status, quality_source, upload_name, quality,
-                force_default=True, force_encode=True,
-                bypass_pause=True, quiet_errors=True,
+                force_default=(encode_attempt > 1),
+                force_encode=True, bypass_pause=True, quiet_errors=True,
             )
-            encoded_path = await fallback_encoder.start_encode()
+            try:
+                encoded_path = await encoder.start_encode()
+                if encoded_path and os.path.exists(encoded_path) and os.path.getsize(encoded_path) > 0:
+                    encode_error = None
+                    break
+                encode_error = getattr(encoder, "last_error", None) or (
+                    "FFmpeg did not produce a valid output file."
+                )
+            except Exception as current_encode_error:
+                encode_error = (
+                    f"{type(current_encode_error).__name__}: {current_encode_error}"
+                )
+                encoded_path = None
+            if encode_attempt < max_encode_attempts:
+                await asyncio.sleep(2 * encode_attempt)
 
-        if not encoded_path or not os.path.exists(encoded_path):
-            diagnostic = (
-                getattr(fallback_encoder, "last_error", None)
-                or getattr(encoder, "last_error", None)
-                or "FFmpeg did not produce an output file."
-            )
+        if not encoded_path or not os.path.exists(encoded_path) or os.path.getsize(encoded_path) <= 0:
             raise RuntimeError(
-                f"Encoding failed for S{season_number}E{episode_number} at {quality}: "
-                f"{diagnostic}. Earlier uploaded qualities remain saved."
+                f"Encoding failed for {title} S{target_season:02d}E{target_episode:02d} "
+                f"at {quality} after {max_encode_attempts} attempts: "
+                f"{encode_error or 'no output produced'}. Earlier qualities remain saved."
             )
         await set_progress(f"Uploading {title} S{target_season:02d}E{target_episode:02d} {quality}p to FILE_STORE.")
         upload_status = await create_optional_log_message(
