@@ -15,8 +15,6 @@ from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
 from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
-from bot.core.auto_animes import fetch_animes
-
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
 async def restart(client, message):
@@ -126,21 +124,6 @@ async def load_settings():
     LOGS.info(f"Settings loaded! Admins: {Var.ADMINS}")
     
 
-async def rss_fetcher_supervisor():
-    """Keep automatic RSS uploads alive if the scanner exits unexpectedly."""
-    retry_delay = 5
-    while True:
-        try:
-            LOGS.info("Starting supervised automatic anime RSS scanner...")
-            await fetch_animes()
-            LOGS.error("Automatic anime RSS scanner exited unexpectedly; restarting.")
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            LOGS.exception("Automatic anime RSS scanner crashed; it will restart.")
-        await asleep(retry_delay)
-        retry_delay = min(retry_delay * 2, 60)
-
 
 async def main():
     # Keep references to application-owned tasks; Pyrofork owns its
@@ -171,12 +154,11 @@ async def main():
 
                 LOGS.info("Starting tasks...")
                 LOGS.info(
-                    "Automatic ongoing anime detection/upload is ON; "
-                    "dual-audio releases are manual-only."
+                    "Automatic RSS anime uploads are OFF. "
+                    "Manual /uploadchannel remains available."
                 )
                 tasks = [
                     create_task(queue_loop(), name="app-queue-loop"),
-                    create_task(rss_fetcher_supervisor(), name="app-rss-supervisor"),
                 ]
 
                 LOGS.info("Auto Anime Bot Started!")
