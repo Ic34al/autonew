@@ -1448,7 +1448,10 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             buttons = []
             btns = []
             post_id = None
-            for qual in ["480", "720", "1080"]:
+            # All four published qualities are mandatory. SubsPlease has no
+            # dedicated HDRip RSS feed, so HDRip is encoded from the matching
+            # 1080p release instead of silently being skipped.
+            for qual in ["480", "720", "1080", "HDRi"]:
                 saved_msg_id = saved_file_ids.get(qual)
                 if saved_msg_id:
                     try:
@@ -1457,89 +1460,135 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                         )
                         if stored_msg and not getattr(stored_msg, "empty", False):
                             file_store_links[qual] = int(saved_msg_id)
-                            await rep.report(
-                                f"Resume: reusing existing {qual} upload for {name}; skipping encode.",
-                                "info"
-                            )
                             continue
                     except Exception as verify_error:
                         await rep.report(
-                            f"Saved {qual} upload is unavailable; retrying this quality: {verify_error}",
-                            "warning"
+                            f"Saved {qual} upload is unavailable; rebuilding this quality: {verify_error}",
+                            "warning",
+                            log=False,
                         )
 
                 rss_link = Var.RSS_LOW_END.get(qual)
+                if qual == "HDRi":
+                    rss_link = rss_link or Var.RSS_LOW_END.get("1080")
                 if not rss_link:
-                    continue
-                feed = await find_matching_quality_release(rss_link, name)
-                if not feed or not feed.get("link"):
                     await rep.report(
-                        f"No matching {qual}p release found for this exact episode yet: {name}",
-                        "warning"
+                        f"No SubsPlease RSS source is configured for required quality {qual}.",
+                        "error",
                     )
                     continue
 
-                await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Downloading matching {qual}p release...</i></pre>")
-                dl_path = await download_torrent(feed["link"])
-                if not dl_path:
-                    await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to download {qual}p</i></pre>")
+                feed = await find_matching_quality_release(rss_link, name)
+                if not feed or not feed.get("link"):
+                    await rep.report(
+                        f"No matching SubsPlease source found for {qual} ({name}).",
+                        "warning",
+                        log=False,
+                    )
                     continue
 
-                if Var.LOW_END_RENAME:
-                        editor = TextEditor(name)
-                        filename = await aniInfo.get_upname(qual)
-                        anime_format = aniInfo.adata.get("format", "").lower()
-                        is_movie = anime_format == "movie"
-                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Encode...</i></pre>")
-                        await asleep(1.5)
-                        await rep.report("Starting Encode...", "info")
-                        try:
-                            out_path = await FFEncoder(stat_msg, dl_path, filename, qual, is_movie=is_movie).start_encode()
-                        except Exception as e:
-                            await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await stat_msg.delete()
-                            return
-                        await rep.report("Successfully Compressed Now Going To Upload...", "info")
-                        await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name:</b> <b><i>{filename}</i></b></blockquote>\n\n<pre><i>Ready to Upload...</i></pre>")
-                        await asleep(1.5)
-                        try:
-                            msg = await TgUploader(stat_msg).upload(out_path, qual)
-                        except Exception as e:
-                            await rep.report(f"Error: {e}, Cancelled, Retry Again !", "error")
-                            await stat_msg.delete()
-                            return
-                        await rep.report("Successfully Uploaded File into Channel...", "info")
-                        msg_id = msg.id
-                        file_store_links[qual] = msg_id
-                        await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
-                        await db.saveAnime(ani_id, ep_no, qual, None)
-                        saved_file_ids[qual] = msg_id
-                        link = f"https://telegram.me/{Var.FILE_SHARE_BOT_USERNAME}?start={{}}".format(await encode('get-'+str(msg_id * abs(Var.FILE_STORE))))
-                        if len(btns) != 0 and len(btns[-1]) == 1:
-                            btns[-1].insert(1, InlineKeyboardButton(f"{btn_formatter[qual]}", url=link))
-                        else:
-                            btns.append([InlineKeyboardButton(f"{btn_formatter[qual]}", url=link)])
-                        await db.saveAnime(ani_id, ep_no, qual, None)
-                        bot_loop.create_task(extra_utils(msg_id, out_path))
+                await editMessage(
+                    stat_msg,
+                    f"<b>{name}</b>\nDownloading source for {btn_formatter.get(qual, qual)}...",
+                )
+                dl_path = await download_torrent(feed["link"])
+                if not dl_path or not ospath.exists(dl_path):
+                    await rep.report(
+                        f"SubsPlease torrent download failed for {name} ({qual}).",
+                        "error",
+                    )
+                    continue
 
-                        gdrive_status = await db.get_gdrive_upload()
-                        if gdrive_status == "on":
-                            possible_names = await get_all_possible_anime_names(cleaned_name)
-                            gdrive_link = None
-                            for check_name in possible_names:
-                                gdrive_link = await db.get_gdrive_mapping(check_name, qual)
-                                if gdrive_link:
-                                    try:
-                                        from bot.core.gdrive import GdriveUploader
-                                        await rep.report(f"Uploading to GDrive for {check_name} - {qual}p", "info")
-                                        gdrive_uploader = GdriveUploader()
-                                        await gdrive_uploader.upload_file(out_path, gdrive_link)
-                                        await rep.report(f"Uploaded to GDrive for {check_name} - {qual}p", "info")
-                                    except Exception as e:
-                                        await rep.report(f"GDrive upload failed for {check_name} - {qual}p: {e}", "error")
-                                    break
-                else:
-                    await editMessage(stat_msg, f"<blockquote>â£ <b>Anime Name :</b> <b><i>{name}</i></b></blockquote>\n\n<pre><i>Failed to upload {qual}p</i></pre>")
+                filename = await aniInfo.get_upname(qual)
+                anime_format = str(aniInfo.adata.get("format", "")).lower()
+                is_movie = anime_format == "movie"
+                out_path = None
+                last_encode_error = None
+
+                # Three real attempts: saved/custom profile, safe stream mapping,
+                # then minimal H.264/AAC. Each attempt gets a fresh encoder and
+                # FFEncoder restores the downloaded source after a failed run.
+                for encode_attempt in range(3):
+                    await editMessage(
+                        stat_msg,
+                        f"<b>{name}</b>\nEncoding {btn_formatter.get(qual, qual)} "
+                        f"(attempt {encode_attempt + 1}/3)...",
+                    )
+                    encoder = FFEncoder(
+                        stat_msg,
+                        dl_path,
+                        filename,
+                        qual,
+                        is_movie=is_movie,
+                        force_encode=True,
+                        quiet_errors=True,
+                        fallback_mode=encode_attempt,
+                    )
+                    try:
+                        candidate = await encoder.start_encode()
+                    except Exception as encode_exc:
+                        candidate = None
+                        encoder.last_error = f"{type(encode_exc).__name__}: {encode_exc}"
+                    if candidate and ospath.exists(candidate) and ospath.getsize(candidate) > 0:
+                        out_path = candidate
+                        break
+                    last_encode_error = encoder.last_error or "FFmpeg produced no valid output"
+                    LOGS.warning(
+                        f"{qual} encode attempt {encode_attempt + 1}/3 failed for {name}: "
+                        f"{last_encode_error}"
+                    )
+
+                if not out_path:
+                    await rep.report(
+                        f"Encoding failed for {name} ({qual}) after 3 attempts: "
+                        f"{str(last_encode_error)[:700]}",
+                        "error",
+                    )
+                    continue
+
+                await editMessage(
+                    stat_msg,
+                    f"<b>{name}</b>\nUploading encoded {btn_formatter.get(qual, qual)}...",
+                )
+                try:
+                    msg = await TgUploader(stat_msg).upload(out_path, qual)
+                except Exception as upload_exc:
+                    await rep.report(
+                        f"FILE_STORE upload failed for {name} ({qual}): {upload_exc}",
+                        "error",
+                    )
+                    continue
+
+                if not msg or not getattr(msg, "id", None):
+                    await rep.report(
+                        f"FILE_STORE did not confirm {qual} upload for {name}.",
+                        "error",
+                    )
+                    continue
+
+                msg_id = int(msg.id)
+                file_store_links[qual] = msg_id
+                saved_file_ids[qual] = msg_id
+                await db.saveAnimeFileId(ani_id, ep_no, qual, msg_id)
+                await db.saveAnime(ani_id, ep_no, qual, None)
+                bot_loop.create_task(extra_utils(msg_id, out_path))
+
+                gdrive_status = await db.get_gdrive_upload()
+                if gdrive_status == "on":
+                    possible_names = await get_all_possible_anime_names(cleaned_name)
+                    for check_name in possible_names:
+                        gdrive_link = await db.get_gdrive_mapping(check_name, qual)
+                        if gdrive_link:
+                            try:
+                                from bot.core.gdrive import GdriveUploader
+                                await GdriveUploader().upload_file(out_path, gdrive_link)
+                            except Exception as gdrive_error:
+                                await rep.report(
+                                    f"GDrive upload failed for {check_name} - {qual}: {gdrive_error}",
+                                    "warning",
+                                    log=False,
+                                )
+                            break
 
             quality_order = ["480", "720", "1080", "HDRi"]
             all_buttons = []
