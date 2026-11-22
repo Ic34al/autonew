@@ -5,10 +5,157 @@ import asyncio
 import re
 
 class MongoDB:
+    async def getAnimeArchiveEpisodePost(self, ani_id, season, episode, channel_id):
+        """Return the durable /uploadchannel episode-card checkpoint for one destination."""
+        if ani_id is None or season is None or episode is None or channel_id is None:
+            return None
+        key = f"uploadchannel:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one({"_id": key})
+        return record.get("message_id") if record else None
+
+    async def saveAnimeArchiveEpisodePost(
+        self, ani_id, season, episode, channel_id, message_id, migrated=False
+    ):
+        """Persist a confirmed episode card; MongoDB _id makes the checkpoint idempotent."""
+        if any(value is None for value in (ani_id, season, episode, channel_id, message_id)):
+            return
+        key = f"uploadchannel:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {
+                "$set": {
+                    "ani_id": int(ani_id),
+                    "season": int(season),
+                    "episode": int(episode),
+                    "channel_id": int(channel_id),
+                    "message_id": int(message_id),
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now, "migrated_from_history": bool(migrated)},
+            },
+            upsert=True,
+        )
+
+    async def getAnimeArchiveInfoPost(self, ani_id, season, episode, channel_id):
+        """Return the durable /uploadchannel anime-info-card checkpoint for one destination."""
+        if ani_id is None or season is None or episode is None or channel_id is None:
+            return None
+        key = f"uploadchannel:info:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one({"_id": key})
+        return record.get("message_id") if record else None
+
+    async def saveAnimeArchiveInfoPost(
+        self, ani_id, season, episode, channel_id, message_id
+    ):
+        """Persist a confirmed info card independently from the episode/share card."""
+        if any(value is None for value in (ani_id, season, episode, channel_id, message_id)):
+            return
+        key = f"uploadchannel:info:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {
+                "$set": {
+                    "ani_id": int(ani_id),
+                    "season": int(season),
+                    "episode": int(episode),
+                    "channel_id": int(channel_id),
+                    "message_id": int(message_id),
+                    "card_type": "anime_info",
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+
+    async def getAnimeArchiveChannelInfoPost(self, ani_id, channel_id):
+        """One synopsis/info card per anime and destination channel."""
+        if ani_id is None or channel_id is None:
+            return None
+        key = f"uploadchannel:info:{int(ani_id)}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one({"_id": key})
+        return record.get("message_id") if record else None
+
+    async def saveAnimeArchiveChannelInfoPost(self, ani_id, channel_id, message_id):
+        if any(value is None for value in (ani_id, channel_id, message_id)):
+            return
+        key = f"uploadchannel:info:{int(ani_id)}:c{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {"$set": {
+                "ani_id": int(ani_id),
+                "channel_id": int(channel_id),
+                "message_id": int(message_id),
+                "card_type": "anime_info",
+                "updated_at": now,
+            }, "$setOnInsert": {"created_at": now}},
+            upsert=True,
+        )
+
+    async def getAnimeArchiveChannelInfoVersion(self, ani_id, channel_id):
+        if ani_id is None or channel_id is None:
+            return None
+        key = f"uploadchannel:info:{int(ani_id)}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one(
+            {"_id": key}, {"card_version": 1}
+        )
+        return record.get("card_version") if record else None
+
+    async def saveAnimeArchiveChannelInfoVersion(self, ani_id, channel_id, version):
+        if any(value is None for value in (ani_id, channel_id, version)):
+            return
+        key = f"uploadchannel:info:{int(ani_id)}:c{int(channel_id)}"
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {"$set": {"card_version": str(version), "updated_at": datetime.datetime.utcnow()}},
+            upsert=True,
+        )
+
+    async def getAnimeArchiveStickerPost(self, ani_id, season, episode, channel_id, stage):
+        if any(value is None for value in (ani_id, season, episode, channel_id, stage)):
+            return None
+        key = f"uploadchannel:sticker:{int(ani_id)}:s{int(season):02d}e{str(episode)}:c{int(channel_id)}:{str(stage)}"
+        record = await self.__anime_archive_episode_posts.find_one({"_id": key})
+        return record.get("message_id") if record else None
+
+    async def saveAnimeArchiveStickerPost(self, ani_id, season, episode, channel_id, stage, message_id):
+        if any(value is None for value in (ani_id, season, episode, channel_id, stage, message_id)):
+            return
+        key = f"uploadchannel:sticker:{int(ani_id)}:s{int(season):02d}e{str(episode)}:c{int(channel_id)}:{str(stage)}"
+        now = datetime.datetime.utcnow()
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {"$set": {
+                "ani_id": int(ani_id),
+                "season": int(season),
+                "episode": str(episode),
+                "channel_id": int(channel_id),
+
+    async def getAnimeDestinationPostExact(self, ani_id, ep, channel_id):
+        """Return only a post explicitly recorded for this destination channel."""
+        if ani_id is None or ep is None or channel_id is None:
+            return None
+        anime_data = await self.__animes.find_one(
+            {"_id": ani_id},
+            {f"{str(ep)}.destination_posts.{int(channel_id)}": 1},
+        )
+        if not anime_data:
+            return None
+        episode_data = anime_data.get(str(ep), {})
+        if not isinstance(episode_data, dict):
+            return None
+        posts = episode_data.get("destination_posts", {})
+        return posts.get(str(int(channel_id))) if isinstance(posts, dict) else None
+
+
     def __init__(self, uri, database_name):
         self.__client = AsyncIOMotorClient(uri)
         self.__db = self.__client[database_name]
         self.__animes = self.__db.animes[Var.BOT_TOKEN.split(':')[0]]
+        self.__anime_archive_episode_posts = self.__db.anime_archive_episode_posts
         self.__anime_channels = self.__db.anime_channels
         self.__manga_channels = self.__db.manga_channels
         self.__manga_banners = self.__db.manga_banners
