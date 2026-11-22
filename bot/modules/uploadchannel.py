@@ -1221,12 +1221,48 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"RSS source matched: {episode['title']} — {episode['link']}",
             "success",
         )
-        await set_progress(f"Downloading torrent for {title} S{target_season:02d}E{target_episode:02d}.")
+        download_started_at = time.monotonic()
+        download_status = await create_optional_log_message(
+            f"<b>Download starting:</b> {_escape(title)} "
+            f"S{target_season:02d}E{target_episode:02d}\\n"
+            "Torrent client is being started; encoding has not started yet."
+        )
+        await set_progress(
+            f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}."
+        )
         await rep.report(
             f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}.",
             "info",
         )
-        downloaded = _coerce_path(await TorDownloader(workdir).download(episode["link"]))
+        download_task = asyncio.create_task(
+            TorDownloader(workdir).download(episode["link"])
+        )
+        # Torrent clients can be quiet for several minutes while connecting to
+        # peers. Keep both the command status and Anime Logs alive so the job
+        # never appears stuck at "Downloading" without explaining its state.
+        while not download_task.done():
+            done, _ = await asyncio.wait({download_task}, timeout=15)
+            if not done:
+                elapsed = int(time.monotonic() - download_started_at)
+                heartbeat = (
+                    f"<b>Downloading torrent:</b> {_escape(title)} "
+                    f"S{target_season:02d}E{target_episode:02d}\\n"
+                    f"Torrent client is still running ({elapsed}s elapsed). "
+                    "FFmpeg encoding has not started yet."
+                )
+                await create_optional_log_message(heartbeat)
+                await set_progress(
+                    f"Downloading torrent for {title} S{target_season:02d}E{target_episode:02d}; "
+                    f"torrent client still running ({elapsed}s)."
+                )
+        downloaded = _coerce_path(await download_task)
+        download_elapsed = int(time.monotonic() - download_started_at)
+        if download_status:
+            await create_optional_log_message(
+                f"<b>Download completed:</b> {_escape(title)} "
+                f"S{target_season:02d}E{target_episode:02d}\\n"
+                f"Torrent download finished in {download_elapsed}s; checking source video."
+            )
         if not downloaded or not os.path.exists(downloaded):
             raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
         video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
