@@ -865,15 +865,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         encode_error = None
         max_encode_attempts = 3
         for encode_attempt in range(1, max_encode_attempts + 1):
-            if encode_attempt > 1:
-                await create_optional_log_message(
-                    f"<b>Retrying encode:</b> {_escape(title)} "
-                    f"S{target_season:02d}E{target_episode:02d} — {quality}p "
-                    f"({encode_attempt}/{max_encode_attempts})"
-                )
             encoder = FFEncoder(
                 encode_status, quality_source, upload_name, quality,
                 force_default=(encode_attempt > 1),
+                fallback_mode=encode_attempt - 1,
                 force_encode=True, bypass_pause=True, quiet_errors=True,
             )
             try:
