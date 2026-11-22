@@ -2498,6 +2498,11 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
+# Preserve the info-card-capable ANIME SOUL dashboard builder before legacy
+# duplicate definitions later in this module shadow its public name.
+_build_anime_soul_poster_with_info_card = build_anime_soul_poster
+
+
 async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False):
     mode = await db.get_mode()
     if mode != "anime":
@@ -9410,3 +9415,9 @@ async def upload_file(file_path, quality):
     except Exception as e:
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
+
+
+# The first builder implements the exact split-screen synopsis/episode design.
+# Restore it after legacy duplicate definitions so uploadchannel's
+# `info_card=True` call is accepted and renders the intended 16:9 card.
+build_anime_soul_poster = _build_anime_soul_poster_with_info_card
