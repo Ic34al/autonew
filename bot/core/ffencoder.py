@@ -501,12 +501,12 @@ class FFEncoder:
         # encoder use FFmpeg's available CPU threads instead of forcing one.
         if ffcode:
             ffcode, preset_count = re.subn(
-                r"(?i)(-preset\\s+)(ultrafast|superfast|veryfast|faster|fast|medium|slow|slower|veryslow)",
+                r"(?i)(-preset\s+)(ultrafast|superfast|veryfast|faster|fast|medium|slow|slower|veryslow)",
                 r"\\1ultrafast",
                 ffcode,
             )
             ffcode, thread_count = re.subn(
-                r"(?i)(?<![\\w-])-threads\\s+1(?!\\d)",
+                r"(?i)(?<![\w-])-threads\s+1(?!\d)",
                 "-threads 0",
                 ffcode,
             )
