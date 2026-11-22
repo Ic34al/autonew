@@ -645,19 +645,44 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # The existing Monkey file-share bot is already an administrator
         # in this storage channel. Do not promote Auto Anime Uploader here:
         # its BOT_TOKEN is only used to publish episode cards, not to serve files.
+        # A 5,000-message history scan can otherwise look like a frozen command:
+        # publish progress while scanning and fail with a clear timeout instead.
         scanned_storage_messages = 0
-        async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
-            scanned_storage_messages += 1
-            media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
-            media_name = getattr(media_obj, "file_name", None) if media_obj else None
-            # Captions contain the canonical [Sxx-yy] title [quality] tags in
-            # this storage channel; prefer them over shortened/truncated names.
-            parsed = _parse_storage_record(getattr(stored, "caption", None)) or _parse_storage_record(media_name)
-            if parsed:
-                storage_records.append((parsed, int(stored.id)))
+
+        async def _scan_storage_history():
+            nonlocal scanned_storage_messages
+            async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
+                scanned_storage_messages += 1
+                media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
+                media_name = getattr(media_obj, "file_name", None) if media_obj else None
+                # Captions contain canonical [Sxx-yy] title [quality] tags;
+                # prefer them over shortened/truncated filenames.
+                parsed = (
+                    _parse_storage_record(getattr(stored, "caption", None))
+                    or _parse_storage_record(media_name)
+                )
+                if parsed:
+                    storage_records.append((parsed, int(stored.id)))
+                if scanned_storage_messages % 100 == 0:
+                    await set_progress(
+                        f"Scanning FILE_STORE history for {title} "
+                        f"S{target_season:02d}E{target_episode:02d}: "
+                        f"{scanned_storage_messages}/5000 messages checked."
+                    )
+
+        try:
+            await asyncio.wait_for(_scan_storage_history(), timeout=180)
+        except asyncio.TimeoutError as scan_error:
+            raise RuntimeError(
+                f"FILE_STORE history scan timed out after 180 seconds "
+                f"({scanned_storage_messages}/5000 messages checked). "
+                "Check USER_SESSION access and FILE_STORE_LINK, then retry."
+            ) from scan_error
+
         await rep.report(
             f"FILE_STORE reuse scan resolved channel {storage_chat_id}; "
-            f"scanned {scanned_storage_messages} messages and indexed {len(storage_records)} episode-quality files.",
+            f"scanned {scanned_storage_messages} messages and indexed "
+            f"{len(storage_records)} episode-quality files.",
             "info",
             log=False,
         )
