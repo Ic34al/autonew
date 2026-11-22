@@ -475,11 +475,145 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 torrent_link = f"https://nyaa.si/download/{match.group(1)}.torrent"
             return {"title": title, "link": str(torrent_link)}
 
+    # RSS is a rolling window and may not contain an older episode even
+    # though SubsPlease still exposes it through its search API. Query the
+    # official API for each AniList title/synonym, then validate the exact
+    # show, episode, season, and downloadable quality before accepting it.
+    api_scanned = 0
+    try:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            headers={"User-Agent": "Mozilla/5.0 (compatible; AnimeSoulBot/1.0)"},
+        ) as api_client:
+            api_payloads = []
+            for alias in search_aliases:
+                try:
+                    response = await api_client.get(
+                        "https://subsplease.org/api/",
+                        params={"f": "search", "tz": "Etc/GMT", "s": alias},
+                    )
+                    response.raise_for_status()
+                    api_payloads.append(response.json())
+                except Exception as api_error:
+                    await rep.report(
+                        f"SubsPlease API search failed for '{alias}': "
+                        f"{type(api_error).__name__}: {api_error}",
+                        "warning", log=False,
+                    )
+            try:
+                latest_response = await api_client.get(
+                    "https://subsplease.org/api/",
+                    params={"f": "latest", "tz": "Etc/GMT"},
+                )
+                latest_response.raise_for_status()
+                api_payloads.append(latest_response.json())
+            except Exception as latest_error:
+                await rep.report(
+                    f"SubsPlease latest API fallback failed: {type(latest_error).__name__}: {latest_error}",
+                    "warning", log=False,
+                )
+
+        api_seen = set()
+        for payload in api_payloads:
+            if not isinstance(payload, dict):
+                continue
+            items = (
+                payload.get("results") or payload.get("latest")
+                or payload.get("releases") or payload.get("data") or {}
+            )
+            iterable = items.items() if isinstance(items, dict) else enumerate(items) if isinstance(items, list) else []
+            for release_key, item in iterable:
+                if not isinstance(item, dict):
+                    continue
+                api_scanned += 1
+                show_name = str(item.get("show") or "").strip()
+                episode_name = str(item.get("episode") or "").strip()
+                release_label = str(item.get("title") or release_key or "").strip()
+                candidate_show = _plain_title(show_name or release_label)
+                show_match = any(
+                    _plain_title(alias) == candidate_show
+                    or (
+                        len(_plain_title(alias).split()) >= 2
+                        and set(_plain_title(alias).split()).issubset(set(candidate_show.split()))
+                    )
+                    for alias in search_aliases
+                    if _plain_title(alias)
+                )
+                if not show_match:
+                    continue
+
+                # SubsPlease search results usually expose episode as "08";
+                # some API responses include the season marker in title/episode.
+                episode_text = episode_name or release_label
+                episode_match = re.search(
+                    r"(?i)(?:\\bS\\s*0*%d\\s*[-._ ]*E?\\s*0*|"
+                    r"\\bEpisode\\s*|\\bEp\\s*)0*(\\d{1,3})\\b" % season,
+                    episode_text,
+                )
+                if episode_match:
+                    found_episode = int(episode_match.group(1))
+                elif re.fullmatch(r"0*\\d{1,3}(?:v\\d+)?", episode_text, re.I):
+                    found_episode = int(re.match(r"0*(\\d+)", episode_text).group(1))
+                else:
+                    found_episode = auto_anime_core.extract_release_episode(
+                        f"{show_name} {episode_text} {release_label}"
+                    )
+                    found_episode = int(found_episode) if found_episode is not None else None
+                if found_episode != episode:
+                    continue
+
+                detected_season = (
+                    _season_number_from_release(episode_text)
+                    or _season_number_from_release(release_label)
+                    or _season_number_from_release(show_name)
+                )
+                if detected_season is not None and detected_season != season:
+                    continue
+                if season > 1 and detected_season != season:
+                    continue
+
+                downloads = item.get("downloads") or []
+                if isinstance(downloads, dict):
+                    downloads = list(downloads.values())
+                ranked = []
+                for download in downloads:
+                    if not isinstance(download, dict):
+                        continue
+                    candidate = (
+                        download.get("magnet") or download.get("torrent")
+                        or download.get("url")
+                    )
+                    if not candidate:
+                        continue
+                    candidate = str(candidate).strip()
+                    resolution = str(
+                        download.get("res") or download.get("resolution") or ""
+                    ).strip()
+                    rank = {"720": 0, "1080": 1, "480": 2}.get(
+                        re.sub(r"[^0-9]", "", resolution), 3
+                    )
+                    ranked.append((rank, candidate, resolution))
+                for _, candidate, resolution in sorted(ranked):
+                    key = (candidate, season, episode)
+                    if key in api_seen:
+                        continue
+                    api_seen.add(key)
+                    display = f"{show_name} - Episode {episode:02d}"
+                    if resolution:
+                        display += f" [{resolution}p]"
+                    return {"title": display, "link": candidate}
+    except Exception as api_error:
+        await rep.report(
+            f"SubsPlease API episode lookup failed: {type(api_error).__name__}: {api_error}",
+            "warning", log=False,
+        )
+
     await rep.report(
-        f"No exact RSS torrent match for AniList anime {media.get('id')} "
-        f"Season {season} Episode {episode}; searched {len(aliases)} title aliases "
-        f"across {len(dict.fromkeys(url for url in feeds if url))} feeds "
-        f"and inspected {scanned} unique entries. No upload was started.",
+        f"No exact RSS/API torrent match for AniList anime {media.get('id')} "
+        f"Season {season} Episode {episode}; searched {len(aliases)} title aliases, "
+        f"{len(dict.fromkeys(url for url in feeds if url))} RSS feeds "
+        f"({scanned} unique RSS entries), and {api_scanned} SubsPlease API entries. "
+        "No download or encoding was started.",
         "warning", log=False,
     )
     return None
