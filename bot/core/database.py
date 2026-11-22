@@ -132,9 +132,10 @@ class MongoDB:
         # Older releases stored the Main Channel message ID as msg_id.
         return episode_data.get("main_msg_id") or episode_data.get("msg_id")
     async def claimAnimeEpisode(self, ani_id, ep, token):
-        """Claim an episode globally across all bot workers."""
-        if ani_id is None or ep is None:
-            return True
+        """Claim a verified episode globally across all bot workers."""
+        # Fail closed: an unknown episode must never bypass duplicate protection.
+        if ani_id is None or ep is None or not token:
+            return False
 
         key = f"anime:{ani_id}:episode:{str(ep)}"
         now = datetime.datetime.utcnow()
