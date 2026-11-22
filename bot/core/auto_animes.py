@@ -2440,6 +2440,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     rule_y = title_y + 8
     draw.rounded_rectangle((rx, rule_y, rx+right_w, rule_y+8), radius=4, fill=(25,92,190))
     pill_y = rule_y + 32
+    # Used below in both poster variants; initialize before the conditional.
+    episode_badge = "SERIES INFO" if info_card else f"EPISODE {episode}"
     if info_card:
         season_label = str(data.get("season") or "ANIME").replace("_", " ").title()
         year_label = (data.get("seasonYear") or (data.get("startDate") or {}).get("year") or "")
@@ -2450,7 +2452,6 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         draw.rounded_rectangle((rx, pill_y, rx+195, pill_y+56), radius=26, fill=(20,91,190))
         draw.text((rx+25, pill_y+13), f"SEASON {season}", font=font(23, True), fill=(255,255,255))
         draw.rounded_rectangle((rx+215, pill_y, rx+440, pill_y+56), radius=26, outline=(65,70,85), width=2, fill=(255,255,255))
-        episode_badge = "SERIES INFO" if info_card else f"EPISODE {episode}"
     draw.text((rx+238, pill_y+13), episode_badge, font=font(23, True), fill=(18,20,28))
     draw.rounded_rectangle((rx+right_w-112, pill_y, rx+right_w, pill_y+56), radius=12, outline=(20,24,35), width=2)
     draw.text((rx+right_w-92, pill_y+13), "HD", font=font(25, True), fill=(18,20,28))
