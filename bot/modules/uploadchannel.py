@@ -1795,6 +1795,9 @@ async def uploadchannel_callbacks(client, callback):
                 info_post_id = await db.getAnimeArchiveInfoPost(
                     anime_id, season_index, episode_number, destination_id
                 )
+                channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
+                    anime_id, destination_id
+                )
                 # Migrate the normal uploader's existing destination post into
                 # the archive checkpoint. Only add the missing info card; never
                 # repost the episode card or download/encode its files.
@@ -1810,21 +1813,21 @@ async def uploadchannel_callbacks(client, callback):
                     )
                     card_republished = False
                     if (
-                        not info_post_id
+                        not channel_info_post_id
                         or episode_card_version != ANIME_EPISODE_CARD_VERSION
                     ):
                         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                         try:
                             # Recheck both card checkpoints after acquiring the
                             # process-wide lock. Upgrade legacy posts exactly once.
-                            info_post_id = await db.getAnimeArchiveInfoPost(
-                                anime_id, season_index, episode_number, destination_id
+                            channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
+                                anime_id, destination_id
                             )
                             episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
                                 anime_id, season_index, episode_number, destination_id
                             )
                             if (
-                                not info_post_id
+                                not channel_info_post_id
                                 or episode_card_version != ANIME_EPISODE_CARD_VERSION
                             ):
                                 await _upload_single_episode(
