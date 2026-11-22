@@ -105,6 +105,25 @@ class MongoDB:
             upsert=True,
         )
 
+    async def getAnimeArchiveChannelInfoVersion(self, ani_id, channel_id):
+        if ani_id is None or channel_id is None:
+            return None
+        key = f"uploadchannel:info:{int(ani_id)}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one(
+            {"_id": key}, {"card_version": 1}
+        )
+        return record.get("card_version") if record else None
+
+    async def saveAnimeArchiveChannelInfoVersion(self, ani_id, channel_id, version):
+        if any(value is None for value in (ani_id, channel_id, version)):
+            return
+        key = f"uploadchannel:info:{int(ani_id)}:c{int(channel_id)}"
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {"$set": {"card_version": str(version), "updated_at": datetime.datetime.utcnow()}},
+            upsert=True,
+        )
+
     async def getAnimeArchiveStickerPost(self, ani_id, season, episode, channel_id, stage):
         if any(value is None for value in (ani_id, season, episode, channel_id, stage)):
             return None
