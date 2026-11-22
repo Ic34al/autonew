@@ -113,8 +113,12 @@ class FFEncoder:
                 percent = (time_done / self.__total_time) * 100
                 percent = min(round(percent, 2), 100)
 
-                tsize = ensize / (percent / 100) if percent > 0 else ensize
-                eta = (tsize - ensize) / speed if speed > 0 else 0
+                # Estimate remaining encode time from media-time throughput.
+                # Output bitrate varies by scene, so extrapolating total file size
+                # from current bytes/percent produces misleading "real size" figures.
+                encode_speed = (time_done / diff) if diff > 0 and time_done > 0 else 0
+                remaining_media = max(0, self.__total_time - time_done)
+                eta = remaining_media / encode_speed if encode_speed > 0 else 0
                 eta = max(0, min(eta, 36000))
 
                 bar_progress = min(floor(percent / 8), 12)
