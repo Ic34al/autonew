@@ -1843,22 +1843,15 @@ async def uploadchannel_callbacks(client, callback):
                 "", f"released-episodes-only S{season_index} 4-quality",
             )
 
-            # First preserve/migrate already-published episode posts. Then preflight
-            # every unpublished episode against saved FILE_STORE qualities. Publish
-            # reusable episodes before any episode is allowed to download/encode.
-            episodes_ready_to_reuse = []
-            episodes_requiring_encode = []
-
-            # Full repost mode: every released episode is checked, including
-            # episodes with existing Telegram post checkpoints. This command is
-            # an explicit request to rebuild the channel sequence from E01 onward.
+            # Preflight all released episodes first, but do not publish any episode
+            # until the synopsis card and its sticker have been confirmed in-channel.
             episodes_ready_to_reuse = []
             episodes_requiring_encode = []
 
             for episode_number in range(1, released_episode_count + 1):
                 await report_stage(
                     f"checking saved FILE_STORE qualities for {selected_title} "
-                    f"S{season_index:02d}E{episode_number:02d}; existing posts will be replaced",
+                    f"S{season_index:02d}E{episode_number:02d}",
                     selected_title,
                 )
                 ready = await _upload_single_episode(
@@ -1870,39 +1863,29 @@ async def uploadchannel_callbacks(client, callback):
                 else:
                     episodes_requiring_encode.append(episode_number)
 
+            # Explicitly publish/reuse the single synopsis thumbnail first, then
+            # its sticker. info_only exits before any episode download or upload.
             await report_stage(
-                f"full repost preflight complete: {len(episodes_ready_to_reuse)} episode(s) "
-                f"can reuse saved qualities; {len(episodes_requiring_encode)} need missing qualities encoded",
+                f"publishing the ANIME SOUL synopsis card first for {selected_title}",
+                selected_title,
+            )
+            await _upload_single_episode(
+                selected_media, destination_id, season_index, 1,
+                user_client, progress_callback=report_stage, info_only=True,
+            )
+
+            await report_stage(
+                f"synopsis card and opening sticker confirmed; publishing episodes "
+                f"in order for {selected_title}",
                 selected_title,
             )
 
-            # First repost every episode with all four verified saved qualities.
-            # Force sticker refresh and replace the old episode post after the
-            # new photo card is confirmed; do not skip because a DB post ID exists.
-            for episode_number in episodes_ready_to_reuse:
-                await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-                try:
-                    await _upload_single_episode(
-                        selected_media, destination_id, season_index, episode_number,
-                        user_client, progress_callback=report_stage,
-                        reuse_only=True, force_repost=True,
-                    )
-                finally:
-                    AUTO_UPLOAD_PRIORITY_LOCK.release()
-                await report_stage(
-                    f"reposted {selected_title} S{season_index:02d}E{episode_number:02d} "
-                    "using saved FILE_STORE qualities",
-                    selected_title,
-                )
-
-            # Only after all reusable episodes are reposted, encode any genuinely
-            # missing qualities and then publish the remaining episode cards.
-            for episode_number in episodes_requiring_encode:
-                channel_stage = (
-                    f"final encoding pass: {selected_title} "
-                    f"S{season_index:02d}E{episode_number:02d}"
-                )
-                await report_stage(channel_stage, selected_title)
+            # Merge both work queues and process strictly E01, E02, E03...
+            # This prevents the old two-pass behavior from publishing a later
+            # reusable episode before an earlier episode that needs encoding.
+            reusable_set = set(episodes_ready_to_reuse)
+            encode_set = set(episodes_requiring_encode)
+            for episode_number in sorted(reusable_set | encode_set):
                 await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                 try:
                     async def episode_progress(stage):
@@ -1910,16 +1893,25 @@ async def uploadchannel_callbacks(client, callback):
                         channel_stage = stage
                         await report_stage(stage, selected_title)
 
-                    await _upload_single_episode(
-                        selected_media, destination_id, season_index, episode_number,
-                        user_client, progress_callback=episode_progress,
-                        force_repost=True,
-                    )
+                    if episode_number in reusable_set:
+                        await _upload_single_episode(
+                            selected_media, destination_id, season_index, episode_number,
+                            user_client, progress_callback=episode_progress,
+                            reuse_only=True, force_repost=True,
+                        )
+                        action = "reposted using saved FILE_STORE qualities"
+                    else:
+                        await _upload_single_episode(
+                            selected_media, destination_id, season_index, episode_number,
+                            user_client, progress_callback=episode_progress,
+                            force_repost=True,
+                        )
+                        action = "encoded missing qualities and published"
                 finally:
                     AUTO_UPLOAD_PRIORITY_LOCK.release()
+
                 await report_stage(
-                    f"encoded missing qualities and reposted {selected_title} "
-                    f"S{season_index:02d}E{episode_number:02d}",
+                    f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
                     selected_title,
                 )
 
