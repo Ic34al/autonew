@@ -172,16 +172,6 @@ def _display_title(media):
 
 async def _fetch_currently_airing():
     timeout = httpx.Timeout(25.0, connect=10.0)
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        response = await client.post(
-            ANILIST_URL,
-            json={"query": SCHEDULE_QUERY, "variables": {"page": 1, "perPage": 50}},
-            headers={"Accept": "application/json", "Content-Type": "application/json"},
-        )
-        response.raise_for_status()
-        payload = response.json()
-    if payload.get("errors"):
-        raise RuntimeError("; ".join(str(e.get("message", "AniList error")) for e in payload["errors"]))
     # AniList caps Page.perPage at 50. Fetch several pages instead of
     # silently limiting /uploadchannel to the 50 most popular currently
     # releasing titles. Deduplicate by AniList ID across pages.
