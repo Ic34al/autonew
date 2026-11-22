@@ -4236,6 +4236,33 @@ async def anime_search_cmd(client, message: Message):
                     downloads = item.get("downloads") or []
                     if isinstance(downloads, dict):
                         downloads = list(downloads.values())
+
+                    # Preserve the season evidence attached to this exact
+                    # SubsPlease release while resolving its full show catalogue.
+                    item_page = (
+                        item.get("page") or item.get("show_page")
+                        or item.get("show_url") or item.get("url")
+                    )
+                    item_sid = item.get("sid") or item.get("show_id")
+                    item_page_url = ""
+                    if item_page:
+                        item_page = str(item_page).strip()
+                        item_page_url = (
+                            item_page if item_page.startswith("http")
+                            else "https://subsplease.org/" + item_page.lstrip("/")
+                        )
+                    item_season_hint = (
+                        season_from_identifier(base_title)
+                        or season_from_identifier(item.get("title"))
+                        or season_from_identifier(release_key)
+                    )
+                    if show_name and (item_sid or item_page_url):
+                        catalogue_key = (str(item_sid or ""), item_page_url)
+                        previous_catalogue = show_catalogues.get(catalogue_key)
+                        if previous_catalogue:
+                            previous_name, previous_season = previous_catalogue
+                            item_season_hint = item_season_hint or previous_season
+                        show_catalogues[catalogue_key] = (show_name, item_season_hint)
                     for download in downloads:
                         if not isinstance(download, dict):
                             continue
@@ -4288,7 +4315,17 @@ async def anime_search_cmd(client, message: Message):
                             page_path if page_path.startswith("http")
                             else "https://subsplease.org/" + page_path.lstrip("/")
                         )
-                    show_catalogues[(str(sid or ""), page_url)] = show_name
+                    catalogue_key = (str(sid or ""), page_url)
+                    previous_catalogue = show_catalogues.get(catalogue_key)
+                    previous_season = previous_catalogue[1] if isinstance(previous_catalogue, tuple) else None
+                    release_season = (
+                        season_from_identifier(item.get("title"))
+                        or season_from_identifier(item.get("episode"))
+                        or season_from_identifier(item.get("show"))
+                    )
+                    show_catalogues[catalogue_key] = (
+                        show_name, release_season or previous_season
+                    )
 
             async with httpx.AsyncClient(
                 timeout=25,
@@ -4323,14 +4360,21 @@ async def anime_search_cmd(client, message: Message):
                                 href if href.startswith("http")
                                 else "https://subsplease.org/" + href.lstrip("/")
                             )
-                            show_catalogues[("", page_url)] = clean_label
+                            catalogue_key = ("", page_url)
+                    previous_catalogue = show_catalogues.get(catalogue_key)
+                    previous_season = previous_catalogue[1] if isinstance(previous_catalogue, tuple) else None
+                    show_catalogues[catalogue_key] = (clean_label, previous_season)
                 except Exception as directory_error:
                     await rep.report(
                         f"/search SubsPlease show-directory lookup failed for {anime_name}: {directory_error}",
                         "warning"
                     )
 
-                for (sid, page_url), show_name in show_catalogues.items():
+                for (sid, page_url), catalogue_info in show_catalogues.items():
+                    show_name, catalogue_season_hint = (
+                        catalogue_info if isinstance(catalogue_info, tuple)
+                        else (catalogue_info, None)
+                    )
                     try:
                         if not sid and page_url:
                             page_response = await catalogue_client.get(page_url)
@@ -4409,7 +4453,8 @@ async def anime_search_cmd(client, message: Message):
                                 # A catalogue is only assigned to a season when
                                 # its show title or URL explicitly identifies it.
                                 catalogue_season = (
-                                    season_from_identifier(show_name)
+                                    catalogue_season_hint
+                                    or season_from_identifier(show_name)
                                     or season_from_identifier(page_url)
                                 )
                                 if candidate not in seen:
