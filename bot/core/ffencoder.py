@@ -611,33 +611,33 @@ class FFEncoder:
                 await rep.report(f"Failed to build fallback ffmpeg command: {e}", "error")
                 return None
 
-        # Enforce the requested output dimensions AFTER custom/default command
-        # selection and validation. Saved FFmpeg templates can contain a shared
-        # fixed -s value (or omit scaling entirely), which previously let 480p,
-        # 720p and 1080p jobs produce the same dimensions. The final output
-        # option wins over any earlier template -s setting.
-        if ffcode:
-            target_resolution = self.resolution_map.get(self.__qual, "1920x1080")
+        # Enforce the requested dimensions for downscaled tiers only.
+        # HDRip is a source-resolution master: forcing 1920x1080 here made it
+        # a duplicate of the 1080p encode and could upscale lower-resolution
+        # sources while falsely labelling them HDRip.
+        if ffcode and self.__qual == "HDRi":
+            ffcode, removed_scale = re.subn(
+                r"(?i)(?<!\\S)-s\\s+\\d{2,5}x\\d{2,5}(?=\\s|$)",
+                "",
+                ffcode,
+            )
+            if removed_scale:
+                LOGS.info(
+                    f"Removed forced output scaling for HDRip {self.__name}; "
+                    "retaining source dimensions."
+                )
+        elif ffcode:
+            target_resolution = self.resolution_map.get(self.__qual)
+            if not target_resolution:
+                raise RuntimeError(f"Unsupported output quality: {self.__qual}")
             output_name = f"'{out_npath}'"
             double_output_name = f'"{out_npath}"'
             if output_name in ffcode:
-                ffcode = ffcode.replace(
-                    output_name,
-                    f"-s {target_resolution} {output_name}",
-                    1,
-                )
+                ffcode = ffcode.replace(output_name, f"-s {target_resolution} {output_name}", 1)
             elif double_output_name in ffcode:
-                ffcode = ffcode.replace(
-                    double_output_name,
-                    f"-s {target_resolution} {double_output_name}",
-                    1,
-                )
+                ffcode = ffcode.replace(double_output_name, f"-s {target_resolution} {double_output_name}", 1)
             elif out_npath in ffcode:
-                ffcode = ffcode.replace(
-                    out_npath,
-                    f"-s {target_resolution} {out_npath}",
-                    1,
-                )
+                ffcode = ffcode.replace(out_npath, f"-s {target_resolution} {out_npath}", 1)
             else:
                 raise RuntimeError(
                     f"Cannot enforce {self.__qual}p dimensions: output path is missing from FFmpeg command."
@@ -659,13 +659,14 @@ class FFEncoder:
             "360": {"crf": 32, "audio_bitrate": "48k"},
             "240": {"crf": 34, "audio_bitrate": "32k"},
             "144": {"crf": 35, "audio_bitrate": "24k"},
+            "HDRi": {"crf": 18, "audio_bitrate": "160k"},
         }
         profile = quality_profile.get(self.__qual)
         if ffcode and profile:
             crf_value = str(profile["crf"])
-            if re.search(r"(?i)(?<![\\w-])-crf\\s+\\d+", ffcode):
+            if re.search(r"(?i)(?<![\w-])-crf\s+\d+", ffcode):
                 ffcode = re.sub(
-                    r"(?i)(?<![\\w-])-crf\\s+\\d+",
+                    r"(?i)(?<![\w-])-crf\s+\d+",
                     f"-crf {crf_value}",
                     ffcode,
                 )
@@ -682,15 +683,15 @@ class FFEncoder:
                         break
 
             audio_bitrate = profile["audio_bitrate"]
-            if re.search(r"(?i)(?<![\\w-])-b:a\\s+\\S+", ffcode):
+            if re.search(r"(?i)(?<![\w-])-b:a\s+\S+", ffcode):
                 ffcode = re.sub(
-                    r"(?i)(?<![\\w-])-b:a\\s+\\S+",
+                    r"(?i)(?<![\w-])-b:a\s+\S+",
                     f"-b:a {audio_bitrate}",
                     ffcode,
                 )
-            elif re.search(r"(?i)(?<![\\w-])-ab\\s+\\S+", ffcode):
+            elif re.search(r"(?i)(?<![\w-])-ab\s+\S+", ffcode):
                 ffcode = re.sub(
-                    r"(?i)(?<![\\w-])-ab\\s+\\S+",
+                    r"(?i)(?<![\w-])-ab\s+\S+",
                     f"-ab {audio_bitrate}",
                     ffcode,
                 )
