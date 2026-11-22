@@ -626,7 +626,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False, preflight_only=False):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     async def set_progress(stage):
         if progress_callback:
@@ -711,133 +711,135 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # A complete FILE_STORE set can be reused without a live torrent.
     info.pdata["audio_type"] = "Japanese [English Sub]"
 
-    # Exactly ONE split-screen ANIME SOUL synopsis card per anime/channel.
-    # Upgrade an older square/portrait card in place; never append another synopsis.
-    info_post_id = await db.getAnimeArchiveChannelInfoPost(media.get("id"), destination_id)
-    info_card_version = await db.getAnimeArchiveChannelInfoVersion(media.get("id"), destination_id)
-    legacy_info_post_id = await db.getAnimeArchiveInfoPost(
-        media.get("id"), season_number, episode_number, destination_id
-    )
-    if not info_post_id and int(episode_number) == 1 and legacy_info_post_id:
-        info_post_id = legacy_info_post_id
-        await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
-    if info_post_id and legacy_info_post_id and int(legacy_info_post_id) != int(info_post_id):
-        try:
-            await bot.delete_messages(destination_id, int(legacy_info_post_id))
-        except Exception as cleanup_error:
-            LOGS.warning("Could not remove legacy duplicate synopsis card %s: %s", legacy_info_post_id, cleanup_error)
-
-    if not info_post_id or info_card_version != ANIME_INFO_CARD_VERSION:
-        data = info.adata or {}
-        title_data = data.get("title") or {}
-        info_title = title_data.get("english") or title_data.get("romaji") or title
-        description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
-        description = html.unescape(re.sub(r"\s+", " ", description)).strip()
-        if len(description) > 560:
-            description = description[:557].rsplit(" ", 1)[0] + "..."
-        genres = data.get("genres") or []
-        studios_data = data.get("studios") or {}
-        studio_nodes = studios_data.get("nodes") or []
-        studio_names = [str(item.get("name")) for item in studio_nodes if item.get("name")]
-        media_type = data.get("format") or data.get("type") or "Anime"
-        rating = data.get("averageScore")
-        rating_text = f"{float(rating) / 10:.1f}/10" if rating is not None else "N/A"
-        season_text = f"Season {season_number}"
-        year = data.get("seasonYear")
-        if year:
-            season_text += f" • {year}"
-        total_episodes = data.get("episodes")
-        status = str(data.get("status") or "Unknown").replace("_", " ").title()
-        info_lines = [
-            f"<blockquote>❝ <b>{html.escape(str(info_title))}</b> ❞</blockquote>",
-            f"<b>Season:</b> {season_text}",
-            f"<b>Type:</b> {html.escape(str(media_type))}",
-            f"<b>Genres:</b> {html.escape(', '.join(str(x) for x in genres) if genres else 'N/A')}",
-            f"<b>Rating:</b> {rating_text}",
-            f"<b>Status:</b> {html.escape(status)}",
-        ]
-        if total_episodes:
-            info_lines.append(f"<b>Episodes:</b> {int(total_episodes)}")
-        if studio_names:
-            info_lines.append(f"<b>Studio:</b> {html.escape(', '.join(studio_names[:3]))}")
-        info_lines.append("──────────────────────")
-        if description:
-            info_lines.append(f"<blockquote expandable>≡ {html.escape(description)}</blockquote>")
-        info_caption = "\n".join(info_lines)
-        if len(info_caption) > 1024:
-            info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
-
-        info_poster_path = os.path.join(workdir, f"anime_soul_info_s{season_number}.jpg")
-        info_poster = await build_anime_soul_poster(
-            info, title, info_poster_path, info_card=True
+    if not preflight_only:
+        # Exactly ONE split-screen ANIME SOUL synopsis card per anime/channel.
+        # Upgrade an older square/portrait card in place; never append another synopsis.
+        info_post_id = await db.getAnimeArchiveChannelInfoPost(media.get("id"), destination_id)
+        info_card_version = await db.getAnimeArchiveChannelInfoVersion(media.get("id"), destination_id)
+        legacy_info_post_id = await db.getAnimeArchiveInfoPost(
+            media.get("id"), season_number, episode_number, destination_id
         )
-        if not info_poster or not os.path.exists(info_poster):
-            raise RuntimeError(
-                f"Could not generate the ANIME SOUL split-screen synopsis thumbnail for {title}."
+        if not info_post_id and int(episode_number) == 1 and legacy_info_post_id:
+            info_post_id = legacy_info_post_id
+            await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
+        if info_post_id and legacy_info_post_id and int(legacy_info_post_id) != int(info_post_id):
+            try:
+                await bot.delete_messages(destination_id, int(legacy_info_post_id))
+            except Exception as cleanup_error:
+                LOGS.warning("Could not remove legacy duplicate synopsis card %s: %s", legacy_info_post_id, cleanup_error)
+    
+        if not info_post_id or info_card_version != ANIME_INFO_CARD_VERSION:
+            data = info.adata or {}
+            title_data = data.get("title") or {}
+            info_title = title_data.get("english") or title_data.get("romaji") or title
+            description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
+            description = html.unescape(re.sub(r"\s+", " ", description)).strip()
+            if len(description) > 560:
+                description = description[:557].rsplit(" ", 1)[0] + "..."
+            genres = data.get("genres") or []
+            studios_data = data.get("studios") or {}
+            studio_nodes = studios_data.get("nodes") or []
+            studio_names = [str(item.get("name")) for item in studio_nodes if item.get("name")]
+            media_type = data.get("format") or data.get("type") or "Anime"
+            rating = data.get("averageScore")
+            rating_text = f"{float(rating) / 10:.1f}/10" if rating is not None else "N/A"
+            season_text = f"Season {season_number}"
+            year = data.get("seasonYear")
+            if year:
+                season_text += f" • {year}"
+            total_episodes = data.get("episodes")
+            status = str(data.get("status") or "Unknown").replace("_", " ").title()
+            info_lines = [
+                f"<blockquote>❝ <b>{html.escape(str(info_title))}</b> ❞</blockquote>",
+                f"<b>Season:</b> {season_text}",
+                f"<b>Type:</b> {html.escape(str(media_type))}",
+                f"<b>Genres:</b> {html.escape(', '.join(str(x) for x in genres) if genres else 'N/A')}",
+                f"<b>Rating:</b> {rating_text}",
+                f"<b>Status:</b> {html.escape(status)}",
+            ]
+            if total_episodes:
+                info_lines.append(f"<b>Episodes:</b> {int(total_episodes)}")
+            if studio_names:
+                info_lines.append(f"<b>Studio:</b> {html.escape(', '.join(studio_names[:3]))}")
+            info_lines.append("──────────────────────")
+            if description:
+                info_lines.append(f"<blockquote expandable>≡ {html.escape(description)}</blockquote>")
+            info_caption = "\n".join(info_lines)
+            if len(info_caption) > 1024:
+                info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
+    
+            info_poster_path = os.path.join(workdir, f"anime_soul_info_s{season_number}.jpg")
+            info_poster = await build_anime_soul_poster(
+                info, title, info_poster_path, info_card=True
             )
-        with open(info_poster, "rb") as info_photo:
-            if info_post_id:
-                info_post = await bot.edit_message_media(
-                    chat_id=destination_id,
-                    message_id=int(info_post_id),
-                    media=InputMediaPhoto(
-                        media=info_photo, caption=info_caption, parse_mode=ParseMode.HTML
-                    ),
+            if not info_poster or not os.path.exists(info_poster):
+                raise RuntimeError(
+                    f"Could not generate the ANIME SOUL split-screen synopsis thumbnail for {title}."
                 )
-            else:
-                info_post = await bot.send_photo(
-                    chat_id=destination_id,
-                    photo=info_photo,
-                    caption=info_caption,
-                    parse_mode=ParseMode.HTML,
-                )
-        if not info_post or not getattr(info_post, "id", None):
-            raise RuntimeError(f"Telegram did not confirm ANIME SOUL synopsis card for {title}.")
-        info_post_id = int(info_post.id)
-        await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
-        await db.saveAnimeArchiveChannelInfoVersion(
-            media.get("id"), destination_id, ANIME_INFO_CARD_VERSION
-        )
-        await rep.report(
-            f"{'Upgraded' if info_card_version else 'Published'} the single ANIME SOUL split-screen synopsis card for {title}.",
-            "info", log=False,
-        )
-    else:
-        await rep.report(
-            f"Reusing the current single synopsis card {info_post_id} for {title}; no extra card.",
-            "info", log=False,
-        )
-
-    async def send_checkpointed_sticker(stage_key):
-        saved_sticker = await db.getAnimeArchiveStickerPost(
-            media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
-            destination_id, stage_key,
-        )
-        if saved_sticker:
-            return
-        sticker_message_id = await send_sticker_to_channel(
-            destination_id, getattr(Var, "STICKER_ID", None), client=bot
-        )
-        if sticker_message_id:
-            await db.saveAnimeArchiveStickerPost(
+            with open(info_poster, "rb") as info_photo:
+                if info_post_id:
+                    info_post = await bot.edit_message_media(
+                        chat_id=destination_id,
+                        message_id=int(info_post_id),
+                        media=InputMediaPhoto(
+                            media=info_photo, caption=info_caption, parse_mode=ParseMode.HTML
+                        ),
+                    )
+                else:
+                    info_post = await bot.send_photo(
+                        chat_id=destination_id,
+                        photo=info_photo,
+                        caption=info_caption,
+                        parse_mode=ParseMode.HTML,
+                    )
+            if not info_post or not getattr(info_post, "id", None):
+                raise RuntimeError(f"Telegram did not confirm ANIME SOUL synopsis card for {title}.")
+            info_post_id = int(info_post.id)
+            await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
+            await db.saveAnimeArchiveChannelInfoVersion(
+                media.get("id"), destination_id, ANIME_INFO_CARD_VERSION
+            )
+            await rep.report(
+                f"{'Upgraded' if info_card_version else 'Published'} the single ANIME SOUL split-screen synopsis card for {title}.",
+                "info", log=False,
+            )
+        else:
+            await rep.report(
+                f"Reusing the current single synopsis card {info_post_id} for {title}; no extra card.",
+                "info", log=False,
+            )
+    
+        async def send_checkpointed_sticker(stage_key):
+            saved_sticker = await db.getAnimeArchiveStickerPost(
                 media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
-                destination_id, stage_key, sticker_message_id,
+                destination_id, stage_key,
             )
-
-    if not await db.getAnimeArchiveStickerPost(
-        media.get("id"), season_number, "info", destination_id, "info"
-    ):
-        await send_checkpointed_sticker("info")
-
-    if info_only:
-        await rep.report(
-            f"Backfilled synopsis/info card for existing {title} S{season_number}E{episode_number}; "
-            "existing episode post and FILE_STORE qualities were left untouched.",
-            "success", log=False,
-        )
-        shutil.rmtree(workdir, ignore_errors=True)
-        return True
-
+            if saved_sticker:
+                return
+            sticker_message_id = await send_sticker_to_channel(
+                destination_id, getattr(Var, "STICKER_ID", None), client=bot
+            )
+            if sticker_message_id:
+                await db.saveAnimeArchiveStickerPost(
+                    media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
+                    destination_id, stage_key, sticker_message_id,
+                )
+    
+        if not await db.getAnimeArchiveStickerPost(
+            media.get("id"), season_number, "info", destination_id, "info"
+        ):
+            await send_checkpointed_sticker("info")
+    
+        if info_only:
+            await rep.report(
+                f"Backfilled synopsis/info card for existing {title} S{season_number}E{episode_number}; "
+                "existing episode post and FILE_STORE qualities were left untouched.",
+                "success", log=False,
+            )
+            shutil.rmtree(workdir, ignore_errors=True)
+            return True
+    
+    
     # Episode cards are posted by the uploader, but all file-sharing deep
     # links must open the existing Monkey file-share bot.
     # Do not derive this username from BOT_TOKEN.
@@ -1134,6 +1136,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             "info",
         )
         missing_qualities.append(quality)
+
+    if preflight_only:
+        shutil.rmtree(workdir, ignore_errors=True)
+        return not missing_qualities
 
     # A repost/backfill must reuse the already uploaded FILE_STORE qualities.
     # Never download or encode again in this mode: if any quality is genuinely
@@ -1787,20 +1793,19 @@ async def uploadchannel_callbacks(client, callback):
                 "", f"released-episodes-only S{season_index} 4-quality",
             )
 
+            # First preserve/migrate already-published episode posts. Then preflight
+            # every unpublished episode against saved FILE_STORE qualities. Publish
+            # reusable episodes before any episode is allowed to download/encode.
+            episodes_ready_to_reuse = []
+            episodes_requiring_encode = []
+
             for episode_number in range(1, released_episode_count + 1):
-                # Durable MongoDB checkpoint is the only duplicate authority.
                 saved_post_id = await db.getAnimeArchiveEpisodePost(
-                    anime_id, season_index, episode_number, destination_id
-                )
-                info_post_id = await db.getAnimeArchiveInfoPost(
                     anime_id, season_index, episode_number, destination_id
                 )
                 channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
                     anime_id, destination_id
                 )
-                # Migrate the normal uploader's existing destination post into
-                # the archive checkpoint. Only add the missing info card; never
-                # repost the episode card or download/encode its files.
                 destination_post_id = await db.getAnimeDestinationPostExact(
                     anime_id, str(episode_number), destination_id
                 )
@@ -1811,15 +1816,12 @@ async def uploadchannel_callbacks(client, callback):
                     episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
                         anime_id, season_index, episode_number, destination_id
                     )
-                    card_republished = False
                     if (
                         not channel_info_post_id
                         or episode_card_version != ANIME_EPISODE_CARD_VERSION
                     ):
                         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                         try:
-                            # Recheck both card checkpoints after acquiring the
-                            # process-wide lock. Upgrade legacy posts exactly once.
                             channel_info_post_id = await db.getAnimeArchiveChannelInfoPost(
                                 anime_id, destination_id
                             )
@@ -1831,73 +1833,94 @@ async def uploadchannel_callbacks(client, callback):
                                 or episode_card_version != ANIME_EPISODE_CARD_VERSION
                             ):
                                 await _upload_single_episode(
-                                    selected_media,
-                                    destination_id,
-                                    season_index,
-                                    episode_number,
-                                    user_client,
-                                    progress_callback=report_stage,
-                                    reuse_only=True,
+                                    selected_media, destination_id, season_index,
+                                    episode_number, user_client,
+                                    progress_callback=report_stage, reuse_only=True,
                                 )
-                                card_republished = True
                         finally:
                             AUTO_UPLOAD_PRIORITY_LOCK.release()
-                    if not card_republished and not saved_post_id:
+                    if not saved_post_id:
                         await db.saveAnimeArchiveEpisodePost(
                             anime_id, season_index, episode_number,
                             destination_id, existing_post_id, migrated=True
                         )
                     await report_stage(
-                        f"{'upgraded and republished' if card_republished else 'reused'} "
-                        f"{selected_title} S{season_index:02d}E{episode_number:02d}; "
-                        "verified FILE_STORE qualities reused, no torrent download or re-encoding",
+                        f"kept existing {selected_title} S{season_index:02d}E{episode_number:02d}; "
+                        "skipped duplicate episode publication",
                         selected_title,
                     )
                     continue
 
+                await report_stage(
+                    f"checking saved FILE_STORE qualities for {selected_title} "
+                    f"S{season_index:02d}E{episode_number:02d}",
+                    selected_title,
+                )
+                ready = await _upload_single_episode(
+                    selected_media, destination_id, season_index, episode_number,
+                    user_client, progress_callback=report_stage, preflight_only=True,
+                )
+                if ready:
+                    episodes_ready_to_reuse.append(episode_number)
+                else:
+                    episodes_requiring_encode.append(episode_number)
+
+            await report_stage(
+                f"reuse-first check complete: {len(episodes_ready_to_reuse)} episode(s) "
+                f"can reuse saved qualities; {len(episodes_requiring_encode)} need encoding",
+                selected_title,
+            )
+
+            # Publish all episodes whose qualities are already saved, in episode order.
+            for episode_number in episodes_ready_to_reuse:
+                await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+                try:
+                    if await db.getAnimeArchiveEpisodePost(
+                        anime_id, season_index, episode_number, destination_id
+                    ):
+                        continue
+                    await _upload_single_episode(
+                        selected_media, destination_id, season_index, episode_number,
+                        user_client, progress_callback=report_stage, reuse_only=True,
+                    )
+                finally:
+                    AUTO_UPLOAD_PRIORITY_LOCK.release()
+                await report_stage(
+                    f"published reused {selected_title} S{season_index:02d}E{episode_number:02d}; "
+                    "no torrent download or re-encoding",
+                    selected_title,
+                )
+
+            # Only after all reusable episodes are published, process missing qualities.
+            for episode_number in episodes_requiring_encode:
                 channel_stage = (
-                    f"starting RSS download for {selected_title} "
+                    f"final encoding pass: {selected_title} "
                     f"S{season_index:02d}E{episode_number:02d}"
                 )
                 await report_stage(channel_stage, selected_title)
                 await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
-
-                async def episode_progress(stage):
-                    nonlocal channel_stage
-                    channel_stage = stage
-                    await report_stage(stage, selected_title)
-
                 try:
-                    # Recheck after acquiring the process-wide lock. A second
-                    # /uploadchannel run may have passed the first check while
-                    # the first run was still publishing this episode.
-                    saved_post_id = await db.getAnimeArchiveEpisodePost(
+                    if await db.getAnimeArchiveEpisodePost(
                         anime_id, season_index, episode_number, destination_id
-                    )
-                    if saved_post_id:
-                        await report_stage(
-                            f"already published — skipping {selected_title} "
-                            f"S{season_index:02d}E{episode_number:02d}",
-                            selected_title,
-                        )
+                    ):
                         continue
 
+                    async def episode_progress(stage):
+                        nonlocal channel_stage
+                        channel_stage = stage
+                        await report_stage(stage, selected_title)
+
                     await _upload_single_episode(
-                        selected_media,
-                        destination_id,
-                        season_index,
-                        episode_number,
-                        user_client,
-                        progress_callback=episode_progress,
+                        selected_media, destination_id, season_index, episode_number,
+                        user_client, progress_callback=episode_progress,
                     )
                 finally:
                     AUTO_UPLOAD_PRIORITY_LOCK.release()
-
-                channel_stage = (
-                    f"published {selected_title} S{season_index:02d}E{episode_number:02d} "
-                    f"successfully to {destination_id}"
+                await report_stage(
+                    f"encoded and published remaining {selected_title} "
+                    f"S{season_index:02d}E{episode_number:02d}",
+                    selected_title,
                 )
-                await report_stage(channel_stage, selected_title)
 
             await db.set_anime_archive_batch(
                 anime_id, season_index, destination_id, "complete",
