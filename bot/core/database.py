@@ -65,8 +65,20 @@ class MongoDB:
         if not anime_data:
             return None
         episode_data = anime_data.get(str(ep), {})
-        posts = episode_data.get("destination_posts", {}) if isinstance(episode_data, dict) else {}
-        return posts.get(str(int(channel_id))) if isinstance(posts, dict) else None
+        if not isinstance(episode_data, dict):
+            return None
+
+        posts = episode_data.get("destination_posts", {})
+        recorded_post = posts.get(str(int(channel_id))) if isinstance(posts, dict) else None
+        if recorded_post:
+            return recorded_post
+
+        # Backward compatibility: older releases stored the dedicated-channel
+        # post in dedicated_msg_id (or the generic msg_id field) before
+        # destination_posts was introduced. Reuse that checkpoint instead of
+        # publishing the same episode again after an upgrade.
+        legacy_post = episode_data.get("dedicated_msg_id") or episode_data.get("msg_id")
+        return legacy_post
 
     async def getAnimeMainPost(self, ani_id, ep):
         if ani_id is None or ep is None:
