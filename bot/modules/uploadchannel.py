@@ -622,7 +622,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     async def set_progress(stage):
         if progress_callback:
@@ -700,6 +700,93 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # The audio label is refined from RSS if a source download is needed.
     # A complete FILE_STORE set can be reused without a live torrent.
     info.pdata["audio_type"] = "Japanese [English Sub]"
+
+    # Publish one AniList information/synopsis card before the episode/share card.
+    # This is destination-specific and separately checkpointed so a retry after
+    # a later episode-card failure does not duplicate the info card.
+    info_post_id = await db.getAnimeArchiveInfoPost(
+        media.get("id"), season_number, episode_number, destination_id
+    )
+    if not info_post_id:
+        data = info.adata or {}
+        title_data = data.get("title") or {}
+        info_title = title_data.get("english") or title_data.get("romaji") or title
+        description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
+        description = html.unescape(re.sub(r"\s+", " ", description)).strip()
+        if len(description) > 560:
+            description = description[:557].rsplit(" ", 1)[0] + "..."
+        genres = data.get("genres") or []
+        studios_data = data.get("studios") or {}
+        studio_nodes = studios_data.get("nodes") or []
+        studio_names = [str(item.get("name")) for item in studio_nodes if item.get("name")]
+        media_type = data.get("format") or data.get("type") or "Anime"
+        rating = data.get("averageScore")
+        rating_text = f"{float(rating) / 10:.1f}/10" if rating is not None else "N/A"
+        season_text = f"Season {season_number}"
+        year = data.get("seasonYear")
+        if year:
+            season_text += f" • {year}"
+        total_episodes = data.get("episodes")
+        status = str(data.get("status") or "Unknown").replace("_", " ").title()
+        info_lines = [
+            f"<blockquote>❝ <b>{html.escape(str(info_title))}</b> ❞</blockquote>",
+            f"<b>Season / Episode:</b> {season_text} • E{int(episode_number):02d}",
+            f"<b>Type:</b> {html.escape(str(media_type))}",
+            f"<b>Genres:</b> {html.escape(', '.join(str(x) for x in genres) if genres else 'N/A')}",
+            f"<b>Rating:</b> {rating_text}",
+            f"<b>Status:</b> {html.escape(status)}",
+        ]
+        if total_episodes:
+            info_lines.append(f"<b>Episodes:</b> {int(total_episodes)}")
+        if studio_names:
+            info_lines.append(f"<b>Studio:</b> {html.escape(', '.join(studio_names[:3]))}")
+        info_lines.append("──────────────────────")
+        if description:
+            info_lines.append(f"<blockquote expandable>≡ {html.escape(description)}</blockquote>")
+        info_caption = "\n".join(info_lines)
+        if len(info_caption) > 1024:
+            # Keep Telegram's photo-caption limit while retaining the key metadata.
+            info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
+        cover = (data.get("coverImage") or {}).get("extraLarge") or (data.get("coverImage") or {}).get("large")
+        if not cover:
+            raise RuntimeError(
+                f"Cannot publish anime info card for {title} S{season_number}E{episode_number}: AniList cover is missing."
+            )
+        info_post = await bot.send_photo(
+            chat_id=destination_id,
+            photo=cover,
+            caption=info_caption,
+        )
+        if not info_post or not getattr(info_post, "id", None):
+            raise RuntimeError(
+                f"Telegram did not confirm anime info card for {title} S{season_number}E{episode_number}."
+            )
+        await db.saveAnimeArchiveInfoPost(
+            media.get("id"), season_number, episode_number, destination_id, info_post.id
+        )
+        await rep.report(
+            f"Published AniList synopsis/info card before episode share card for "
+            f"{title} S{season_number}E{episode_number}.",
+            "info",
+            log=False,
+        )
+    else:
+        await rep.report(
+            f"Reusing existing AniList info card message {info_post_id} for "
+            f"{title} S{season_number}E{episode_number}; not posting a duplicate.",
+            "info",
+            log=False,
+        )
+
+    if info_only:
+        await rep.report(
+            f"Backfilled synopsis/info card for existing {title} S{season_number}E{episode_number}; "
+            "existing episode post and FILE_STORE qualities were left untouched.",
+            "success", log=False,
+        )
+        shutil.rmtree(workdir, ignore_errors=True)
+        return True
+
     # Episode cards are posted by the uploader, but all file-sharing deep
     # links must open the existing Monkey file-share bot.
     # Do not derive this username from BOT_TOKEN.
@@ -720,6 +807,38 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     quality_order = ("720", "1080", "480", "HDRi")
     buttons_by_quality = {}
+    # Prefer the exact quality message IDs already persisted by the normal
+    # uploader. This is O(4) and avoids a Telegram title search or RSS download
+    # for episodes that were encoded/uploaded earlier.
+    saved_quality_ids = await db.getAnimeFileIds(media.get("id"), str(episode_number))
+    if not isinstance(saved_quality_ids, dict):
+        saved_quality_ids = {}
+    for quality in quality_order:
+        stored_id = saved_quality_ids.get(quality)
+        if not stored_id:
+            continue
+        try:
+            stored_msg = await destination_client.get_messages(
+                int(getattr(Var, "FILE_STORE", 0)), message_ids=int(stored_id)
+            )
+            if not stored_msg or getattr(stored_msg, "empty", False):
+                continue
+            start_payload = f"get-{int(stored_id) * abs(int(Var.FILE_STORE))}"
+            url = f"https://t.me/{share_bot_username}?start={await encode(start_payload)}"
+            buttons_by_quality[quality] = InlineKeyboardButton(
+                f"{quality}p" if quality != "HDRi" else "HDRip", url=url
+            )
+            await rep.report(
+                f"Reusing saved database FILE_STORE ID for {quality} "
+                f"of {title} S{target_season:02d}E{target_episode:02d}; no encode/upload.",
+                "info", log=False,
+            )
+        except Exception as saved_id_error:
+            await rep.report(
+                f"Saved {quality} file ID for {title} could not be verified "
+                f"({saved_id_error}); checking the configured FILE_STORE index.",
+                "warning", log=False,
+            )
 
     # Recover files by parsed season/episode/quality/title rather than exact
     # generated filenames. The regular uploader stores names such as
@@ -776,114 +895,123 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     await set_progress(f"Checking FILE_STORE reuse for {title} S{target_season:02d}E{target_episode:02d}.")
     storage_records = []
     storage_chat_id = None
-    # Explicit storage invite supplied by the owner; do not silently scan a stale FILE_STORE_LINK from Heroku.
-    storage_link = str(getattr(Var, "FILE_STORE_LINK", "") or "").strip()
-    try:
-        # Resolve the configured FILE_STORE only. Never scan a hardcoded or
-        # unrelated invite: message IDs from another channel would create
-        # invalid share-bot deep links and could cause duplicate uploads.
-        if storage_link:
-            try:
-                storage_chat = await destination_client.join_chat(storage_link)
-            except Exception as join_error:
-                join_text = str(join_error).casefold()
-                if "user_already_participant" in join_text or "already a participant" in join_text:
-                    storage_chat = await destination_client.get_chat(storage_link)
-                else:
-                    try:
+    if len(buttons_by_quality) < len(quality_order):
+        storage_records = []
+        storage_chat_id = None
+        # Explicit storage invite supplied by the owner; do not silently scan a stale FILE_STORE_LINK from Heroku.
+        storage_link = str(getattr(Var, "FILE_STORE_LINK", "") or "").strip()
+        try:
+            # Resolve the configured FILE_STORE only. Never scan a hardcoded or
+            # unrelated invite: message IDs from another channel would create
+            # invalid share-bot deep links and could cause duplicate uploads.
+            if storage_link:
+                try:
+                    storage_chat = await destination_client.join_chat(storage_link)
+                except Exception as join_error:
+                    join_text = str(join_error).casefold()
+                    if "user_already_participant" in join_text or "already a participant" in join_text:
                         storage_chat = await destination_client.get_chat(storage_link)
-                    except Exception:
-                        raise join_error
-        else:
+                    else:
+                        try:
+                            storage_chat = await destination_client.get_chat(storage_link)
+                        except Exception:
+                            raise join_error
+            else:
+                configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
+                if not configured_storage_id:
+                    raise RuntimeError("FILE_STORE is not configured.")
+                storage_chat = await destination_client.get_chat(configured_storage_id)
+    
+            if not storage_chat or not getattr(storage_chat, "id", None):
+                raise RuntimeError("Configured FILE_STORE did not resolve to a Telegram channel.")
+            storage_chat_id = int(storage_chat.id)
             configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
-            if not configured_storage_id:
-                raise RuntimeError("FILE_STORE is not configured.")
-            storage_chat = await destination_client.get_chat(configured_storage_id)
-
-        if not storage_chat or not getattr(storage_chat, "id", None):
-            raise RuntimeError("Configured FILE_STORE did not resolve to a Telegram channel.")
-        storage_chat_id = int(storage_chat.id)
-        configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
-        if configured_storage_id and storage_chat_id != configured_storage_id:
-            raise RuntimeError(
-                f"Configured FILE_STORE link resolved to {storage_chat_id}, "
-                f"but FILE_STORE is {configured_storage_id}; refusing to scan the wrong channel."
-            )
-
-        # Use Telegram's server-side message search against the anime title.
-        # The old implementation walked 5,000 messages for EVERY episode,
-        # making a 24-episode backfill perform up to 120,000 history reads.
-        # Search once per anime and cache the parsed FILE_STORE message IDs.
-        cache_key = (storage_chat_id, tuple(sorted(target_titles)))
-        cached_index = _FILE_STORE_INDEX_CACHE.get(cache_key)
-        if cached_index and (time.monotonic() - cached_index[0]) < 600:
-            storage_records = cached_index[1]
-            await set_progress(
-                f"Reusing cached FILE_STORE index for {title}; "
-                f"{len(storage_records)} matching file record(s) indexed."
-            )
-        else:
-            search_queries = []
-            for alias in title_aliases:
-                query = str(alias or "").strip()
-                if query and query not in search_queries:
-                    search_queries.append(query[:64])
-            if not search_queries:
-                raise RuntimeError(f"No searchable title aliases are available for {title}.")
-
-            found_messages = {}
-            try:
-                async def _search_storage():
-                    for query in search_queries:
-                        async for stored in destination_client.search_messages(
-                            storage_chat_id, query=query, limit=100
-                        ):
-                            if not stored or not getattr(stored, "id", None):
-                                continue
-                            found_messages[int(stored.id)] = stored
-
-                await asyncio.wait_for(_search_storage(), timeout=90)
-            except asyncio.TimeoutError as search_error:
+            if configured_storage_id and storage_chat_id != configured_storage_id:
                 raise RuntimeError(
-                    f"Telegram FILE_STORE title search timed out for {title} after 90 seconds; "
-                    "no duplicate upload was started. Check USER_SESSION access and retry."
-                ) from search_error
-            except Exception as search_error:
-                raise RuntimeError(
-                    f"Telegram could not search FILE_STORE captions for {title}: "
-                    f"{type(search_error).__name__}: {search_error}. "
-                    "No full-history scan or duplicate upload was attempted."
-                ) from search_error
-
-            for stored in found_messages.values():
-                media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
-                media_name = getattr(media_obj, "file_name", None) if media_obj else None
-                parsed = (
-                    _parse_storage_record(getattr(stored, "caption", None))
-                    or _parse_storage_record(media_name)
+                    f"Configured FILE_STORE link resolved to {storage_chat_id}, "
+                    f"but FILE_STORE is {configured_storage_id}; refusing to scan the wrong channel."
                 )
-                if parsed:
-                    storage_records.append((parsed, int(stored.id)))
-
-            _FILE_STORE_INDEX_CACHE[cache_key] = (time.monotonic(), storage_records)
-            await rep.report(
-                f"FILE_STORE search resolved channel {storage_chat_id}; "
-                f"searched {len(search_queries)} title alias(es), inspected "
-                f"{len(found_messages)} matching message(s), and indexed "
-                f"{len(storage_records)} episode-quality file(s).",
-                "info",
-                log=False,
-            )
-    except Exception as storage_error:
-        # Do not blindly upload again when the USER_SESSION cannot join/read
-        # the actual storage channel: duplicate prevention must fail closed.
-        raise RuntimeError(
-            f"USER_SESSION could not join or read FILE_STORE "
-            f"({storage_link or Var.FILE_STORE}) for {title} "
-            f"S{target_season:02d}E{target_episode:02d}; refusing duplicate uploads. "
-            f"Check that FILE_STORE_LINK is the real storage channel invite/public link "
-            f"and that this USER_SESSION account is allowed to join it: {storage_error}"
-        ) from storage_error
+    
+            # Use Telegram's server-side message search against the anime title.
+            # The old implementation walked 5,000 messages for EVERY episode,
+            # making a 24-episode backfill perform up to 120,000 history reads.
+            # Search once per anime and cache the parsed FILE_STORE message IDs.
+            cache_key = (storage_chat_id, tuple(sorted(target_titles)))
+            cached_index = _FILE_STORE_INDEX_CACHE.get(cache_key)
+            if cached_index and (time.monotonic() - cached_index[0]) < 600:
+                storage_records = cached_index[1]
+                await set_progress(
+                    f"Reusing cached FILE_STORE index for {title}; "
+                    f"{len(storage_records)} matching file record(s) indexed."
+                )
+            else:
+                search_queries = []
+                for alias in title_aliases:
+                    query = str(alias or "").strip()
+                    if query and query not in search_queries:
+                        search_queries.append(query[:64])
+                if not search_queries:
+                    raise RuntimeError(f"No searchable title aliases are available for {title}.")
+    
+                found_messages = {}
+                try:
+                    async def _search_storage():
+                        for query in search_queries:
+                            async for stored in destination_client.search_messages(
+                                storage_chat_id, query=query, limit=100
+                            ):
+                                if not stored or not getattr(stored, "id", None):
+                                    continue
+                                found_messages[int(stored.id)] = stored
+    
+                    await asyncio.wait_for(_search_storage(), timeout=90)
+                except asyncio.TimeoutError as search_error:
+                    raise RuntimeError(
+                        f"Telegram FILE_STORE title search timed out for {title} after 90 seconds; "
+                        "no duplicate upload was started. Check USER_SESSION access and retry."
+                    ) from search_error
+                except Exception as search_error:
+                    raise RuntimeError(
+                        f"Telegram could not search FILE_STORE captions for {title}: "
+                        f"{type(search_error).__name__}: {search_error}. "
+                        "No full-history scan or duplicate upload was attempted."
+                    ) from search_error
+    
+                for stored in found_messages.values():
+                    media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
+                    media_name = getattr(media_obj, "file_name", None) if media_obj else None
+                    parsed = (
+                        _parse_storage_record(getattr(stored, "caption", None))
+                        or _parse_storage_record(media_name)
+                    )
+                    if parsed:
+                        storage_records.append((parsed, int(stored.id)))
+    
+                _FILE_STORE_INDEX_CACHE[cache_key] = (time.monotonic(), storage_records)
+                await rep.report(
+                    f"FILE_STORE search resolved channel {storage_chat_id}; "
+                    f"searched {len(search_queries)} title alias(es), inspected "
+                    f"{len(found_messages)} matching message(s), and indexed "
+                    f"{len(storage_records)} episode-quality file(s).",
+                    "info",
+                    log=False,
+                )
+        except Exception as storage_error:
+            # Do not blindly upload again when the USER_SESSION cannot join/read
+            # the actual storage channel: duplicate prevention must fail closed.
+            raise RuntimeError(
+                f"USER_SESSION could not join or read FILE_STORE "
+                f"({storage_link or Var.FILE_STORE}) for {title} "
+                f"S{target_season:02d}E{target_episode:02d}; refusing duplicate uploads. "
+                f"Check that FILE_STORE_LINK is the real storage channel invite/public link "
+                f"and that this USER_SESSION account is allowed to join it: {storage_error}"
+            ) from storage_error
+    
+    else:
+        await set_progress(
+            f"All four qualities for {title} S{target_season:02d}E{target_episode:02d} "
+            "were recovered from the uploader database; skipping FILE_STORE search."
+        )
 
     def _find_stored_quality(quality):
         wanted_quality = "HDRi" if quality.casefold() in ("hdri", "hdrip") else re.sub(r"p$", "", quality.casefold())
@@ -905,6 +1033,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
 
     missing_qualities = []
     for quality in quality_order:
+        if quality in buttons_by_quality:
+            continue
         stored_id = _find_stored_quality(quality)
         if stored_id:
             try:
@@ -1066,83 +1196,6 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"only {len(buttons_by_quality)}/4 quality buttons were prepared."
         )
     keyboard = InlineKeyboardMarkup(keyboard_rows)
-
-    # Publish one AniList information/synopsis card before the episode/share card.
-    # This is destination-specific and separately checkpointed so a retry after
-    # a later episode-card failure does not duplicate the info card.
-    info_post_id = await db.getAnimeArchiveInfoPost(
-        media.get("id"), season_number, episode_number, destination_id
-    )
-    if not info_post_id:
-        data = info.adata or {}
-        title_data = data.get("title") or {}
-        info_title = title_data.get("english") or title_data.get("romaji") or title
-        description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
-        description = html.unescape(re.sub(r"\s+", " ", description)).strip()
-        if len(description) > 560:
-            description = description[:557].rsplit(" ", 1)[0] + "..."
-        genres = data.get("genres") or []
-        studios_data = data.get("studios") or {}
-        studio_nodes = studios_data.get("nodes") or []
-        studio_names = [str(item.get("name")) for item in studio_nodes if item.get("name")]
-        media_type = data.get("format") or data.get("type") or "Anime"
-        rating = data.get("averageScore")
-        rating_text = f"{float(rating) / 10:.1f}/10" if rating is not None else "N/A"
-        season_text = f"Season {season_number}"
-        year = data.get("seasonYear")
-        if year:
-            season_text += f" • {year}"
-        total_episodes = data.get("episodes")
-        status = str(data.get("status") or "Unknown").replace("_", " ").title()
-        info_lines = [
-            f"<blockquote>❝ <b>{html.escape(str(info_title))}</b> ❞</blockquote>",
-            f"<b>Season / Episode:</b> {season_text} • E{int(episode_number):02d}",
-            f"<b>Type:</b> {html.escape(str(media_type))}",
-            f"<b>Genres:</b> {html.escape(', '.join(str(x) for x in genres) if genres else 'N/A')}",
-            f"<b>Rating:</b> {rating_text}",
-            f"<b>Status:</b> {html.escape(status)}",
-        ]
-        if total_episodes:
-            info_lines.append(f"<b>Episodes:</b> {int(total_episodes)}")
-        if studio_names:
-            info_lines.append(f"<b>Studio:</b> {html.escape(', '.join(studio_names[:3]))}")
-        info_lines.append("──────────────────────")
-        if description:
-            info_lines.append(f"<blockquote expandable>≡ {html.escape(description)}</blockquote>")
-        info_caption = "\n".join(info_lines)
-        if len(info_caption) > 1024:
-            # Keep Telegram's photo-caption limit while retaining the key metadata.
-            info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
-        cover = (data.get("coverImage") or {}).get("extraLarge") or (data.get("coverImage") or {}).get("large")
-        if not cover:
-            raise RuntimeError(
-                f"Cannot publish anime info card for {title} S{season_number}E{episode_number}: AniList cover is missing."
-            )
-        info_post = await bot.send_photo(
-            chat_id=destination_id,
-            photo=cover,
-            caption=info_caption,
-        )
-        if not info_post or not getattr(info_post, "id", None):
-            raise RuntimeError(
-                f"Telegram did not confirm anime info card for {title} S{season_number}E{episode_number}."
-            )
-        await db.saveAnimeArchiveInfoPost(
-            media.get("id"), season_number, episode_number, destination_id, info_post.id
-        )
-        await rep.report(
-            f"Published AniList synopsis/info card before episode share card for "
-            f"{title} S{season_number}E{episode_number}.",
-            "info",
-            log=False,
-        )
-    else:
-        await rep.report(
-            f"Reusing existing AniList info card message {info_post_id} for "
-            f"{title} S{season_number}E{episode_number}; not posting a duplicate.",
-            "info",
-            log=False,
-        )
 
     # Match the reference sequence: priority sticker first, then one ANIME SOUL
     # poster/caption with all four quality buttons. Use BOT_TOKEN because its
@@ -1672,10 +1725,47 @@ async def uploadchannel_callbacks(client, callback):
                 saved_post_id = await db.getAnimeArchiveEpisodePost(
                     anime_id, season_index, episode_number, destination_id
                 )
-                if saved_post_id or episode_number in existing_episodes:
+                info_post_id = await db.getAnimeArchiveInfoPost(
+                    anime_id, season_index, episode_number, destination_id
+                )
+                # Migrate the normal uploader's existing destination post into
+                # the archive checkpoint. Only add the missing info card; never
+                # repost the episode card or download/encode its files.
+                legacy_post_id = await db.getAnimeDestinationPost(
+                    anime_id, str(episode_number), destination_id
+                )
+                if not legacy_post_id and int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
+                    legacy_post_id = await db.getAnimeMainPost(anime_id, str(episode_number))
+                existing_post_id = saved_post_id or legacy_post_id
+                if existing_post_id:
+                    if not info_post_id:
+                        await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
+                        try:
+                            # Recheck after acquiring the process-wide lock.
+                            info_post_id = await db.getAnimeArchiveInfoPost(
+                                anime_id, season_index, episode_number, destination_id
+                            )
+                            if not info_post_id:
+                                await _upload_single_episode(
+                                    selected_media,
+                                    destination_id,
+                                    season_index,
+                                    episode_number,
+                                    user_client,
+                                    progress_callback=report_stage,
+                                    info_only=True,
+                                )
+                        finally:
+                            AUTO_UPLOAD_PRIORITY_LOCK.release()
+                    if not saved_post_id:
+                        await db.saveAnimeArchiveEpisodePost(
+                            anime_id, season_index, episode_number,
+                            destination_id, existing_post_id, migrated=True
+                        )
                     await report_stage(
-                        f"already published — skipping {selected_title} "
-                        f"S{season_index:02d}E{episode_number:02d}",
+                        f"reused existing episode post for {selected_title} "
+                        f"S{season_index:02d}E{episode_number:02d}; "
+                        "added only the missing synopsis card and skipped torrent/encoding",
                         selected_title,
                     )
                     continue
