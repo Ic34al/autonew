@@ -4552,13 +4552,35 @@ async def anime_search_cmd(client, message: Message):
             or (current_season == 1 and extract_season_number(title) is None)
         ]
 
+        # Use the highest episode number actually released in the verified
+        # season as the live-season boundary. SubsPlease's show endpoint can
+        # contain a complete/older catalogue; without this cap it can make an
+        # ongoing season appear to have 24 episodes when only 8 have aired.
+        current_release_episode_numbers = [
+            number for title, _torrent in season_matches
+            if (number := extract_episode_number(title)) is not None
+        ]
+        latest_released_episode = (
+            max(current_release_episode_numbers)
+            if current_release_episode_numbers else None
+        )
+
         # Only use historical catalogue entries whose show name/URL verifies
-        # the selected season. Unseasoned catalogues are Season 1 only.
+        # the selected season, and never show catalogue episodes beyond the
+        # newest episode confirmed by a real release in that season.
         for catalogue_season, title, torrent in catalogue_matches:
-            if catalogue_season == current_season or (
+            if catalogue_season != current_season and not (
                 catalogue_season is None and current_season == 1
             ):
-                season_matches.append((title, torrent))
+                continue
+            catalogue_episode_number = extract_episode_number(title)
+            if (
+                latest_released_episode is not None
+                and catalogue_episode_number is not None
+                and catalogue_episode_number > latest_released_episode
+            ):
+                continue
+            season_matches.append((title, torrent))
 
         selected = {}
         for title, torrent in season_matches:
