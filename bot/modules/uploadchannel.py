@@ -15,7 +15,7 @@ from urllib.parse import quote_plus
 import httpx
 from pyrogram import filters
 from pyrogram.enums import ParseMode
-from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivileges
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, ChatPrivileges, InputMediaPhoto
 
 from bot import bot, Var, LOGS
 from bot.core.database import db
@@ -708,12 +708,21 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # A complete FILE_STORE set can be reused without a live torrent.
     info.pdata["audio_type"] = "Japanese [English Sub]"
 
-    # Publish one AniList information/synopsis card before the episode/share card.
-    # This is destination-specific and separately checkpointed so a retry after
-    # a later episode-card failure does not duplicate the info card.
-    info_post_id = await db.getAnimeArchiveInfoPost(
+    # Exactly ONE synopsis/info card is allowed per anime and destination channel.
+    # Migrate the old per-episode E01 card when present; remove legacy duplicates
+    # for later episodes so the channel keeps one clean synopsis header.
+    info_post_id = await db.getAnimeArchiveChannelInfoPost(media.get("id"), destination_id)
+    legacy_info_post_id = await db.getAnimeArchiveInfoPost(
         media.get("id"), season_number, episode_number, destination_id
     )
+    if not info_post_id and int(episode_number) == 1 and legacy_info_post_id:
+        info_post_id = legacy_info_post_id
+        await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
+    if info_post_id and legacy_info_post_id and int(legacy_info_post_id) != int(info_post_id):
+        try:
+            await bot.delete_messages(destination_id, int(legacy_info_post_id))
+        except Exception as cleanup_error:
+            LOGS.warning("Could not remove legacy duplicate synopsis card %s: %s", legacy_info_post_id, cleanup_error)
     if not info_post_id:
         data = info.adata or {}
         title_data = data.get("title") or {}
@@ -737,7 +746,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         status = str(data.get("status") or "Unknown").replace("_", " ").title()
         info_lines = [
             f"<blockquote>❝ <b>{html.escape(str(info_title))}</b> ❞</blockquote>",
-            f"<b>Season / Episode:</b> {season_text} • E{int(episode_number):02d}",
+            f"<b>Season:</b> {season_text}",
             f"<b>Type:</b> {html.escape(str(media_type))}",
             f"<b>Genres:</b> {html.escape(', '.join(str(x) for x in genres) if genres else 'N/A')}",
             f"<b>Rating:</b> {rating_text}",
@@ -754,23 +763,37 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         if len(info_caption) > 1024:
             # Keep Telegram's photo-caption limit while retaining the key metadata.
             info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
-        cover = (data.get("coverImage") or {}).get("extraLarge") or (data.get("coverImage") or {}).get("large")
-        if not cover:
-            raise RuntimeError(
-                f"Cannot publish anime info card for {title} S{season_number}E{episode_number}: AniList cover is missing."
-            )
-        info_post = await bot.send_photo(
-            chat_id=destination_id,
-            photo=cover,
-            caption=info_caption,
+        info_poster_path = os.path.join(workdir, f"anime_soul_info_s{season_number}.jpg")
+        info_poster = await build_anime_soul_poster(
+            info, title, info_poster_path, info_card=True
         )
-        if not info_post or not getattr(info_post, "id", None):
+        if not info_poster or not os.path.exists(info_poster):
             raise RuntimeError(
-                f"Telegram did not confirm anime info card for {title} S{season_number}E{episode_number}."
+                f"Could not generate the requested ANIME SOUL split-screen synopsis thumbnail for {title}."
             )
-        await db.saveAnimeArchiveInfoPost(
-            media.get("id"), season_number, episode_number, destination_id, info_post.id
-        )
+        if legacy_info_post_id and int(episode_number) == 1:
+            with open(info_poster, "rb") as info_photo:
+                edited = await bot.edit_message_media(
+                    chat_id=destination_id,
+                    message_id=int(legacy_info_post_id),
+                    media=InputMediaPhoto(media=info_photo, caption=info_caption, parse_mode=ParseMode.HTML),
+                )
+            info_post = edited
+            info_post_id = int(legacy_info_post_id)
+        else:
+            with open(info_poster, "rb") as info_photo:
+                info_post = await bot.send_photo(
+                    chat_id=destination_id,
+                    photo=info_photo,
+                    caption=info_caption,
+                    parse_mode=ParseMode.HTML,
+                )
+            info_post_id = int(info_post.id) if info_post and getattr(info_post, "id", None) else None
+        if not info_post_id:
+            raise RuntimeError(
+                f"Telegram did not confirm anime info card for {title}."
+            )
+        await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
         await rep.report(
             f"Published AniList synopsis/info card before episode share card for "
             f"{title} S{season_number}E{episode_number}.",
@@ -779,11 +802,32 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
     else:
         await rep.report(
-            f"Reusing existing AniList info card message {info_post_id} for "
-            f"{title} S{season_number}E{episode_number}; not posting a duplicate.",
+            f"Reusing the single channel synopsis card {info_post_id} for "
+            f"{title}; no extra synopsis card will be posted.",
             "info",
             log=False,
         )
+
+    async def send_checkpointed_sticker(stage_key):
+        saved_sticker = await db.getAnimeArchiveStickerPost(
+            media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
+            destination_id, stage_key,
+        )
+        if saved_sticker:
+            return
+        sticker_message_id = await send_sticker_to_channel(
+            destination_id, getattr(Var, "STICKER_ID", None), client=bot
+        )
+        if sticker_message_id:
+            await db.saveAnimeArchiveStickerPost(
+                media.get("id"), season_number, str(episode_number) if stage_key != "info" else "info",
+                destination_id, stage_key, sticker_message_id,
+            )
+
+    if not await db.getAnimeArchiveStickerPost(
+        media.get("id"), season_number, "info", destination_id, "info"
+    ):
+        await send_checkpointed_sticker("info")
 
     if info_only:
         await rep.report(
@@ -1216,23 +1260,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
     keyboard = InlineKeyboardMarkup(keyboard_rows)
 
-    # Match the reference sequence: priority sticker first, then one ANIME SOUL
-    # poster/caption with all four quality buttons. Use BOT_TOKEN because its
-    # sticker file_id belongs to that bot, which is promoted as channel admin.
-    await set_progress(f"Publishing final episode card to channel {destination_id} for {title} S{target_season:02d}E{target_episode:02d}.")
-    sticker_sent = await send_sticker_to_channel(
-        destination_id,
-        getattr(Var, "STICKER_ID", None),
-        client=bot,
-    )
-    if not sticker_sent:
-        await rep.report(
-            f"Priority sticker delivery failed for {title} S{season_number}E{episode_number}; "
-            "continuing with the episode card so sticker delivery cannot block the upload.",
-            "warning",
-            log=False,
-        )
-
+    # Required sequence: synopsis card -> sticker -> episode card -> sticker.
+    await set_progress(f"Publishing episode card to channel {destination_id} for {title} S{target_season:02d}E{target_episode:02d}.")
     poster_path = os.path.join(workdir, f"anime_soul_s{season_number}e{episode_number}.jpg")
     poster = await build_anime_soul_poster(
         info, title, poster_path, episode_label=str(episode_number).zfill(2)
@@ -1270,6 +1299,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     await db.saveAnimeArchiveEpisodePost(
         media.get("id"), season_number, episode_number, destination_id, published.id
     )
+    await send_checkpointed_sticker("episode")
 
     await rep.report(
         f"Published {title} S{season_number}E{episode_number} with four quality buttons "
