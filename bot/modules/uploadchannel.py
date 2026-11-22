@@ -182,17 +182,36 @@ async def _fetch_currently_airing():
         payload = response.json()
     if payload.get("errors"):
         raise RuntimeError("; ".join(str(e.get("message", "AniList error")) for e in payload["errors"]))
-    media = (payload.get("data") or {}).get("Page", {}).get("media") or []
+    # AniList caps Page.perPage at 50. Fetch several pages instead of
+    # silently limiting /uploadchannel to the 50 most popular currently
+    # releasing titles. Deduplicate by AniList ID across pages.
     result = []
     seen = set()
-    for item in media:
-        day = _airing_day(item)
-        title = _display_title(item)
-        if not day or not title or item.get("id") in seen:
-            continue
-        seen.add(item.get("id"))
-        item["_weekday"] = day
-        result.append(item)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        for page in range(1, 11):
+            response = await client.post(
+                ANILIST_URL,
+                json={"query": SCHEDULE_QUERY, "variables": {"page": page, "perPage": 50}},
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if payload.get("errors"):
+                raise RuntimeError("; ".join(
+                    str(e.get("message", "AniList error")) for e in payload["errors"]
+                ))
+            media = (payload.get("data") or {}).get("Page", {}).get("media") or []
+            if not media:
+                break
+            for item in media:
+                media_id = item.get("id")
+                day = _airing_day(item)
+                title = _display_title(item)
+                if not day or not title or not media_id or media_id in seen:
+                    continue
+                seen.add(media_id)
+                item["_weekday"] = day
+                result.append(item)
     return result
 
 
@@ -1432,11 +1451,14 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     return True
 
 
-def _selection_keyboard(items, selected):
+def _selection_keyboard(items, selected, page=0):
     weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+    page_size = 14
+    page = max(0, min(int(page), max(0, (len(items) - 1) // page_size)))
+    visible_indices = set(range(page * page_size, min(len(items), (page + 1) * page_size)))
     rows = []
     for day in weekdays:
-        indices = [i for i, item in enumerate(items) if item["_weekday"] == day]
+        indices = [i for i, item in enumerate(items) if i in visible_indices and item["_weekday"] == day]
         if not indices:
             continue
         rows.append([InlineKeyboardButton(f"— {day} —", callback_data="uc:noop")])
@@ -1449,6 +1471,14 @@ def _selection_keyboard(items, selected):
                 prefix = "✅ " if index in selected else "▫️ "
                 row.append(InlineKeyboardButton(prefix + title, callback_data=f"uc:toggle:{index}"))
             rows.append(row)
+    nav = []
+    if page > 0:
+        nav.append(InlineKeyboardButton("⬅️ Previous", callback_data=f"uc:page:{page - 1}"))
+    nav.append(InlineKeyboardButton(f"{page + 1}/{max(1, (len(items) + page_size - 1) // page_size)}", callback_data="uc:noop"))
+    if (page + 1) * page_size < len(items):
+        nav.append(InlineKeyboardButton("Next ➡️", callback_data=f"uc:page:{page + 1}"))
+    if nav:
+        rows.append(nav)
     rows.append([
         InlineKeyboardButton(f"Create {len(selected)} channel(s)", callback_data="uc:create"),
         InlineKeyboardButton("Cancel", callback_data="uc:cancel"),
@@ -1515,8 +1545,41 @@ async def uploadchannel_command(client, message):
             "items": items,
             "selected": set(),
             "created": [],
+            "page": 0,
         }
-        keyboard = _selection_keyboard(items, set())
+        requested_title = message.text.split(None, 1)[1].strip() if len(message.text.split(None, 1)) > 1 else ""
+        if requested_title:
+            matches = []
+            needle = _plain_title(requested_title)
+            for index, item in enumerate(items):
+                aliases = (item.get("title") or {}).values()
+                if any(
+                    _plain_title(alias) == needle
+                    for alias in aliases if alias
+                ):
+                    matches.append(index)
+            if len(matches) != 1:
+                return await status.edit(
+                    f"Could not uniquely match <b>{_escape(requested_title)}</b> "
+                    f"against the {len(items)} currently airing AniList entries. "
+                    "Use /uploadchannel without a title to choose from the paginated list."
+                )
+            UPLOAD_CHANNEL_SESSIONS[message.from_user.id]["selected"] = {matches[0]}
+            await status.edit(
+                f"Matched <b>{_escape(_display_title(items[matches[0]]))}</b>. "
+                "Starting channel creation and released-episode backfill automatically…"
+            )
+            from types import SimpleNamespace
+            async def _command_answer(*args, **kwargs):
+                return None
+            synthetic_callback = SimpleNamespace(
+                from_user=message.from_user,
+                data="uc:create",
+                message=status,
+                answer=_command_answer,
+            )
+            return await uploadchannel_callbacks(client, synthetic_callback)
+        keyboard = _selection_keyboard(items, set(), page=0)
         await status.edit(
             "<b>Choose ongoing anime</b>\nSelect as many titles as you want. The weekday is based on the next scheduled episode in India time.",
             reply_markup=keyboard,
@@ -1535,6 +1598,16 @@ async def uploadchannel_callbacks(client, callback):
 
     data = callback.data
     if data == "uc:noop":
+        return await callback.answer()
+    if data.startswith("uc:page:"):
+        try:
+            page = int(data.rsplit(":", 1)[1])
+        except ValueError:
+            return await callback.answer("Invalid page.", show_alert=True)
+        state["page"] = max(0, page)
+        await callback.message.edit_reply_markup(
+            _selection_keyboard(state["items"], state["selected"], page=state["page"])
+        )
         return await callback.answer()
     if data == "uc:cancel":
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
