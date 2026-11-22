@@ -390,20 +390,49 @@ class FFEncoder:
     async def start_encode(self):
         # Prefer the host's FFmpeg, but fall back to the self-contained binary
         # bundled by imageio-ffmpeg on Python-buildpack deployments.
+        # Resolve and verify the actual executable before building any command.
+        # Some buildpack deployments do not install system packages from Dockerfile.
         ffmpeg_executable = shutil.which("ffmpeg")
-        if not ffmpeg_executable:
+        candidates = [ffmpeg_executable] if ffmpeg_executable else []
+        try:
+            bundled_ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            if bundled_ffmpeg not in candidates:
+                candidates.append(bundled_ffmpeg)
+        except Exception as exc:
+            LOGS.warning(f"Could not locate bundled imageio-ffmpeg binary: {exc}")
+
+        verified_ffmpeg = None
+        ffmpeg_probe_errors = []
+        for candidate in candidates:
+            if not candidate or not ospath.isfile(candidate) or not __import__("os").access(candidate, __import__("os").X_OK):
+                ffmpeg_probe_errors.append(f"{candidate!r} is missing or not executable")
+                continue
             try:
-                ffmpeg_executable = imageio_ffmpeg.get_ffmpeg_exe()
+                probe = await asyncio.create_subprocess_exec(
+                    candidate, "-version",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                probe_code = await probe.wait()
+                if probe_code == 0:
+                    verified_ffmpeg = candidate
+                    break
+                ffmpeg_probe_errors.append(f"{candidate!r} returned exit code {probe_code}")
             except Exception as exc:
-                self.last_error = f"FFmpeg is unavailable: {exc}"
-                LOGS.error(self.last_error)
-                if not self.quiet_errors:
-                    await rep.report(
-                        "FFmpeg is unavailable. Install the system ffmpeg package or "
-                        "ensure imageio-ffmpeg is installed; encoding was not started.",
-                        "error",
-                    )
-                return None
+                ffmpeg_probe_errors.append(f"{candidate!r}: {type(exc).__name__}: {exc}")
+
+        if not verified_ffmpeg:
+            self.last_error = "FFmpeg is unavailable or cannot run: " + "; ".join(ffmpeg_probe_errors)
+            LOGS.error(self.last_error)
+            if not self.quiet_errors:
+                await rep.report(
+                    "FFmpeg could not be started in this deployment. Install the system "
+                    "ffmpeg package or redeploy with the repository's FFmpeg-enabled "
+                    "Docker/Nixpacks configuration. Encoding was not started.",
+                    "error",
+                )
+            return None
+        ffmpeg_executable = verified_ffmpeg
 
         if ani_cache.get('global_pause') and not self.bypass_pause:
             self.last_error = "Encoding skipped because /pause is active."
