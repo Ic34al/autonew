@@ -8727,7 +8727,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             season_value = aniInfo.pdata.get("anime_season") or "01"
             if isinstance(season_value, list):
                 season_value = season_value[-1] if season_value else "01"
-            season_match = re.search(r"\\d+", str(season_value))
+            season_match = re.search(r"\d+", str(season_value))
             target_season = int(season_match.group(0)) if season_match else 1
             target_episode = int(ep_no)
 
@@ -8754,7 +8754,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                         continue
 
                     tagged = re.search(
-                        r"(?i)\\[s0*(\\d{1,2})[-_ ]0*(\\d{1,3})\\]", body
+                        r"(?i)\[s0*(\d{1,2})[-_ ]0*(\d{1,3})\]", body
                     )
                     if tagged:
                         same_episode = (
@@ -8763,10 +8763,10 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                         )
                     else:
                         season_in_post = re.search(
-                            r"(?i)\\bseason\\s*0*(\\d{1,2})\\b", body
+                            r"(?i)\bseason\s*0*(\d{1,2})\b", body
                         )
                         episode_in_post = re.search(
-                            r"(?i)\\bepisode\\s*[:#]?\\s*0*(\\d{1,3})\\b", body
+                            r"(?i)\bepisode\s*[:#]?\s*0*(\d{1,3})\b", body
                         )
                         same_episode = bool(
                             season_in_post and episode_in_post
