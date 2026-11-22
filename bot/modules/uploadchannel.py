@@ -41,6 +41,7 @@ _FILE_STORE_INDEX_CACHE = {}
 _ANILIST_DETAILS_CACHE = {}
 _FILE_STORE_CHAT_CACHE = {}
 ANIME_INFO_CARD_VERSION = "anime-soul-split-v2"
+ANIME_EPISODE_CARD_VERSION = "anime-soul-episode-v2"
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -1307,7 +1308,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # Commit the destination-specific idempotency checkpoint immediately after
     # Telegram confirms the card. A retry/restart will skip this exact episode.
     await db.saveAnimeArchiveEpisodePost(
-        media.get("id"), season_number, episode_number, destination_id, published.id
+        media.get("id"), season_number, episode_number, destination_id, published.id,
+        card_version=ANIME_EPISODE_CARD_VERSION,
     )
     if int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
         await db.saveAnimeMainPost(media.get("id"), str(episode_number), published.id)
@@ -1803,14 +1805,28 @@ async def uploadchannel_callbacks(client, callback):
                     destination_post_id = await db.getAnimeMainPost(anime_id, str(episode_number))
                 existing_post_id = saved_post_id or destination_post_id
                 if existing_post_id:
-                    if not info_post_id:
+                    episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
+                        anime_id, season_index, episode_number, destination_id
+                    )
+                    card_republished = False
+                    if (
+                        not info_post_id
+                        or episode_card_version != ANIME_EPISODE_CARD_VERSION
+                    ):
                         await AUTO_UPLOAD_PRIORITY_LOCK.acquire()
                         try:
-                            # Recheck after acquiring the process-wide lock.
+                            # Recheck both card checkpoints after acquiring the
+                            # process-wide lock. Upgrade legacy posts exactly once.
                             info_post_id = await db.getAnimeArchiveInfoPost(
                                 anime_id, season_index, episode_number, destination_id
                             )
-                            if not info_post_id:
+                            episode_card_version = await db.getAnimeArchiveEpisodeCardVersion(
+                                anime_id, season_index, episode_number, destination_id
+                            )
+                            if (
+                                not info_post_id
+                                or episode_card_version != ANIME_EPISODE_CARD_VERSION
+                            ):
                                 await _upload_single_episode(
                                     selected_media,
                                     destination_id,
@@ -1820,17 +1836,18 @@ async def uploadchannel_callbacks(client, callback):
                                     progress_callback=report_stage,
                                     reuse_only=True,
                                 )
+                                card_republished = True
                         finally:
                             AUTO_UPLOAD_PRIORITY_LOCK.release()
-                    if not saved_post_id:
+                    if not card_republished and not saved_post_id:
                         await db.saveAnimeArchiveEpisodePost(
                             anime_id, season_index, episode_number,
                             destination_id, existing_post_id, migrated=True
                         )
                     await report_stage(
-                        f"reused existing episode post for {selected_title} "
-                        f"S{season_index:02d}E{episode_number:02d}; "
-                        "added only the missing synopsis card and skipped torrent/encoding",
+                        f"{'upgraded and republished' if card_republished else 'reused'} "
+                        f"{selected_title} S{season_index:02d}E{episode_number:02d}; "
+                        "verified FILE_STORE qualities reused, no torrent download or re-encoding",
                         selected_title,
                     )
                     continue
