@@ -8783,7 +8783,9 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
     if not await is_valid_torrent_url(torrent):
         await rep.report(f"Invalid or non-torrent URL for {name}: {torrent}", "error")
         return
-    
+
+    episode_lock_token = None
+    ani_id = ep_no = None
     try:
         aniInfo = TextEditor(name)
         await aniInfo.load_info()
@@ -8791,9 +8793,21 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         if isinstance(ep_no, list):
             ep_no = ep_no[0] if ep_no else None
         ep_no = str(ep_no) if ep_no else None
+        if not ep_no:
+            ep_no = extract_release_episode(name)
+        if not ani_id or not ep_no:
+            raise RuntimeError(
+                f"Refusing automatic upload because AniList ID/episode number "
+                f"could not be verified for release: {name}"
+            )
 
-        # Cache state per anime episode, not per series. A series can have
-        # many episodes; using ani_id alone incorrectly blocks later episodes.
+        # Global MongoDB claim protects normal mode across multiple workers.
+        episode_lock_token = uuid.uuid4().hex
+        if not await db.claimAnimeEpisode(ani_id, ep_no, episode_lock_token):
+            return "in_progress"
+
+        # Cache state per anime episode, not per series. Using ani_id alone
+        # incorrectly blocks later episodes.
         episode_key = f"{ani_id}:{ep_no or 'unknown'}"
         encoding_enabled = await db.get_encoding()
         if not force and episode_key in ani_cache['completed']:
@@ -9297,6 +9311,15 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # Propagate the failure to fetch_animes so it does not mark this
         # episode as handled and advance to the next RSS item.
         raise
+    finally:
+        if episode_lock_token and ani_id is not None and ep_no is not None:
+            try:
+                await db.releaseAnimeEpisode(ani_id, ep_no, episode_lock_token)
+            except Exception as release_error:
+                await rep.report(
+                    f"Could not release automatic episode lock for {ani_id} E{ep_no}: {release_error}",
+                    "warning",
+                )
 
 async def extra_utils(msg_id, out_path):
     try:
