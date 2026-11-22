@@ -1067,6 +1067,83 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
     keyboard = InlineKeyboardMarkup(keyboard_rows)
 
+    # Publish one AniList information/synopsis card before the episode/share card.
+    # This is destination-specific and separately checkpointed so a retry after
+    # a later episode-card failure does not duplicate the info card.
+    info_post_id = await db.getAnimeArchiveInfoPost(
+        media.get("id"), season_number, episode_number, destination_id
+    )
+    if not info_post_id:
+        data = info.adata or {}
+        title_data = data.get("title") or {}
+        info_title = title_data.get("english") or title_data.get("romaji") or title
+        description = re.sub(r"<[^>]+>", "", str(data.get("description") or ""))
+        description = html.unescape(re.sub(r"\s+", " ", description)).strip()
+        if len(description) > 560:
+            description = description[:557].rsplit(" ", 1)[0] + "..."
+        genres = data.get("genres") or []
+        studios_data = data.get("studios") or {}
+        studio_nodes = studios_data.get("nodes") or []
+        studio_names = [str(item.get("name")) for item in studio_nodes if item.get("name")]
+        media_type = data.get("format") or data.get("type") or "Anime"
+        rating = data.get("averageScore")
+        rating_text = f"{float(rating) / 10:.1f}/10" if rating is not None else "N/A"
+        season_text = f"Season {season_number}"
+        year = data.get("seasonYear")
+        if year:
+            season_text += f" • {year}"
+        total_episodes = data.get("episodes")
+        status = str(data.get("status") or "Unknown").replace("_", " ").title()
+        info_lines = [
+            f"<blockquote>❝ <b>{html.escape(str(info_title))}</b> ❞</blockquote>",
+            f"<b>Season / Episode:</b> {season_text} • E{int(episode_number):02d}",
+            f"<b>Type:</b> {html.escape(str(media_type))}",
+            f"<b>Genres:</b> {html.escape(', '.join(str(x) for x in genres) if genres else 'N/A')}",
+            f"<b>Rating:</b> {rating_text}",
+            f"<b>Status:</b> {html.escape(status)}",
+        ]
+        if total_episodes:
+            info_lines.append(f"<b>Episodes:</b> {int(total_episodes)}")
+        if studio_names:
+            info_lines.append(f"<b>Studio:</b> {html.escape(', '.join(studio_names[:3]))}")
+        info_lines.append("──────────────────────")
+        if description:
+            info_lines.append(f"<blockquote expandable>≡ {html.escape(description)}</blockquote>")
+        info_caption = "\n".join(info_lines)
+        if len(info_caption) > 1024:
+            # Keep Telegram's photo-caption limit while retaining the key metadata.
+            info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
+        cover = (data.get("coverImage") or {}).get("extraLarge") or (data.get("coverImage") or {}).get("large")
+        if not cover:
+            raise RuntimeError(
+                f"Cannot publish anime info card for {title} S{season_number}E{episode_number}: AniList cover is missing."
+            )
+        info_post = await bot.send_photo(
+            chat_id=destination_id,
+            photo=cover,
+            caption=info_caption,
+        )
+        if not info_post or not getattr(info_post, "id", None):
+            raise RuntimeError(
+                f"Telegram did not confirm anime info card for {title} S{season_number}E{episode_number}."
+            )
+        await db.saveAnimeArchiveInfoPost(
+            media.get("id"), season_number, episode_number, destination_id, info_post.id
+        )
+        await rep.report(
+            f"Published AniList synopsis/info card before episode share card for "
+            f"{title} S{season_number}E{episode_number}.",
+            "info",
+            log=False,
+        )
+    else:
+        await rep.report(
+            f"Reusing existing AniList info card message {info_post_id} for "
+            f"{title} S{season_number}E{episode_number}; not posting a duplicate.",
+            "info",
+            log=False,
+        )
+
     # Match the reference sequence: priority sticker first, then one ANIME SOUL
     # poster/caption with all four quality buttons. Use BOT_TOKEN because its
     # sticker file_id belongs to that bot, which is promoted as channel admin.
