@@ -43,9 +43,10 @@ class FFEncoder:
     def __init__(
         self, message, path, name, qual, is_movie=False,
         force_default=False, force_encode=False, bypass_pause=False,
-        quiet_errors=False,
+        quiet_errors=False, fallback_mode=0,
     ):
         self.force_default = bool(force_default)
+        self.fallback_mode = max(0, min(2, int(fallback_mode or 0)))
         self.force_encode = bool(force_encode)
         self.bypass_pause = bool(bypass_pause)
         self.quiet_errors = bool(quiet_errors)
@@ -144,14 +145,28 @@ class FFEncoder:
 
     async def get_ffmpeg_command(self, dl_npath, out_npath):
         try:
+            if self.fallback_mode >= 2:
+                # Last-resort profile: drop subtitle/data streams and transcode
+                # the first audio stream to AAC. This avoids failures caused by
+                # unsupported subtitle codecs, copied audio codecs, or MKV
+                # attachment/data streams in custom templates.
+                resolution = self.resolution_map.get(self.__qual, "1920x1080")
+                return (
+                    "ffmpeg -hide_banner -y "
+                    "-filter_threads 1 -filter_complex_threads 1 "
+                    f"-i {shlex.quote(dl_npath)} "
+                    "-map 0:v:0 -map 0:a:0? "
+                    "-map_metadata 0 -map_chapters 0 "
+                    "-c:v libx264 -preset ultrafast "
+                    f"-s {resolution} -pix_fmt yuv420p -crf 32 "
+                    "-c:a aac -b:a 96k -ac 2 -sn -dn "
+                    "-threads 1 -max_muxing_queue_size 4096 "
+                    f"-progress {shlex.quote(self.__prog_file)} -nostats "
+                    f"{shlex.quote(out_npath)}"
+                )
             if self.force_default:
-                # Do not reuse FFCODE_* environment templates for the retry:
-                # those templates may themselves contain "-map 0", which maps
-                # MKV attachments/data streams (often reported as unknown codec
-                # streams 21+). Build an independent, conservative fallback.
-                # Only the first video stream, optional audio streams, and
-                # optional subtitle streams are mapped; attachments/data are
-                # intentionally excluded.
+                # First fallback: exclude attachments/data and map only
+                # ordinary video, audio and optional subtitle streams.
                 resolution = self.resolution_map.get(self.__qual, "1920x1080")
                 safe_command = (
                     "ffmpeg -hide_banner -y "
@@ -161,15 +176,14 @@ class FFEncoder:
                     "-map_metadata 0 -map_chapters 0 "
                     "-c:v libx264 -preset veryfast "
                     f"-s {resolution} -pix_fmt yuv420p -crf 30 "
-                    "-c:a libopus -b:a 32k -ac 2 -c:s copy "
+                    "-c:a libopus -b:a 48k -ac 2 -c:s copy "
                     "-threads 1 -max_muxing_queue_size 2048 "
                     f"-progress {shlex.quote(self.__prog_file)} -nostats "
                     f"{shlex.quote(out_npath)}"
                 )
                 LOGS.warning(
-                    f"Using independent safe FFmpeg fallback for {self.__name} "
-                    f"({self.__qual}p); mapping video/audio/subtitles only and "
-                    "excluding MKV attachments/data streams."
+                    f"Using FFmpeg fallback 1/2 for {self.__name} "
+                    f"({self.__qual}p)."
                 )
                 return safe_command
             anime_name = self.pdata.get('title', '').strip() if self.pdata else None
@@ -414,6 +428,13 @@ class FFEncoder:
 
         dl_npath = ospath.join("encode", f"ffanimeadvin_{self._run_token}.mkv")
         out_npath = ospath.join("encode", f"ffanimeadvout_{self._run_token}.mkv")
+        # Remove only this attempt's temporary output; never reuse a partial MKV.
+        for stale_path in (out_npath, self.out_path):
+            try:
+                if ospath.exists(stale_path):
+                    await aioremove(stale_path)
+            except FileNotFoundError:
+                pass
         await aiorename(self.dl_path, dl_npath)
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
