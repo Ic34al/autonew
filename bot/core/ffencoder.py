@@ -644,6 +644,58 @@ class FFEncoder:
                 f"for {self.__name}."
             )
 
+        # Enforce distinct quality profiles AFTER saved/global FFmpeg templates.
+        # Previously all three profiles commonly used CRF 30 and 32k audio, so
+        # 720p and 1080p outputs could end up almost the same size. The ultrafast
+        # preset is retained for the requested faster encoding; CRF now differs
+        # by output tier and audio bitrate is no longer starved.
+        quality_profile = {
+            "1080": {"crf": 23, "audio_bitrate": "128k"},
+            "720": {"crf": 27, "audio_bitrate": "96k"},
+            "480": {"crf": 30, "audio_bitrate": "64k"},
+            "360": {"crf": 32, "audio_bitrate": "48k"},
+            "240": {"crf": 34, "audio_bitrate": "32k"},
+            "144": {"crf": 35, "audio_bitrate": "24k"},
+        }
+        profile = quality_profile.get(self.__qual)
+        if ffcode and profile:
+            crf_value = str(profile["crf"])
+            if re.search(r"(?i)(?<![\\w-])-crf\\s+\\d+", ffcode):
+                ffcode = re.sub(
+                    r"(?i)(?<![\\w-])-crf\\s+\\d+",
+                    f"-crf {crf_value}",
+                    ffcode,
+                )
+            else:
+                # Add CRF before the output filename so it applies to this output.
+                output_tokens = (f"'{out_npath}'", f'"{out_npath}"', out_npath)
+                for output_token in output_tokens:
+                    if output_token in ffcode:
+                        ffcode = ffcode.replace(
+                            output_token,
+                            f"-crf {crf_value} {output_token}",
+                            1,
+                        )
+                        break
+
+            audio_bitrate = profile["audio_bitrate"]
+            if re.search(r"(?i)(?<![\\w-])-b:a\\s+\\S+", ffcode):
+                ffcode = re.sub(
+                    r"(?i)(?<![\\w-])-b:a\\s+\\S+",
+                    f"-b:a {audio_bitrate}",
+                    ffcode,
+                )
+            elif re.search(r"(?i)(?<![\\w-])-ab\\s+\\S+", ffcode):
+                ffcode = re.sub(
+                    r"(?i)(?<![\\w-])-ab\\s+\\S+",
+                    f"-ab {audio_bitrate}",
+                    ffcode,
+                )
+            LOGS.info(
+                f"Enforced {self.__qual}p encode profile for {self.__name}: "
+                f"CRF {crf_value}, audio {audio_bitrate}."
+            )
+
         # /pause may be pressed while the FFmpeg command is being prepared.
         # Restore the source file and do not start a new encode in that case.
         if ani_cache.get('global_pause') and not self.bypass_pause:
