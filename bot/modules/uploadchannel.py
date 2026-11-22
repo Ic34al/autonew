@@ -379,18 +379,21 @@ async def _find_episode_torrent(media, season_number, episode_number):
     for alias in search_aliases:
         # Include SubsPlease's exact "S2 - 01" naming as well as S02E01.
         queries.extend([
-            f"{alias} S{season:02d}E{episode:02d} 720p",
-            f"{alias} S{season}E{episode:02d} 720p",
-            f"{alias} S{season} - {episode:02d} 720p",
-            f"{alias} Season {season} Episode {episode} 720p",
-            f"{alias} {episode:02d} 720p",
+            f"{alias} S{season:02d}E{episode:02d} 1080p",
+            f"{alias} S{season}E{episode:02d} 1080p",
+            f"{alias} S{season} - {episode:02d} 1080p",
+            f"{alias} Season {season} Episode {episode} 1080p",
+            f"{alias} {episode:02d} 1080p",
         ])
     queries = list(dict.fromkeys(queries))
     feeds = [
         f"https://nyaa.si/?page=rss&q={quote_plus(query)}&c=1_2&f=0"
         for query in queries
     ]
-    feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("720"))
+    # Always source the highest configured SubsPlease release. The 480p and
+    # 720p outputs are downscaled from this original; sourcing a 720p torrent
+    # and then upscaling it to 1080p creates a fake 1080p file.
+    feeds.append((getattr(Var, "RSS_LOW_END", {}) or {}).get("1080"))
     feeds.extend(list(getattr(Var, "RSS_ITEMS_ANIME", []) or []))
 
     seen_entries = set()
@@ -413,6 +416,14 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 continue
             seen_entries.add(entry_key)
             scanned += 1
+
+            # Do not silently accept a 720p/480p release as the source for
+            # the 1080p master. That was the reason every output could look
+            # like the same low-resolution source. Only encode from an actual
+            # 1080p source; if SubsPlease has none, fail clearly instead of
+            # upscaling and labelling it 1080p.
+            if not re.search(r"(?i)\\b1080p\\b", title):
+                continue
 
             normalized_release = _plain_title(title)
             # Match the 16-Nov scheduled uploader's 60% meaningful-token
