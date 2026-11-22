@@ -33,6 +33,7 @@ import shutil
 import time
 import hashlib
 from json import loads as jloads
+import uuid
 
 # Scheduled releases take priority over manual /search queues.
 AUTO_UPLOAD_PRIORITY_LOCK = asyncio.Lock()
@@ -7541,6 +7542,8 @@ async def find_matching_quality_release(rss_url, requested_title):
     return None
 
 async def process_low_end(name, torrent_url, force=False, destination_channel=None, mapped_channel=None):
+    episode_lock_token = None
+    ani_id = ep_no = None
     try:
         # A pause may be enabled after the RSS scanner queued this task.
         # Recheck here so queued/stale tasks cannot start a fresh download.
@@ -7558,9 +7561,23 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
         if isinstance(ep_no, list):
             ep_no = ep_no[0] if ep_no else None
         ep_no = str(ep_no) if ep_no else None
+        if not ep_no:
+            # TextEditor metadata can occasionally omit the episode number.
+            # Recover it from the exact RSS release title; never upload under
+            # an "unknown" key because every scan would look like a new episode.
+            ep_no = extract_release_episode(name)
+        if not ani_id or not ep_no:
+            raise RuntimeError(
+                f"Refusing automatic upload because AniList ID/episode number "
+                f"could not be verified for release: {name}"
+            )
+
+        episode_key = f"{ani_id}:{ep_no}"
+        episode_lock_token = uuid.uuid4().hex
+        if not await db.claimAnimeEpisode(ani_id, ep_no, episode_lock_token):
+            return "in_progress"
 
         encoding_enabled = await db.get_encoding()
-        episode_key = f"{ani_id}:{ep_no or 'unknown'}"
         if not force and episode_key in ani_cache['completed']:
             return "already_published"
         if not force and episode_key in ani_cache['ongoing']:
@@ -7836,6 +7853,9 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
                 )
                 if not final_post or not getattr(final_post, "id", None):
                     raise RuntimeError(f"Main Channel announcement was not confirmed for {name}.")
+                # Save each confirmed destination immediately. If the later
+                # Main Channel announcement fails, the next scan must still
+                # recognize the dedicated-channel post and not duplicate it.
                 await db.saveAnimeDedicatedPost(ani_id, ep_no, dedicated_post.id)
                 await db.saveAnimeDestinationPost(ani_id, ep_no, channel_to_use, dedicated_post.id)
                 await db.saveAnimeMainPost(ani_id, ep_no, final_post.id)
@@ -7873,6 +7893,16 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
         if 'episode_key' in locals():
             ani_cache['ongoing'].discard(episode_key)
         await rep.report(f"Low-end processing error: {str(e)}", "error")
+        return None
+    finally:
+        if episode_lock_token and ani_id is not None and ep_no is not None:
+            try:
+                await db.releaseAnimeEpisode(ani_id, ep_no, episode_lock_token)
+            except Exception as release_error:
+                await rep.report(
+                    f"Could not release automatic episode lock for {ani_id} E{ep_no}: {release_error}",
+                    "warning",
+                )
 
 async def fetch_animes():
     """Match today's scheduled anime against SubsPlease RSS titles and upload releases."""
