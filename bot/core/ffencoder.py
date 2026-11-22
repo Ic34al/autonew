@@ -443,9 +443,18 @@ class FFEncoder:
         # Drop empty map arguments and make subtitle maps optional so a
         # subtitle-less episode can still produce its HDRip file.
         if self.__qual == "HDRi" and ffcode:
+            # HDRi templates historically use "-map 0", which also selects
+            # MKV attachments/data streams. Those streams frequently make
+            # FFmpeg fail even though the video itself is valid. Map only
+            # video, optional audio and optional subtitles instead.
             ffcode = re.sub(
                 r"""(?i)(?:^|\s)-map\s+(?:''|"")(?=\s|$)""",
                 " ",
+                ffcode,
+            )
+            ffcode = re.sub(
+                r"(?i)(-map\s+)0(?=\s|$)",
+                r"\g<1>0:v:0 -map 0:a? -map 0:s?",
                 ffcode,
             )
             ffcode = re.sub(
@@ -453,6 +462,10 @@ class FFEncoder:
                 r"\1\2?",
                 ffcode,
             )
+            # Explicitly disable data streams even if a custom template
+            # contains a broad mapping option.
+            if not re.search(r"(?i)(?:^|\s)-dn(?:\s|$)", ffcode):
+                ffcode = ffcode.replace(" -y", " -dn -y", 1) if " -y" in ffcode else ffcode + " -dn"
 
         # Limit FFmpeg memory usage on small Heroku dynos.
         if ffcode and ffcode.startswith("ffmpeg "):
