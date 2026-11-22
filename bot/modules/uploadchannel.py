@@ -422,7 +422,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
             # like the same low-resolution source. Only encode from an actual
             # 1080p source; if SubsPlease has none, fail clearly instead of
             # upscaling and labelling it 1080p.
-            if not re.search(r"(?i)\\b1080p\\b", title):
+            if not re.search(r"(?i)\b1080p\b", title):
                 continue
 
             normalized_release = _plain_title(title)
