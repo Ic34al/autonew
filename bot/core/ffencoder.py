@@ -608,6 +608,42 @@ class FFEncoder:
                 await rep.report(f"Failed to build fallback ffmpeg command: {e}", "error")
                 return None
 
+        # Enforce the requested output dimensions AFTER custom/default command
+        # selection and validation. Saved FFmpeg templates can contain a shared
+        # fixed -s value (or omit scaling entirely), which previously let 480p,
+        # 720p and 1080p jobs produce the same dimensions. The final output
+        # option wins over any earlier template -s setting.
+        if ffcode:
+            target_resolution = self.resolution_map.get(self.__qual, "1920x1080")
+            output_name = f"'{out_npath}'"
+            double_output_name = f'"{out_npath}"'
+            if output_name in ffcode:
+                ffcode = ffcode.replace(
+                    output_name,
+                    f"-s {target_resolution} {output_name}",
+                    1,
+                )
+            elif double_output_name in ffcode:
+                ffcode = ffcode.replace(
+                    double_output_name,
+                    f"-s {target_resolution} {double_output_name}",
+                    1,
+                )
+            elif out_npath in ffcode:
+                ffcode = ffcode.replace(
+                    out_npath,
+                    f"-s {target_resolution} {out_npath}",
+                    1,
+                )
+            else:
+                raise RuntimeError(
+                    f"Cannot enforce {self.__qual}p dimensions: output path is missing from FFmpeg command."
+                )
+            LOGS.info(
+                f"Enforced {self.__qual}p output dimensions {target_resolution} "
+                f"for {self.__name}."
+            )
+
         # /pause may be pressed while the FFmpeg command is being prepared.
         # Restore the source file and do not start a new encode in that case.
         if ani_cache.get('global_pause') and not self.bypass_pause:
