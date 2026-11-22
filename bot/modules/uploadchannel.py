@@ -1433,50 +1433,15 @@ async def uploadchannel_callbacks(client, callback):
                     f"Season {season_index}; no torrent download was started."
                 )
 
-            channel_stage = f"checking existing episode cards for {selected_title} Season {season_index}"
-            await report_stage(channel_stage, selected_title)
+            # Never call get_chat_history here: the deployed uploader may be
+            # running as a Telegram bot, and bots receive BOT_METHOD_INVALID.
+            # Use only durable MongoDB checkpoints for duplicate detection.
             existing_episodes = set()
-            selected_title_key = _plain_title(selected_title)
-            async for channel_message in user_client.get_chat_history(destination_id, limit=500):
-                body = " ".join(str(value or "") for value in (
-                    getattr(channel_message, "caption", ""),
-                    getattr(channel_message, "text", ""),
-                ))
-                body_title_key = _plain_title(body)
-                if selected_title_key and selected_title_key not in body_title_key:
-                    continue
-
-                # Current ANIME SOUL cards use [S01-07]; older cards may use
-                # "Season 1" plus "Episode: 07". Support both formats.
-                season_episode_tag = re.search(
-                    r"(?i)\[S0*(\d{1,2})[-_ ]0*(\d{1,3})\]", body
-                )
-                if season_episode_tag:
-                    if int(season_episode_tag.group(1)) == season_index:
-                        existing_episode = int(season_episode_tag.group(2))
-                        existing_episodes.add(existing_episode)
-                        # Migrate already-published cards into MongoDB so future
-                        # runs never need Telegram history to decide whether to post.
-                        await db.saveAnimeArchiveEpisodePost(
-                            anime_id, season_index, existing_episode, destination_id,
-                            channel_message.id, migrated=True,
-                        )
-                    continue
-
-                season_match = re.search(
-                    rf"(?i)\bSeason\s*0*{season_index}\b", body
-                )
-                episode_match = re.search(
-                    r"(?i)\bEpisode\s*[:#]?\s*0*(\d{1,3})\b", body
-                )
-                if season_match and episode_match:
-                    existing_episode = int(episode_match.group(1))
-                    existing_episodes.add(existing_episode)
-                    await db.saveAnimeArchiveEpisodePost(
-                        anime_id, season_index, existing_episode, destination_id,
-                        channel_message.id, migrated=True,
-                    )
-
+            for episode_number in range(1, released_episode_count + 1):
+                if await db.getAnimeArchiveEpisodePost(
+                    anime_id, season_index, episode_number, destination_id
+                ):
+                    existing_episodes.add(episode_number)
             await report_stage(
                 f"ongoing season confirmed: {selected_title} S{season_index:02d}; "
                 f"{released_episode_count} episode(s) released, "
@@ -1489,9 +1454,7 @@ async def uploadchannel_callbacks(client, callback):
             )
 
             for episode_number in range(1, released_episode_count + 1):
-                # The durable MongoDB checkpoint is the primary duplicate guard.
-                # History scanning above only migrates legacy posts once; it is
-                # never required for future restart/retry decisions.
+                # Durable MongoDB checkpoint is the only duplicate authority.
                 saved_post_id = await db.getAnimeArchiveEpisodePost(
                     anime_id, season_index, episode_number, destination_id
                 )
@@ -1516,6 +1479,20 @@ async def uploadchannel_callbacks(client, callback):
                     await report_stage(stage, selected_title)
 
                 try:
+                    # Recheck after acquiring the process-wide lock. A second
+                    # /uploadchannel run may have passed the first check while
+                    # the first run was still publishing this episode.
+                    saved_post_id = await db.getAnimeArchiveEpisodePost(
+                        anime_id, season_index, episode_number, destination_id
+                    )
+                    if saved_post_id:
+                        await report_stage(
+                            f"already published — skipping {selected_title} "
+                            f"S{season_index:02d}E{episode_number:02d}",
+                            selected_title,
+                        )
+                        continue
+
                     await _upload_single_episode(
                         selected_media,
                         destination_id,
