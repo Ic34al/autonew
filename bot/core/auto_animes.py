@@ -8872,6 +8872,15 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             release_episode = extract_release_episode(name)
             if release_episode:
                 ep_no = str(int(release_episode))
+                aniInfo.pdata["episode_number"] = ep_no
+
+            season_match = re.search(
+                r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])",
+                str(name),
+                re.IGNORECASE,
+            )
+            if season_match:
+                aniInfo.pdata["anime_season"] = str(int(season_match.group(1))).zfill(2)
 
             # Retry the AniList lookup using a cleaned title with release-group,
             # quality and codec tags removed before falling back to a local key.
