@@ -83,6 +83,32 @@ query ($page: Int, $perPage: Int) {
                   status
                   episodes
                   seasonYear
+                  relations {
+                    edges {
+                      relationType
+                      node {
+                        id
+                        title { english romaji native }
+                        format
+                        status
+                        episodes
+                        seasonYear
+                        relations {
+                          edges {
+                            relationType
+                            node {
+                              id
+                              title { english romaji native }
+                              format
+                              status
+                              episodes
+                              seasonYear
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
@@ -163,11 +189,11 @@ def _season_number_from_release(title):
 
 
 def _prequel_seasons(media):
-    """Return TV prequel ancestors oldest-first, bounded to two relation levels."""
+    """Return TV prequel ancestors oldest-first; the schedule query fetches up to five levels."""
     found = {}
 
     def walk(parent, depth):
-        if depth > 2:
+        if depth > 5:
             return
         relations = (parent.get("relations") or {}).get("edges") or []
         for edge in relations:
