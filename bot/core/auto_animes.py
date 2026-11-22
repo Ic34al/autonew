@@ -2551,26 +2551,35 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             ep_no = ep_no[0] if ep_no else None
         ep_no = str(ep_no) if ep_no else None
 
-        # Manual /addtask titles often include release-group and codec tags.
-        # If the first AniList lookup misses, retry only the cleaned series
-        # title while retaining the episode/season parsed from the exact release.
-        # TextEditor still applies its strict AniList title-match threshold.
+        # RSS release naming is authoritative for the requested episode in a
+        # manual /addtask job. Parse it independently of AniList title matching;
+        # AniList frequently has a different punctuation/alternate title.
+        release_episode = extract_release_episode(name) if manual_search else None
+        if manual_search and release_episode:
+            ep_no = str(int(release_episode))
+
+        # Retry AniList matching against the cleaned series title whenever the
+        # first lookup did not identify the series. Preserve SxxExx from the
+        # original RSS release, not from the cleaned title.
         if manual_search and not ani_id:
             fallback_title = extract_base_anime_name(clean_anime_title(name))
-            if fallback_title and fallback_title.casefold() != str(name).casefold():
+            if fallback_title:
                 fallback_info = TextEditor(fallback_title)
                 await fallback_info.load_info()
                 fallback_id = fallback_info.adata.get("id")
                 if fallback_id:
-                    release_episode = ep_no or extract_release_episode(name)
-                    season_match = re.search(r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])", str(name), re.IGNORECASE)
+                    season_match = re.search(
+                        r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])",
+                        str(name),
+                        re.IGNORECASE,
+                    )
                     if release_episode:
                         fallback_info.pdata["episode_number"] = str(int(release_episode))
                     if season_match:
                         fallback_info.pdata["anime_season"] = str(int(season_match.group(1))).zfill(2)
                     aniInfo = fallback_info
                     ani_id = fallback_id
-                    ep_no = str(int(release_episode)) if release_episode else None
+                    ep_no = str(int(release_episode)) if release_episode else ep_no
                     await rep.report(
                         f"Manual release metadata recovered using cleaned title '{fallback_title}' "
                         f"(AniList ID {ani_id}, episode {ep_no or 'unknown'}).",
