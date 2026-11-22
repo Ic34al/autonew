@@ -39,6 +39,8 @@ UPLOAD_CHANNEL_SESSIONS = {}
 # reused for all episodes in the same backfill run.
 _FILE_STORE_INDEX_CACHE = {}
 _ANILIST_DETAILS_CACHE = {}
+_FILE_STORE_CHAT_CACHE = {}
+ANIME_INFO_CARD_VERSION = "anime-soul-split-v2"
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -708,10 +710,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # A complete FILE_STORE set can be reused without a live torrent.
     info.pdata["audio_type"] = "Japanese [English Sub]"
 
-    # Exactly ONE synopsis/info card is allowed per anime and destination channel.
-    # Migrate the old per-episode E01 card when present; remove legacy duplicates
-    # for later episodes so the channel keeps one clean synopsis header.
+    # Exactly ONE split-screen ANIME SOUL synopsis card per anime/channel.
+    # Upgrade an older square/portrait card in place; never append another synopsis.
     info_post_id = await db.getAnimeArchiveChannelInfoPost(media.get("id"), destination_id)
+    info_card_version = await db.getAnimeArchiveChannelInfoVersion(media.get("id"), destination_id)
     legacy_info_post_id = await db.getAnimeArchiveInfoPost(
         media.get("id"), season_number, episode_number, destination_id
     )
@@ -723,7 +725,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             await bot.delete_messages(destination_id, int(legacy_info_post_id))
         except Exception as cleanup_error:
             LOGS.warning("Could not remove legacy duplicate synopsis card %s: %s", legacy_info_post_id, cleanup_error)
-    if not info_post_id:
+
+    if not info_post_id or info_card_version != ANIME_INFO_CARD_VERSION:
         data = info.adata or {}
         title_data = data.get("title") or {}
         info_title = title_data.get("english") or title_data.get("romaji") or title
@@ -761,51 +764,47 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             info_lines.append(f"<blockquote expandable>≡ {html.escape(description)}</blockquote>")
         info_caption = "\n".join(info_lines)
         if len(info_caption) > 1024:
-            # Keep Telegram's photo-caption limit while retaining the key metadata.
             info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
+
         info_poster_path = os.path.join(workdir, f"anime_soul_info_s{season_number}.jpg")
         info_poster = await build_anime_soul_poster(
             info, title, info_poster_path, info_card=True
         )
         if not info_poster or not os.path.exists(info_poster):
             raise RuntimeError(
-                f"Could not generate the requested ANIME SOUL split-screen synopsis thumbnail for {title}."
+                f"Could not generate the ANIME SOUL split-screen synopsis thumbnail for {title}."
             )
-        if legacy_info_post_id and int(episode_number) == 1:
-            with open(info_poster, "rb") as info_photo:
-                edited = await bot.edit_message_media(
+        with open(info_poster, "rb") as info_photo:
+            if info_post_id:
+                info_post = await bot.edit_message_media(
                     chat_id=destination_id,
-                    message_id=int(legacy_info_post_id),
-                    media=InputMediaPhoto(media=info_photo, caption=info_caption, parse_mode=ParseMode.HTML),
+                    message_id=int(info_post_id),
+                    media=InputMediaPhoto(
+                        media=info_photo, caption=info_caption, parse_mode=ParseMode.HTML
+                    ),
                 )
-            info_post = edited
-            info_post_id = int(legacy_info_post_id)
-        else:
-            with open(info_poster, "rb") as info_photo:
+            else:
                 info_post = await bot.send_photo(
                     chat_id=destination_id,
                     photo=info_photo,
                     caption=info_caption,
                     parse_mode=ParseMode.HTML,
                 )
-            info_post_id = int(info_post.id) if info_post and getattr(info_post, "id", None) else None
-        if not info_post_id:
-            raise RuntimeError(
-                f"Telegram did not confirm anime info card for {title}."
-            )
+        if not info_post or not getattr(info_post, "id", None):
+            raise RuntimeError(f"Telegram did not confirm ANIME SOUL synopsis card for {title}.")
+        info_post_id = int(info_post.id)
         await db.saveAnimeArchiveChannelInfoPost(media.get("id"), destination_id, info_post_id)
+        await db.saveAnimeArchiveChannelInfoVersion(
+            media.get("id"), destination_id, ANIME_INFO_CARD_VERSION
+        )
         await rep.report(
-            f"Published AniList synopsis/info card before episode share card for "
-            f"{title} S{season_number}E{episode_number}.",
-            "info",
-            log=False,
+            f"{'Upgraded' if info_card_version else 'Published'} the single ANIME SOUL split-screen synopsis card for {title}.",
+            "info", log=False,
         )
     else:
         await rep.report(
-            f"Reusing the single channel synopsis card {info_post_id} for "
-            f"{title}; no extra synopsis card will be posted.",
-            "info",
-            log=False,
+            f"Reusing the current single synopsis card {info_post_id} for {title}; no extra card.",
+            "info", log=False,
         )
 
     async def send_checkpointed_sticker(stage_key):
@@ -951,37 +950,40 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         storage_chat_id = None
         # Explicit storage invite supplied by the owner; do not silently scan a stale FILE_STORE_LINK from Heroku.
         storage_link = str(getattr(Var, "FILE_STORE_LINK", "") or "").strip()
+        storage_cache_key = storage_link or str(getattr(Var, "FILE_STORE", 0) or 0)
         try:
-            # Resolve the configured FILE_STORE only. Never scan a hardcoded or
-            # unrelated invite: message IDs from another channel would create
-            # invalid share-bot deep links and could cause duplicate uploads.
-            if storage_link:
-                try:
-                    storage_chat = await destination_client.join_chat(storage_link)
-                except Exception as join_error:
-                    join_text = str(join_error).casefold()
-                    if "user_already_participant" in join_text or "already a participant" in join_text:
-                        storage_chat = await destination_client.get_chat(storage_link)
-                    else:
-                        try:
+            # Resolve FILE_STORE once per process, then reuse its chat ID
+            # for every episode in the current and subsequent backfill runs.
+            storage_chat_id = _FILE_STORE_CHAT_CACHE.get(storage_cache_key)
+            if not storage_chat_id:
+                if storage_link:
+                    try:
+                        storage_chat = await destination_client.join_chat(storage_link)
+                    except Exception as join_error:
+                        join_text = str(join_error).casefold()
+                        if "user_already_participant" in join_text or "already a participant" in join_text:
                             storage_chat = await destination_client.get_chat(storage_link)
-                        except Exception:
-                            raise join_error
-            else:
+                        else:
+                            try:
+                                storage_chat = await destination_client.get_chat(storage_link)
+                            except Exception:
+                                raise join_error
+                else:
+                    configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
+                    if not configured_storage_id:
+                        raise RuntimeError("FILE_STORE is not configured.")
+                    storage_chat = await destination_client.get_chat(configured_storage_id)
+
+                if not storage_chat or not getattr(storage_chat, "id", None):
+                    raise RuntimeError("Configured FILE_STORE did not resolve to a Telegram channel.")
+                storage_chat_id = int(storage_chat.id)
                 configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
-                if not configured_storage_id:
-                    raise RuntimeError("FILE_STORE is not configured.")
-                storage_chat = await destination_client.get_chat(configured_storage_id)
-    
-            if not storage_chat or not getattr(storage_chat, "id", None):
-                raise RuntimeError("Configured FILE_STORE did not resolve to a Telegram channel.")
-            storage_chat_id = int(storage_chat.id)
-            configured_storage_id = int(getattr(Var, "FILE_STORE", 0) or 0)
-            if configured_storage_id and storage_chat_id != configured_storage_id:
-                raise RuntimeError(
-                    f"Configured FILE_STORE link resolved to {storage_chat_id}, "
-                    f"but FILE_STORE is {configured_storage_id}; refusing to scan the wrong channel."
-                )
+                if configured_storage_id and storage_chat_id != configured_storage_id:
+                    raise RuntimeError(
+                        f"Configured FILE_STORE link resolved to {storage_chat_id}, "
+                        f"but FILE_STORE is {configured_storage_id}; refusing to scan the wrong channel."
+                    )
+                _FILE_STORE_CHAT_CACHE[storage_cache_key] = storage_chat_id
     
             # Use Telegram's server-side message search against the anime title.
             # The old implementation walked 5,000 messages for EVERY episode,
@@ -997,18 +999,16 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 )
             else:
                 search_queries = []
-                for alias in title_aliases:
+                # Search only the two strongest AniList title aliases. One
+                # compact prefix fallback each keeps the first FILE_STORE index fast.
+                for alias in title_aliases[:2]:
                     query = str(alias or "").strip()
                     if not query:
                         continue
-                    # Telegram caption search is more reliable with a short
-                    # distinctive title prefix than with a long subtitle.
-                    # Search both the full alias and compact prefixes so old
-                    # FILE_STORE captions still surface for reuse.
                     candidates = [query[:64]]
                     words = re.findall(r"[A-Za-z0-9]+", query)
-                    if len(words) >= 3:
-                        candidates.extend((" ".join(words[:4]), " ".join(words[:3])))
+                    if len(words) >= 4:
+                        candidates.append(" ".join(words[:4]))
                     for candidate in candidates:
                         candidate = candidate.strip()[:64]
                         if candidate and candidate not in search_queries:
