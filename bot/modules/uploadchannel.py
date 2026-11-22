@@ -625,7 +625,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     async def set_progress(stage):
         if progress_callback:
@@ -1134,6 +1134,16 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         )
         missing_qualities.append(quality)
 
+    # A repost/backfill must reuse the already uploaded FILE_STORE qualities.
+    # Never download or encode again in this mode: if any quality is genuinely
+    # missing, stop safely rather than create a duplicate or spend time re-encoding.
+    if reuse_only and missing_qualities:
+        raise RuntimeError(
+            f"Cannot safely republish {title} S{target_season:02d}E{target_episode:02d}: "
+            f"FILE_STORE is missing verified qualities: {', '.join(missing_qualities)}. "
+            "No torrent download or encoding was started."
+        )
+
     source = None
     if missing_qualities:
         await set_progress(f"Searching RSS for {title} S{target_season:02d}E{target_episode:02d}.")
@@ -1299,6 +1309,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     await db.saveAnimeArchiveEpisodePost(
         media.get("id"), season_number, episode_number, destination_id, published.id
     )
+    if int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
+        await db.saveAnimeMainPost(media.get("id"), str(episode_number), published.id)
+    else:
+        await db.saveAnimeDestinationPost(
+            media.get("id"), str(episode_number), destination_id, published.id
+        )
     await send_checkpointed_sticker("episode")
 
     await rep.report(
@@ -1802,7 +1818,7 @@ async def uploadchannel_callbacks(client, callback):
                                     episode_number,
                                     user_client,
                                     progress_callback=report_stage,
-                                    info_only=True,
+                                    reuse_only=True,
                                 )
                         finally:
                             AUTO_UPLOAD_PRIORITY_LOCK.release()
