@@ -8865,12 +8865,53 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         if isinstance(ep_no, list):
             ep_no = ep_no[0] if ep_no else None
         ep_no = str(ep_no) if ep_no else None
+        if manual_search:
+            # /addtask receives an explicit RSS item. Prefer its SxxExx value
+            # over AniList's episode_number (which can be absent or refer to
+            # a different season/absolute numbering scheme).
+            release_episode = extract_release_episode(name)
+            if release_episode:
+                ep_no = str(int(release_episode))
+
+            # Retry the AniList lookup using a cleaned title with release-group,
+            # quality and codec tags removed before falling back to a local key.
+            if not ani_id:
+                fallback_title = extract_base_anime_name(clean_anime_title(name))
+                if fallback_title:
+                    try:
+                        fallback_info = TextEditor(fallback_title)
+                        await fallback_info.load_info()
+                        fallback_id = fallback_info.adata.get("id")
+                        if fallback_id:
+                            aniInfo = fallback_info
+                            ani_id = fallback_id
+                    except Exception as lookup_error:
+                        await rep.report(
+                            f"Manual RSS AniList lookup fallback failed for '{fallback_title}': "
+                            f"{lookup_error}", "warning", log=False
+                        )
+
+            # A valid episode number from the exact RSS release is enough to
+            # process a manual request. Use a deterministic title/season key if
+            # AniList has no match, so duplicate protection and resume tracking
+            # still work across workers and restarts.
+            if ep_no and not ani_id:
+                season_match = re.search(
+                    r"\\bS\\s*0*(\\d{1,2})\\s*(?:E|[-._ ])",
+                    str(name),
+                    re.IGNORECASE,
+                )
+                season_key = f"S{int(season_match.group(1)):02d}" if season_match else "S00"
+                title_key = normalize_anime_name_for_search(
+                    extract_base_anime_name(clean_anime_title(name))
+                ) or "unknown-anime"
+                ani_id = f"manual:{title_key}:{season_key}"
+
         if not ep_no:
             ep_no = extract_release_episode(name)
         if not ani_id or not ep_no:
             raise RuntimeError(
-                f"Refusing automatic upload because AniList ID/episode number "
-                f"could not be verified for release: {name}"
+                f"Could not identify an episode number from the selected RSS release: {name}"
             )
 
         # Global MongoDB claim protects normal mode across multiple workers.
