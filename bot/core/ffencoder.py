@@ -7,6 +7,9 @@ from aiofiles.os import remove as aioremove, rename as aiorename
 from shlex import split as ssplit
 from asyncio import sleep as asleep, gather, create_subprocess_shell, create_task
 import asyncio
+import os
+import shutil
+import imageio_ffmpeg
 import re
 from asyncio.subprocess import PIPE
 import datetime
@@ -336,6 +339,63 @@ class FFEncoder:
             else:
                 LOGS.info("Processing HDRi encode even though encoding is disabled")
                 await rep.report("Processing HDRi encode...", "info")
+
+        # Resolve a working FFmpeg binary before executing custom templates.
+        # Some deployments do not install system packages from the Dockerfile;
+        # imageio-ffmpeg supplies a bundled executable as a fallback.
+        candidates = []
+        system_ffmpeg = shutil.which("ffmpeg")
+        if system_ffmpeg:
+            candidates.append(system_ffmpeg)
+        try:
+            bundled_ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
+            if bundled_ffmpeg not in candidates:
+                candidates.append(bundled_ffmpeg)
+        except Exception as lookup_error:
+            LOGS.warning(f"Could not locate bundled FFmpeg: {lookup_error}")
+
+        verified_ffmpeg = None
+        probe_errors = []
+        for candidate in candidates:
+            if not candidate or not os.path.isfile(candidate) or not os.access(candidate, os.X_OK):
+                probe_errors.append(f"{candidate!r} is missing or not executable")
+                continue
+            try:
+                probe = await asyncio.create_subprocess_exec(
+                    candidate, "-version",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                code = await probe.wait()
+                if code == 0:
+                    verified_ffmpeg = candidate
+                    break
+                probe_errors.append(f"{candidate!r} returned exit code {code}")
+            except Exception as probe_error:
+                probe_errors.append(f"{candidate!r}: {type(probe_error).__name__}: {probe_error}")
+
+        if not verified_ffmpeg:
+            self.last_error = "FFmpeg is unavailable or cannot run: " + "; ".join(probe_errors)
+            LOGS.error(self.last_error)
+            await rep.report(
+                "FFmpeg could not be started. Install system FFmpeg or redeploy with "
+                "imageio-ffmpeg enabled. Encoding was not started.",
+                "error",
+            )
+            return None
+
+        # Custom FFmpeg templates invoke the literal command "ffmpeg".
+        # Put a verified executable under that name on PATH for shell commands.
+        shim_dir = "/tmp/autoanime-ffmpeg-bin"
+        os.makedirs(shim_dir, exist_ok=True)
+        shim_path = ospath.join(shim_dir, "ffmpeg")
+        target_path = ospath.abspath(verified_ffmpeg)
+        if ospath.lexists(shim_path):
+            if not ospath.islink(shim_path) or os.readlink(shim_path) != target_path:
+                os.remove(shim_path)
+        if not ospath.lexists(shim_path):
+            os.symlink(target_path, shim_path)
+        os.environ["PATH"] = shim_dir + os.pathsep + os.environ.get("PATH", "")
 
         if ospath.exists(self.__prog_file):
             import logging
