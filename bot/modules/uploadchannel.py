@@ -979,6 +979,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
         )
 
+    # Commit the destination-specific idempotency checkpoint immediately after
+    # Telegram confirms the card. A retry/restart will skip this exact episode.
+    await db.saveAnimeArchiveEpisodePost(
+        media.get("id"), season_number, episode_number, destination_id, published.id
+    )
+
     await rep.report(
         f"Published {title} S{season_number}E{episode_number} with four quality buttons "
         "and AniList-ID-verified artwork/synopsis.",
@@ -1447,7 +1453,14 @@ async def uploadchannel_callbacks(client, callback):
                 )
                 if season_episode_tag:
                     if int(season_episode_tag.group(1)) == season_index:
-                        existing_episodes.add(int(season_episode_tag.group(2)))
+                        existing_episode = int(season_episode_tag.group(2))
+                        existing_episodes.add(existing_episode)
+                        # Migrate already-published cards into MongoDB so future
+                        # runs never need Telegram history to decide whether to post.
+                        await db.saveAnimeArchiveEpisodePost(
+                            anime_id, season_index, existing_episode, destination_id,
+                            channel_message.id, migrated=True,
+                        )
                     continue
 
                 season_match = re.search(
@@ -1457,7 +1470,12 @@ async def uploadchannel_callbacks(client, callback):
                     r"(?i)\bEpisode\s*[:#]?\s*0*(\d{1,3})\b", body
                 )
                 if season_match and episode_match:
-                    existing_episodes.add(int(episode_match.group(1)))
+                    existing_episode = int(episode_match.group(1))
+                    existing_episodes.add(existing_episode)
+                    await db.saveAnimeArchiveEpisodePost(
+                        anime_id, season_index, existing_episode, destination_id,
+                        channel_message.id, migrated=True,
+                    )
 
             await report_stage(
                 f"ongoing season confirmed: {selected_title} S{season_index:02d}; "
@@ -1471,7 +1489,13 @@ async def uploadchannel_callbacks(client, callback):
             )
 
             for episode_number in range(1, released_episode_count + 1):
-                if episode_number in existing_episodes:
+                # The durable MongoDB checkpoint is the primary duplicate guard.
+                # History scanning above only migrates legacy posts once; it is
+                # never required for future restart/retry decisions.
+                saved_post_id = await db.getAnimeArchiveEpisodePost(
+                    anime_id, season_index, episode_number, destination_id
+                )
+                if saved_post_id or episode_number in existing_episodes:
                     await report_stage(
                         f"already published — skipping {selected_title} "
                         f"S{season_index:02d}E{episode_number:02d}",
