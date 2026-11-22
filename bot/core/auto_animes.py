@@ -8783,6 +8783,11 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # checkpoint, reuse verified qualities, and publish a fresh post with
         # fresh Monkey file-share links.
         if existing_target_post and not (force and manual_search):
+            # Automatic ongoing RSS uploads must treat a confirmed destination
+            # post as terminal: complete its resume record and cache the episode
+            # so it is never downloaded, encoded, or retried again.
+            await db.markAnimeResumeComplete(ani_id, ep_no)
+            ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
 
