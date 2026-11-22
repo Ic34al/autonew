@@ -4119,6 +4119,7 @@ async def anime_search_cmd(client, message: Message):
             value = str(value or "").replace("_", " ").replace("/", " ")
             patterns = (
                 r"\bS\s*0*(\d{1,2})(?=\s*[-._ ]*E?\s*0*\d{1,3}\b)",
+                r"\bS\s*0*(\d{1,2})\b",
                 r"\bSeason\s*0*(\d{1,2})\b",
                 r"\b(\d{1,2})(?:st|nd|rd|th)\s+Season\b",
             )
@@ -4237,32 +4238,6 @@ async def anime_search_cmd(client, message: Message):
                     if isinstance(downloads, dict):
                         downloads = list(downloads.values())
 
-                    # Preserve the season evidence attached to this exact
-                    # SubsPlease release while resolving its full show catalogue.
-                    item_page = (
-                        item.get("page") or item.get("show_page")
-                        or item.get("show_url") or item.get("url")
-                    )
-                    item_sid = item.get("sid") or item.get("show_id")
-                    item_page_url = ""
-                    if item_page:
-                        item_page = str(item_page).strip()
-                        item_page_url = (
-                            item_page if item_page.startswith("http")
-                            else "https://subsplease.org/" + item_page.lstrip("/")
-                        )
-                    item_season_hint = (
-                        season_from_identifier(base_title)
-                        or season_from_identifier(item.get("title"))
-                        or season_from_identifier(release_key)
-                    )
-                    if show_name and (item_sid or item_page_url):
-                        catalogue_key = (str(item_sid or ""), item_page_url)
-                        previous_catalogue = show_catalogues.get(catalogue_key)
-                        if previous_catalogue:
-                            previous_name, previous_season = previous_catalogue
-                            item_season_hint = item_season_hint or previous_season
-                        show_catalogues[catalogue_key] = (show_name, item_season_hint)
                     for download in downloads:
                         if not isinstance(download, dict):
                             continue
@@ -4369,26 +4344,6 @@ async def anime_search_cmd(client, message: Message):
                         f"/search SubsPlease show-directory lookup failed for {anime_name}: {directory_error}",
                         "warning"
                     )
-
-                # RSS release titles often carry the season marker even when
-                # the API's "show" field and show-page slug do not. Transfer that
-                # verified season to the matching show catalogue before fetching
-                # its historical episode list.
-                for release_title, _release_torrent in matches:
-                    release_season = season_from_identifier(release_title)
-                    if release_season is None:
-                        continue
-                    normalized_release = normalize(release_title)
-                    for catalogue_key, catalogue_info in list(show_catalogues.items()):
-                        catalogue_name, existing_season = (
-                            catalogue_info if isinstance(catalogue_info, tuple)
-                            else (catalogue_info, None)
-                        )
-                        normalized_show = normalize(catalogue_name)
-                        if normalized_show and normalized_release.startswith(normalized_show):
-                            show_catalogues[catalogue_key] = (
-                                catalogue_name, release_season
-                            )
 
                 for (sid, page_url), catalogue_info in show_catalogues.items():
                     show_name, catalogue_season_hint = (
