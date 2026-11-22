@@ -13,8 +13,17 @@ class MongoDB:
         record = await self.__anime_archive_episode_posts.find_one({"_id": key})
         return record.get("message_id") if record else None
 
+    async def getAnimeArchiveEpisodeCardVersion(self, ani_id, season, episode, channel_id):
+        if ani_id is None or season is None or episode is None or channel_id is None:
+            return None
+        key = f"uploadchannel:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one(
+            {"_id": key}, {"card_version": 1}
+        )
+        return record.get("card_version") if record else None
+
     async def saveAnimeArchiveEpisodePost(
-        self, ani_id, season, episode, channel_id, message_id, migrated=False
+        self, ani_id, season, episode, channel_id, message_id, migrated=False, card_version=None
     ):
         """Persist a confirmed episode card; MongoDB _id makes the checkpoint idempotent."""
         if any(value is None for value in (ani_id, season, episode, channel_id, message_id)):
@@ -31,6 +40,7 @@ class MongoDB:
                     "channel_id": int(channel_id),
                     "message_id": int(message_id),
                     "updated_at": now,
+                    **({"card_version": str(card_version)} if card_version else {}),
                 },
                 "$setOnInsert": {"created_at": now, "migrated_from_history": bool(migrated)},
             },
