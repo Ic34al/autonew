@@ -47,6 +47,39 @@ class MongoDB:
             upsert=True,
         )
 
+    async def getAnimeArchiveInfoPost(self, ani_id, season, episode, channel_id):
+        """Return the durable /uploadchannel anime-info-card checkpoint for one destination."""
+        if ani_id is None or season is None or episode is None or channel_id is None:
+            return None
+        key = f"uploadchannel:info:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one({"_id": key})
+        return record.get("message_id") if record else None
+
+    async def saveAnimeArchiveInfoPost(
+        self, ani_id, season, episode, channel_id, message_id
+    ):
+        """Persist a confirmed info card independently from the episode/share card."""
+        if any(value is None for value in (ani_id, season, episode, channel_id, message_id)):
+            return
+        key = f"uploadchannel:info:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {
+                "$set": {
+                    "ani_id": int(ani_id),
+                    "season": int(season),
+                    "episode": int(episode),
+                    "channel_id": int(channel_id),
+                    "message_id": int(message_id),
+                    "card_type": "anime_info",
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now},
+            },
+            upsert=True,
+        )
+
     async def add_user(self, user_id: int):
         await self.__db.users.update_one({'_id': user_id}, {'$set': {'_id': user_id}}, upsert=True)
 
