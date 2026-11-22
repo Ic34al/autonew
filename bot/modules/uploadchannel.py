@@ -44,13 +44,29 @@ ANIME_INFO_CARD_VERSION = "anime-soul-split-v2"
 ANIME_EPISODE_CARD_VERSION = "anime-soul-episode-v2"
 
 
-def _coerce_path(value):
-    """Normalize filesystem paths and file handles returned by media helpers."""
-    if hasattr(value, "name") and not isinstance(value, (str, bytes, os.PathLike)):
-        value = value.name
+def _coerce_path(value, fallback_path=None):
+    """Return a real filesystem path; never pass an open file object to os.path APIs."""
     if isinstance(value, (str, bytes, os.PathLike)):
         return os.fspath(value)
-    return value
+
+    # Pillow/Telegram helpers may return an open file handle instead of the
+    # documented output path. Prefer its filename only when it is path-like.
+    candidate = getattr(value, "name", None)
+    if isinstance(candidate, (str, bytes, os.PathLike)):
+        candidate = os.fspath(candidate)
+        if os.path.isfile(candidate):
+            return candidate
+
+    # The poster builder is given a deterministic output path and saves there.
+    # If it returns a BufferedReader (or another file object), use that path
+    # only after confirming the generated file exists.
+    if fallback_path is not None and isinstance(fallback_path, (str, bytes, os.PathLike)):
+        fallback_path = os.fspath(fallback_path)
+        if os.path.isfile(fallback_path):
+            return fallback_path
+
+    # Unknown file-like return values must fail safely, not reach os.path.exists.
+    return None
 
 
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
@@ -780,9 +796,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 info_caption = info_caption[:1000].rsplit(" ", 1)[0] + "…"
     
             info_poster_path = os.path.join(workdir, f"anime_soul_info_s{season_number}.jpg")
-            info_poster = _coerce_path(await build_anime_soul_poster(
-                info, title, info_poster_path, info_card=True
-            ))
+            info_poster = _coerce_path(
+                await build_anime_soul_poster(info, title, info_poster_path, info_card=True),
+                fallback_path=info_poster_path,
+            )
             if not info_poster or not os.path.exists(info_poster):
                 raise RuntimeError(
                     f"Could not generate the ANIME SOUL split-screen synopsis thumbnail for {title}."
@@ -1299,9 +1316,12 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     # Required sequence: synopsis card -> sticker -> episode card -> sticker.
     await set_progress(f"Publishing episode card to channel {destination_id} for {title} S{target_season:02d}E{target_episode:02d}.")
     poster_path = os.path.join(workdir, f"anime_soul_s{season_number}e{episode_number}.jpg")
-    poster = _coerce_path(await build_anime_soul_poster(
-        info, title, poster_path, episode_label=str(episode_number).zfill(2)
-    ))
+    poster = _coerce_path(
+        await build_anime_soul_poster(
+            info, title, poster_path, episode_label=str(episode_number).zfill(2)
+        ),
+        fallback_path=poster_path,
+    )
     if poster and os.path.exists(poster):
         # Send the filesystem path, not a BufferedReader. Pyrogram opens it
         # itself and can determine the upload size correctly.
