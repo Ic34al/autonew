@@ -18,6 +18,9 @@ from contextvars import ContextVar
 
 retry_cancel_event = ContextVar('retry_cancel_event', default=None)
 
+# Keep a margin below Telegram's 2,000 MiB Bot API upload ceiling.
+MAX_TELEGRAM_UPLOAD_BYTES = 1900 * 1024 * 1024
+
 class TgUploader:
     def __init__(self, message):
         self.cancelled = False
@@ -78,9 +81,21 @@ class TgUploader:
             # A FloodWait/invalid log chat must not abort the episode quality.
             await rep.report(log_msg, "info", log=False)
 
-            if ospath.getsize(path) == 0:
+            file_size = ospath.getsize(path)
+            if file_size <= 0:
                 await rep.report(f"File is empty: {path}", "error")
                 raise ValueError(f"File is empty: {path}")
+            if file_size > MAX_TELEGRAM_UPLOAD_BYTES:
+                size_mib = file_size / (1024 * 1024)
+                limit_mib = MAX_TELEGRAM_UPLOAD_BYTES / (1024 * 1024)
+                error = (
+                    f"Upload preflight blocked {self.__name}: {size_mib:.1f} MiB "
+                    f"exceeds the safe {limit_mib:.0f} MiB limit. "
+                    "The encoded file was kept on disk; re-encode it with the "
+                    "Telegram-safe FFmpeg size profile before retrying."
+                )
+                await rep.report(error, "error")
+                raise RuntimeError(error)
             thumb = "thumb.jpg" if ospath.exists("thumb.jpg") else None
             try:
                 if Var.AS_DOC:
