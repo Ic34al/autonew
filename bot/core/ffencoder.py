@@ -83,7 +83,7 @@ class FFEncoder:
             self.__total_time = 20 * 60
 
         while not (self.__proc is None or self.is_cancelled):
-            if ani_cache.get('global_pause'):
+            if ani_cache.get('global_pause') and not self.bypass_pause:
                 self.is_cancelled = True
                 if self.__proc is not None and self.__proc.returncode is None:
                     try:
@@ -489,8 +489,9 @@ class FFEncoder:
 
         # /pause may be pressed while the FFmpeg command is being prepared.
         # Restore the source file and do not start a new encode in that case.
-        if ani_cache.get('global_pause'):
+        if ani_cache.get('global_pause') and not self.bypass_pause:
             self.is_cancelled = True
+            self.last_error = "Encoding cancelled because /pause is active."
             if ospath.exists(dl_npath):
                 await aiorename(dl_npath, self.dl_path)
             LOGS.info("Encoding cancelled before FFmpeg process start because /pause is active.")
