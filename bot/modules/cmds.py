@@ -4345,6 +4345,29 @@ async def anime_search_cmd(client, message: Message):
                         "warning"
                     )
 
+                # After the catalogue map exists, transfer an explicit season
+                # marker from a matching release to its exact show catalogue.
+                # This avoids the previous initialization-order crash and does
+                # not infer a season from an unrelated show or generic catalogue.
+                for release_title, _release_torrent in matches:
+                    release_season = season_from_identifier(release_title)
+                    if release_season is None:
+                        continue
+                    normalized_release = normalize(release_title)
+                    for catalogue_key, catalogue_info in list(show_catalogues.items()):
+                        catalogue_name, existing_season = (
+                            catalogue_info if isinstance(catalogue_info, tuple)
+                            else (catalogue_info, None)
+                        )
+                        normalized_show = normalize(catalogue_name)
+                        if normalized_show and (
+                            normalized_release == normalized_show
+                            or normalized_release.startswith(normalized_show + " ")
+                        ):
+                            show_catalogues[catalogue_key] = (
+                                catalogue_name, release_season
+                            )
+
                 for (sid, page_url), catalogue_info in show_catalogues.items():
                     show_name, catalogue_season_hint = (
                         catalogue_info if isinstance(catalogue_info, tuple)
