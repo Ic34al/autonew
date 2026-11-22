@@ -10,9 +10,42 @@ class MongoDB:
         self.__db = self.__client[database_name]
         self.__animes = self.__db.animes[Var.BOT_TOKEN.split(':')[0]]
         self.__anime_channels = self.__db.anime_channels
+        self.__anime_archive_episode_posts = self.__db.anime_archive_episode_posts
         self.__manga_channels = self.__db.manga_channels
         self.__manga_banners = self.__db.manga_banners
         self.__ffmpeg_configs = self.__db.ffmpeg_configs
+
+    async def getAnimeArchiveEpisodePost(self, ani_id, season, episode, channel_id):
+        """Return the durable /uploadchannel episode-card checkpoint for one destination."""
+        if ani_id is None or season is None or episode is None or channel_id is None:
+            return None
+        key = f"uploadchannel:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        record = await self.__anime_archive_episode_posts.find_one({"_id": key})
+        return record.get("message_id") if record else None
+
+    async def saveAnimeArchiveEpisodePost(
+        self, ani_id, season, episode, channel_id, message_id, migrated=False
+    ):
+        """Persist a confirmed episode card; MongoDB _id makes the checkpoint idempotent."""
+        if any(value is None for value in (ani_id, season, episode, channel_id, message_id)):
+            return
+        key = f"uploadchannel:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        await self.__anime_archive_episode_posts.update_one(
+            {"_id": key},
+            {
+                "$set": {
+                    "ani_id": int(ani_id),
+                    "season": int(season),
+                    "episode": int(episode),
+                    "channel_id": int(channel_id),
+                    "message_id": int(message_id),
+                    "updated_at": now,
+                },
+                "$setOnInsert": {"created_at": now, "migrated_from_history": bool(migrated)},
+            },
+            upsert=True,
+        )
 
     async def add_user(self, user_id: int):
         await self.__db.users.update_one({'_id': user_id}, {'$set': {'_id': user_id}}, upsert=True)
