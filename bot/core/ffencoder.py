@@ -495,6 +495,27 @@ class FFEncoder:
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
 
+        # Fast-encode profile: the user prefers shorter encode time over compact
+        # output files. Apply to saved custom templates as well as defaults.
+        # Keep filter threads bounded for small Heroku dynos, but let the video
+        # encoder use FFmpeg's available CPU threads instead of forcing one.
+        if ffcode:
+            ffcode, preset_count = re.subn(
+                r"(?i)(-preset\\s+)(ultrafast|superfast|veryfast|faster|fast|medium|slow|slower|veryslow)",
+                r"\\1ultrafast",
+                ffcode,
+            )
+            ffcode, thread_count = re.subn(
+                r"(?i)(?<![\\w-])-threads\\s+1(?!\\d)",
+                "-threads 0",
+                ffcode,
+            )
+            LOGS.info(
+                f"Fast encode profile applied for {self.__name} ({self.__qual}p): "
+                f"ultrafast preset; automatic encoder threads "
+                f"(presets updated: {preset_count}, thread settings updated: {thread_count})."
+            )
+
         # Anime-specific HDRip templates sometimes contain an empty -map
         # argument or require a subtitle stream that the source does not have.
         # Drop empty map arguments and make subtitle maps optional so a
