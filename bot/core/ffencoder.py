@@ -477,7 +477,7 @@ class FFEncoder:
         # the resolved binary, including imageio-ffmpeg's bundled executable.
         if ffcode:
             ffcode = re.sub(
-                r"^ffmpeg(?=\\s)",
+                r"^ffmpeg(?=\s)",
                 shlex.quote(ffmpeg_executable),
                 ffcode,
                 count=1,
