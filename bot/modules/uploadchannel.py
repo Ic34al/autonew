@@ -35,6 +35,9 @@ from bot.core.reporter import rep
 ANILIST_URL = "https://graphql.anilist.co"
 LOCAL_TZ = ZoneInfo("Asia/Kolkata")
 UPLOAD_CHANNEL_SESSIONS = {}
+# Per-process FILE_STORE search cache: one Telegram server-side lookup per anime,
+# reused for all episodes in the same backfill run.
+_FILE_STORE_INDEX_CACHE = {}
 LOGS.info("UPLOADCHANNEL MODULE LOADED; /uploadchannel handler registered.")
 
 SCHEDULE_QUERY = """
@@ -642,50 +645,70 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 f"but FILE_STORE is {configured_storage_id}; refusing to scan the wrong channel."
             )
 
-        # The existing Monkey file-share bot is already an administrator
-        # in this storage channel. Do not promote Auto Anime Uploader here:
-        # its BOT_TOKEN is only used to publish episode cards, not to serve files.
-        # A 5,000-message history scan can otherwise look like a frozen command:
-        # publish progress while scanning and fail with a clear timeout instead.
-        scanned_storage_messages = 0
+        # Use Telegram's server-side message search against the anime title.
+        # The old implementation walked 5,000 messages for EVERY episode,
+        # making a 24-episode backfill perform up to 120,000 history reads.
+        # Search once per anime and cache the parsed FILE_STORE message IDs.
+        cache_key = (storage_chat_id, tuple(sorted(target_titles)))
+        cached_index = _FILE_STORE_INDEX_CACHE.get(cache_key)
+        if cached_index and (time.monotonic() - cached_index[0]) < 600:
+            storage_records = cached_index[1]
+            await set_progress(
+                f"Reusing cached FILE_STORE index for {title}; "
+                f"{len(storage_records)} matching file record(s) indexed."
+            )
+        else:
+            search_queries = []
+            for alias in title_aliases:
+                query = str(alias or "").strip()
+                if query and query not in search_queries:
+                    search_queries.append(query[:64])
+            if not search_queries:
+                raise RuntimeError(f"No searchable title aliases are available for {title}.")
 
-        async def _scan_storage_history():
-            nonlocal scanned_storage_messages
-            async for stored in destination_client.get_chat_history(storage_chat_id, limit=5000):
-                scanned_storage_messages += 1
+            found_messages = {}
+            try:
+                async def _search_storage():
+                    for query in search_queries:
+                        async for stored in destination_client.search_messages(
+                            storage_chat_id, query=query, limit=100
+                        ):
+                            if not stored or not getattr(stored, "id", None):
+                                continue
+                            found_messages[int(stored.id)] = stored
+
+                await asyncio.wait_for(_search_storage(), timeout=90)
+            except asyncio.TimeoutError as search_error:
+                raise RuntimeError(
+                    f"Telegram FILE_STORE title search timed out for {title} after 90 seconds; "
+                    "no duplicate upload was started. Check USER_SESSION access and retry."
+                ) from search_error
+            except Exception as search_error:
+                raise RuntimeError(
+                    f"Telegram could not search FILE_STORE captions for {title}: "
+                    f"{type(search_error).__name__}: {search_error}. "
+                    "No full-history scan or duplicate upload was attempted."
+                ) from search_error
+
+            for stored in found_messages.values():
                 media_obj = getattr(stored, "video", None) or getattr(stored, "document", None)
                 media_name = getattr(media_obj, "file_name", None) if media_obj else None
-                # Captions contain canonical [Sxx-yy] title [quality] tags;
-                # prefer them over shortened/truncated filenames.
                 parsed = (
                     _parse_storage_record(getattr(stored, "caption", None))
                     or _parse_storage_record(media_name)
                 )
                 if parsed:
                     storage_records.append((parsed, int(stored.id)))
-                if scanned_storage_messages % 100 == 0:
-                    await set_progress(
-                        f"Scanning FILE_STORE history for {title} "
-                        f"S{target_season:02d}E{target_episode:02d}: "
-                        f"{scanned_storage_messages}/5000 messages checked."
-                    )
 
-        try:
-            await asyncio.wait_for(_scan_storage_history(), timeout=180)
-        except asyncio.TimeoutError as scan_error:
-            raise RuntimeError(
-                f"FILE_STORE history scan timed out after 180 seconds "
-                f"({scanned_storage_messages}/5000 messages checked). "
-                "Check USER_SESSION access and FILE_STORE_LINK, then retry."
-            ) from scan_error
-
-        await rep.report(
-            f"FILE_STORE reuse scan resolved channel {storage_chat_id}; "
-            f"scanned {scanned_storage_messages} messages and indexed "
-            f"{len(storage_records)} episode-quality files.",
-            "info",
-            log=False,
-        )
+            _FILE_STORE_INDEX_CACHE[cache_key] = (time.monotonic(), storage_records)
+            await rep.report(
+                f"FILE_STORE search resolved channel {storage_chat_id}; "
+                f"searched {len(search_queries)} title alias(es), inspected "
+                f"{len(found_messages)} matching message(s), and indexed "
+                f"{len(storage_records)} episode-quality file(s).",
+                "info",
+                log=False,
+            )
     except Exception as storage_error:
         # Do not blindly upload again when the USER_SESSION cannot join/read
         # the actual storage channel: duplicate prevention must fail closed.
@@ -850,6 +873,13 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         uploaded = await TgUploader(upload_status).upload(encoded_path, quality)
         if not uploaded:
             raise RuntimeError(f"FILE_STORE upload failed for S{season_number}E{episode_number} at {quality}.")
+        # Keep the in-memory search index current so later episodes/retries in
+        # this same /uploadchannel run can reuse the newly stored quality.
+        uploaded_record = _parse_storage_record(os.path.basename(encoded_path))
+        if uploaded_record:
+            known_ids = {int(message_id) for _, message_id in storage_records}
+            if int(uploaded.id) not in known_ids:
+                storage_records.append((uploaded_record, int(uploaded.id)))
         # Use the same single-file deep-link format as /addanime. Monkey
         # already has access to FILE_STORE and resolves this scaled message ID.
         start_payload = f"get-{int(uploaded.id) * abs(int(Var.FILE_STORE))}"
