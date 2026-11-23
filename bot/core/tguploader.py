@@ -199,4 +199,14 @@ class TgUploader:
 
 <blockquote>‣ <b>File(s) Encoded:</b> <code>{files_encoded} / {total_files}</code></blockquote>"""
             
-            await editMessage(self.message, progress_str)
+            try:
+                await editMessage(self.message, progress_str)
+            except Exception as status_error:
+                # Telegram progress edits run inside Pyrogram's upload callback.
+                # Never let a failed status edit abort the underlying file transfer.
+                await rep.report(
+                    f"Upload progress edit failed for {self.__name}: "
+                    f"{type(status_error).__name__}: {status_error}",
+                    "warning",
+                    log=False,
+                )
