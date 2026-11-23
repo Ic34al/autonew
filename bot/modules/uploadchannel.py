@@ -2102,10 +2102,16 @@ async def uploadchannel_callbacks(client, callback):
                             break
                         except Exception as episode_error:
                             error_text = f"{type(episode_error).__name__}: {episode_error}".casefold()
-                            transient = isinstance(
-                                episode_error,
-                                (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError),
-                            ) or any(marker in error_text for marker in transient_markers)
+                            # A torrent that exceeds its hard download deadline is
+                            # not retried in-place: release this anime worker so the
+                            # next queued anime can start instead of waiting 3 x 5 minutes.
+                            stalled_torrent = "torrent download exceeded" in error_text
+                            transient = not stalled_torrent and (
+                                isinstance(
+                                    episode_error,
+                                    (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError),
+                                ) or any(marker in error_text for marker in transient_markers)
+                            )
                             if not transient or attempt >= 3:
                                 raise
                             delay = min(30, 5 * (2 ** (attempt - 1)))
