@@ -1630,8 +1630,12 @@ async def uploadchannel_callbacks(client, callback):
     channel_stage = "starting USER_SESSION"
     current_anime_title = "unknown"
 
+    # Multiple archive workers share this one command message. Serialize edits
+    # so concurrent workers cannot race Telegram's edit RPC or trigger FloodWait.
+    archive_progress_lock = asyncio.Lock()
+
     async def report_stage(stage, anime_title=None):
-        """Publish every long-running setup stage to both the command and log channel."""
+        """Publish worker progress; status updates must never cancel archive work."""
         safe_stage = _escape(stage)
         safe_title = _escape(anime_title or current_anime_title)
         status_text = (
@@ -1640,10 +1644,11 @@ async def uploadchannel_callbacks(client, callback):
             f"<b>Stage:</b> {safe_stage}\n"
             f"<b>Channels prepared:</b> {len(created)}/{len(state['selected'])}"
         )
-        try:
-            await callback.message.edit(status_text)
-        except Exception as status_error:
-            LOGS.warning(f"Could not edit /uploadchannel progress message: {status_error}")
+        async with archive_progress_lock:
+            try:
+                await callback.message.edit(status_text)
+            except Exception as status_error:
+                LOGS.warning(f"Could not edit /uploadchannel progress message: {status_error}")
 
 
     try:
@@ -2013,22 +2018,51 @@ async def uploadchannel_callbacks(client, callback):
                         nonlocal channel_stage
                         channel_stage = stage
                         await report_stage(stage, selected_title)
-    
-                    if episode_number in reusable_set:
-                        await _upload_single_episode(
-                            selected_media, destination_id, season_index, episode_number,
-                            user_client, progress_callback=episode_progress,
-                            reuse_only=True, force_repost=True,
-                        )
-                        action = "reposted using saved FILE_STORE qualities"
-                    else:
-                        await _upload_single_episode(
-                            selected_media, destination_id, season_index, episode_number,
-                            user_client, progress_callback=episode_progress,
-                            force_repost=True,
-                        )
-                        action = "encoded missing qualities and published"
-    
+
+                    # Retry only transient transport failures. Every completed
+                    # quality is saved in FILE_STORE/MongoDB immediately, so the
+                    # next attempt resumes missing work rather than re-uploading
+                    # completed qualities.
+                    transient_markers = (
+                        "timeout", "timed out", "connection reset",
+                        "connection aborted", "server disconnected",
+                        "temporarily unavailable", "network is unreachable",
+                        "internal server error", "floodwait", "rate limit",
+                    )
+                    for attempt in range(1, 4):
+                        try:
+                            if episode_number in reusable_set:
+                                await _upload_single_episode(
+                                    selected_media, destination_id, season_index, episode_number,
+                                    user_client, progress_callback=episode_progress,
+                                    reuse_only=True, force_repost=True,
+                                )
+                                action = "reposted using saved FILE_STORE qualities"
+                            else:
+                                await _upload_single_episode(
+                                    selected_media, destination_id, season_index, episode_number,
+                                    user_client, progress_callback=episode_progress,
+                                    force_repost=True,
+                                )
+                                action = "encoded missing qualities and published"
+                            break
+                        except Exception as episode_error:
+                            error_text = f"{type(episode_error).__name__}: {episode_error}".casefold()
+                            transient = isinstance(
+                                episode_error,
+                                (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError),
+                            ) or any(marker in error_text for marker in transient_markers)
+                            if not transient or attempt >= 3:
+                                raise
+                            delay = min(30, 5 * (2 ** (attempt - 1)))
+                            await report_stage(
+                                f"temporary Telegram/network error for "
+                                f"S{season_index:02d}E{episode_number:02d}; "
+                                f"retrying in {delay}s (attempt {attempt + 1}/3)",
+                                selected_title,
+                            )
+                            await asyncio.sleep(delay)
+
                     await report_stage(
                         f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
                         selected_title,
