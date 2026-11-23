@@ -8,6 +8,38 @@ from torrentp import TorrentDownloader
 from bot import LOGS
 from bot.core.func_utils import handle_logs
 from bot.core.reporter import rep
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+
+# Extra tracker routes improve peer discovery when the torrent's embedded
+# tracker list is incomplete or unreachable. Trackers cannot create seeders.
+FALLBACK_TRACKERS = (
+    "udp://tracker.opentrackr.org:1337/announce",
+    "udp://open.stealth.si:80/announce",
+    "udp://tracker.torrent.eu.org:451/announce",
+    "udp://exodus.desync.com:6969/announce",
+    "udp://open.demonii.com:1337/announce",
+    "udp://tracker.moeking.me:6969/announce",
+    "udp://tracker1.bt.moack.co.kr:80/announce",
+    "https://tracker.tamersunion.org:443/announce",
+)
+
+
+def _with_fallback_trackers(magnet_uri):
+    """Add fallback tracker URLs without changing the torrent info-hash."""
+    if not isinstance(magnet_uri, str) or not magnet_uri.lower().startswith("magnet:?"):
+        return magnet_uri
+    try:
+        parts = urlsplit(magnet_uri)
+        query = parse_qsl(parts.query, keep_blank_values=True)
+        existing = {value.rstrip("/").casefold() for key, value in query if key == "tr"}
+        for tracker in FALLBACK_TRACKERS:
+            if tracker.rstrip("/").casefold() not in existing:
+                query.append(("tr", tracker))
+        return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+    except Exception as error:
+        LOGS.warning("Could not augment magnet tracker list: %s", error)
+        return magnet_uri
 
 
 # A stalled/seedless torrent must not hold one of the two archive workers forever.
@@ -76,7 +108,11 @@ class TorDownloader:
         filename = None
         try:
             if torrent.startswith("magnet:"):
-                await rep.report("Starting magnet download...", "info")
+                torrent = _with_fallback_trackers(torrent)
+                await rep.report(
+                    f"Starting magnet download with {len(FALLBACK_TRACKERS)} additional tracker routes...",
+                    "info",
+                )
                 torp = TorrentDownloader(torrent, self.__downdir)
                 self.__active_client = torp
                 try:
