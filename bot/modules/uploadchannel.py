@@ -29,6 +29,7 @@ from bot.core.text_utils import TextEditor
 import os
 import shutil
 import time
+import uuid
 from bot.core.reporter import rep
 
 # Photo and metadata caption are intentionally sent as one Telegram message.
@@ -675,7 +676,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
     return None
 
 
-async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False, preflight_only=False, force_repost=False):
+async def _upload_single_episode(media, destination_id, season_number, episode_number, destination_client, progress_callback=None, info_only=False, reuse_only=False, preflight_only=False, force_repost=False, publish_attempt_id=None):
     """Download one RSS episode, encode four qualities, and publish four buttons."""
     async def set_progress(stage):
         if progress_callback:
@@ -1380,6 +1381,43 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         ),
         fallback_path=poster_path,
     )
+    # A stable attempt ID is supplied by the episode retry loop. MongoDB claims
+    # the publication key before Telegram send_photo, preventing a retry after
+    # an accepted-but-unacknowledged send from creating a duplicate card.
+    publish_attempt_id = str(publish_attempt_id or uuid.uuid4().hex)
+    publish_claimed = await db.claimAnimeArchiveEpisodePublish(
+        media.get("id"), season_number, episode_number, destination_id, publish_attempt_id
+    )
+    if not publish_claimed:
+        prior_publish = await db.getAnimeArchiveEpisodePublishState(
+            media.get("id"), season_number, episode_number, destination_id
+        )
+        if prior_publish and prior_publish.get("publish_state") == "confirmed":
+            prior_message_id = prior_publish.get("message_id")
+            if prior_message_id:
+                await db.saveAnimeArchiveEpisodePost(
+                    media.get("id"), season_number, episode_number, destination_id,
+                    prior_message_id, card_version=ANIME_EPISODE_CARD_VERSION,
+                )
+                if int(destination_id) == int(getattr(Var, "MAIN_CHANNEL", 0) or 0):
+                    await db.saveAnimeMainPost(media.get("id"), str(episode_number), prior_message_id)
+                else:
+                    await db.saveAnimeDestinationPost(
+                        media.get("id"), str(episode_number), destination_id, prior_message_id
+                    )
+                await set_progress(
+                    f"Recovered confirmed Telegram post for {title} "
+                    f"S{season_number:02d}E{episode_number:02d}; skipped duplicate send."
+                )
+                shutil.rmtree(workdir, ignore_errors=True)
+                return True
+        state = (prior_publish or {}).get("publish_state", "unknown")
+        raise RuntimeError(
+            f"Publication for {title} S{season_number:02d}E{episode_number:02d} "
+            f"is already {state}; refusing an unsafe duplicate retry. "
+            "Reconcile the destination channel before clearing this publication lock."
+        )
+
     if poster and os.path.exists(poster):
         # Send the filesystem path, not a BufferedReader. Pyrogram opens it
         # itself and can determine the upload size correctly.
@@ -1407,6 +1445,19 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     if not published or not getattr(published, "id", None):
         raise RuntimeError(
             f"Telegram did not confirm the final episode post for {title} S{season_number}E{episode_number}."
+        )
+    # Mark Telegram acceptance durably before any later checkpoint or cleanup.
+    # If a following DB write fails, the retry recovers this message ID instead
+    # of sending a second card.
+    publish_confirmed = await db.finishAnimeArchiveEpisodePublish(
+        media.get("id"), season_number, episode_number, destination_id,
+        publish_attempt_id, published.id,
+    )
+    if not publish_confirmed:
+        raise RuntimeError(
+            f"Telegram accepted {title} S{season_number:02d}E{episode_number:02d}, "
+            "but its publication claim could not be confirmed in MongoDB. "
+            "The card may already exist; automatic resend is blocked to prevent duplicates."
         )
 
     # In explicit full-repost mode, replace the old episode card only after
@@ -2029,6 +2080,7 @@ async def uploadchannel_callbacks(client, callback):
                         "temporarily unavailable", "network is unreachable",
                         "internal server error", "floodwait", "rate limit",
                     )
+                    publish_attempt_id = uuid.uuid4().hex
                     for attempt in range(1, 4):
                         try:
                             if episode_number in reusable_set:
@@ -2036,6 +2088,7 @@ async def uploadchannel_callbacks(client, callback):
                                     selected_media, destination_id, season_index, episode_number,
                                     user_client, progress_callback=episode_progress,
                                     reuse_only=True, force_repost=True,
+                                    publish_attempt_id=publish_attempt_id,
                                 )
                                 action = "reposted using saved FILE_STORE qualities"
                             else:
@@ -2043,6 +2096,7 @@ async def uploadchannel_callbacks(client, callback):
                                     selected_media, destination_id, season_index, episode_number,
                                     user_client, progress_callback=episode_progress,
                                     force_repost=True,
+                                    publish_attempt_id=publish_attempt_id,
                                 )
                                 action = "encoded missing qualities and published"
                             break
