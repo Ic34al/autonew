@@ -25,6 +25,72 @@ FALLBACK_TRACKERS = (
 )
 
 
+def _bdecode(data, offset=0):
+    token = data[offset:offset + 1]
+    if token == b'i':
+        end = data.index(b'e', offset)
+        return int(data[offset + 1:end]), end + 1
+    if token == b'l':
+        values, offset = [], offset + 1
+        while data[offset:offset + 1] != b'e':
+            value, offset = _bdecode(data, offset)
+            values.append(value)
+        return values, offset + 1
+    if token == b'd':
+        values, offset = {}, offset + 1
+        while data[offset:offset + 1] != b'e':
+            key, offset = _bdecode(data, offset)
+            value, offset = _bdecode(data, offset)
+            values[key] = value
+        return values, offset + 1
+    colon = data.index(b':', offset)
+    size = int(data[offset:colon])
+    start = colon + 1
+    return data[start:start + size], start + size
+
+
+def _bencode(value):
+    if isinstance(value, int):
+        return b'i' + str(value).encode('ascii') + b'e'
+    if isinstance(value, bytes):
+        return str(len(value)).encode('ascii') + b':' + value
+    if isinstance(value, list):
+        return b'l' + b''.join(_bencode(item) for item in value) + b'e'
+    if isinstance(value, dict):
+        return b'd' + b''.join(_bencode(key) + _bencode(value[key]) for key in sorted(value)) + b'e'
+    raise TypeError('Unsupported bencode value: %r' % (type(value),))
+
+
+def _add_trackers_to_torrent_file(torrent_path):
+    """Add fallback announce URLs to a .torrent without changing its info hash."""
+    try:
+        with open(torrent_path, 'rb') as torrent_file:
+            raw = torrent_file.read()
+        metadata, consumed = _bdecode(raw)
+        if consumed != len(raw) or not isinstance(metadata, dict) or b'info' not in metadata:
+            raise ValueError('Invalid torrent metainfo dictionary')
+        tracker_bytes = [tracker.encode('utf-8') for tracker in FALLBACK_TRACKERS]
+        existing = set(metadata.get(b'announce-list', []))
+        tiers = []
+        for tier in metadata.get(b'announce-list', []):
+            if isinstance(tier, list):
+                tiers.append(tier)
+            elif isinstance(tier, bytes):
+                tiers.append([tier])
+        known = {url for tier in tiers for url in tier}
+        for tracker in tracker_bytes:
+            if tracker not in known:
+                tiers.append([tracker])
+        metadata[b'announce-list'] = tiers
+        if not metadata.get(b'announce'):
+            metadata[b'announce'] = tracker_bytes[0]
+        with open(torrent_path, 'wb') as torrent_file:
+            torrent_file.write(_bencode(metadata))
+        return len(tracker_bytes)
+    except Exception as error:
+        LOGS.warning('Could not add fallback trackers to torrent file %s: %s', torrent_path, error)
+        return 0
+
 def _with_fallback_trackers(magnet_uri):
     """Add fallback tracker URLs without changing the torrent info-hash."""
     if not isinstance(magnet_uri, str) or not magnet_uri.lower().startswith("magnet:?"):
@@ -135,7 +201,11 @@ class TorDownloader:
                 if not torrent_file:
                     await rep.report("Failed to download torrent file", "error")
                     return None
-                                 
+                added_trackers = _add_trackers_to_torrent_file(torrent_file)
+                await rep.report(
+                    f"Torrent metadata prepared with {added_trackers} fallback tracker routes.",
+                    "info",
+                )
                 torp = TorrentDownloader(torrent_file, self.__downdir)
                 self.__active_client = torp
                 try:
