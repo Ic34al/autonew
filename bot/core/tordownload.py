@@ -43,8 +43,11 @@ def _with_fallback_trackers(magnet_uri):
 
 
 # A stalled/seedless torrent must not hold one of the two archive workers forever.
+# Large episode releases can legitimately take longer than five minutes on
+# a healthy but slow swarm. Keep a generous hard ceiling; the orchestrator
+# reports progress while this runs and stops the session on cancellation.
 TORRENT_DOWNLOAD_TIMEOUT_SECONDS = max(
-    60, int(os.environ.get("TORRENT_DOWNLOAD_TIMEOUT_SECONDS", "300"))
+    300, int(os.environ.get("TORRENT_DOWNLOAD_TIMEOUT_SECONDS", "1800"))
 )
 
 
