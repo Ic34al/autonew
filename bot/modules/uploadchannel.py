@@ -22,7 +22,7 @@ from bot.core.database import db
 import bot.core.auto_animes as auto_anime_core
 from bot.core.auto_animes import process_batch_anime, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, find_video_files, build_anime_soul_poster, build_main_channel_announcement_caption, send_sticker_to_channel
 from bot.core.func_utils import getfeeds, encode
-from bot.core.tordownload import TorDownloader
+from bot.core.tordownload import TorDownloader, TORRENT_DOWNLOAD_TIMEOUT_SECONDS
 from bot.core.ffencoder import FFEncoder
 from bot.core.tguploader import TgUploader
 from bot.core.text_utils import TextEditor
@@ -1252,8 +1252,33 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         # Torrent clients can be quiet for several minutes while connecting to
         # peers. Keep both the command status and Anime Logs alive so the job
         # never appears stuck at "Downloading" without explaining its state.
+        # Independent watchdog at the orchestration layer. Some torrentp
+        # versions can swallow cancellation inside start_download(), so do not
+        # rely only on wait_for() inside TorDownloader.
+        download_deadline = download_started_at + TORRENT_DOWNLOAD_TIMEOUT_SECONDS
         while not download_task.done():
-            done, _ = await asyncio.wait({download_task}, timeout=15)
+            remaining = download_deadline - time.monotonic()
+            if remaining <= 0:
+                download_task.cancel()
+                download_task.add_done_callback(
+                    lambda task: task.exception() if not task.cancelled() else None
+                )
+                elapsed = int(time.monotonic() - download_started_at)
+                await create_optional_log_message(
+                    f"<b>Download timed out:</b> {_escape(title)} "
+                    f"S{target_season:02d}E{target_episode:02d}\\n"
+                    f"Torrent did not finish within {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s. "
+                    "Cancelled this job and releasing its queue slot."
+                )
+                await set_progress(
+                    f"Torrent timed out for {title} S{target_season:02d}E{target_episode:02d} "
+                    f"after {elapsed}s; moving to the next queued anime."
+                )
+                raise TimeoutError(
+                    f"Torrent download exceeded {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s; "
+                    "worker released by the upload-channel watchdog."
+                )
+            done, _ = await asyncio.wait({download_task}, timeout=min(15, remaining))
             if not done:
                 elapsed = int(time.monotonic() - download_started_at)
                 heartbeat = (
