@@ -26,6 +26,18 @@ class TorDownloader:
         except Exception as e:
             LOGS.error(f"Failed to create directories: {str(e)}")
 
+    def stop(self):
+        """Stop the active libtorrent session immediately (safe to call more than once)."""
+        client = getattr(self, "_TorDownloader__active_client", None)
+        if client is None:
+            return False
+        try:
+            client.stop_download()
+            return True
+        except Exception as stop_error:
+            LOGS.warning("Could not stop torrent client cleanly: %s", stop_error)
+            return False
+
     video_exts = ('.mp4', '.mkv', '.avi', '.webm', '.wmv')
 
     def is_video_file(self, filename):
@@ -66,6 +78,7 @@ class TorDownloader:
             if torrent.startswith("magnet:"):
                 await rep.report("Starting magnet download...", "info")
                 torp = TorrentDownloader(torrent, self.__downdir)
+                self.__active_client = torp
                 try:
                     await asyncio.wait_for(
                         torp.start_download(),
@@ -85,6 +98,7 @@ class TorDownloader:
                     return None
                                  
                 torp = TorrentDownloader(torrent_file, self.__downdir)
+                self.__active_client = torp
                 try:
                     await asyncio.wait_for(
                         torp.start_download(),
@@ -121,12 +135,20 @@ class TorDownloader:
             await rep.report(f"Successfully downloaded: {filename}", "info")
             return file_path
 
+        except asyncio.CancelledError:
+            # Cancellation must stop libtorrent itself, not only the Python task.
+            self.stop()
+            raise
         except Exception as e:
             error_msg = f"Torrent download error: {str(e)}"
             if filename:
                 error_msg += f" (file: {filename})"
             await rep.report(error_msg, "error")
             return None
+        finally:
+            # Do not leave a seed/peer session running after completion or failure.
+            self.stop()
+            self.__active_client = None
 
     @handle_logs
     async def get_torfile(self, url, max_retries=10, delay=5):
