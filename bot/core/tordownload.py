@@ -10,6 +10,12 @@ from bot.core.func_utils import handle_logs
 from bot.core.reporter import rep
 
 
+# A stalled/seedless torrent must not hold one of the two archive workers forever.
+TORRENT_DOWNLOAD_TIMEOUT_SECONDS = max(
+    60, int(os.environ.get("TORRENT_DOWNLOAD_TIMEOUT_SECONDS", "300"))
+)
+
+
 class TorDownloader:
     def __init__(self, path="."):
         self.__downdir = path
@@ -60,7 +66,17 @@ class TorDownloader:
             if torrent.startswith("magnet:"):
                 await rep.report("Starting magnet download...", "info")
                 torp = TorrentDownloader(torrent, self.__downdir)
-                await torp.start_download()
+                try:
+                    await asyncio.wait_for(
+                        torp.start_download(),
+                        timeout=TORRENT_DOWNLOAD_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError as timeout_error:
+                    raise TimeoutError(
+                        f"Torrent download exceeded {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s "
+                        "without completing. This archive worker is being released so "
+                        "the next selected anime can proceed."
+                    ) from timeout_error
             else:
                 await rep.report("Starting torrent file download...", "info")
                 torrent_file = await self.get_torfile(torrent)
@@ -69,7 +85,17 @@ class TorDownloader:
                     return None
                                  
                 torp = TorrentDownloader(torrent_file, self.__downdir)
-                await torp.start_download()
+                try:
+                    await asyncio.wait_for(
+                        torp.start_download(),
+                        timeout=TORRENT_DOWNLOAD_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError as timeout_error:
+                    raise TimeoutError(
+                        f"Torrent download exceeded {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s "
+                        "without completing. This archive worker is being released so "
+                        "the next selected anime can proceed."
+                    ) from timeout_error
                 try:
                     await aioremove(torrent_file)
                 except:
