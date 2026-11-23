@@ -15,6 +15,46 @@ class MongoDB:
         self.__manga_banners = self.__db.manga_banners
         self.__ffmpeg_configs = self.__db.ffmpeg_configs
 
+    async def claimAnimeArchiveEpisodePublish(self, ani_id, season, episode, channel_id, attempt_id):
+        """Fail-closed idempotency claim before sending an episode card to Telegram."""
+        if any(value is None for value in (ani_id, season, episode, channel_id, attempt_id)):
+            return False
+        key = f"uploadchannel:publish:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        now = datetime.datetime.utcnow()
+        try:
+            await self.__anime_archive_episode_posts.insert_one({
+                "_id": key,
+                "ani_id": int(ani_id),
+                "season": int(season),
+                "episode": int(episode),
+                "channel_id": int(channel_id),
+                "attempt_id": str(attempt_id),
+                "publish_state": "sending",
+                "started_at": now,
+                "updated_at": now,
+            })
+            return True
+        except Exception as error:
+            if "duplicate key" in str(error).lower() or "E11000" in str(error):
+                return False
+            raise
+
+    async def finishAnimeArchiveEpisodePublish(self, ani_id, season, episode, channel_id, attempt_id, message_id):
+        """Record the confirmed Telegram message ID for the claimed publish operation."""
+        if any(value is None for value in (ani_id, season, episode, channel_id, attempt_id, message_id)):
+            return False
+        key = f"uploadchannel:publish:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        result = await self.__anime_archive_episode_posts.update_one(
+            {"_id": key, "attempt_id": str(attempt_id), "publish_state": "sending"},
+            {"$set": {
+                "publish_state": "confirmed",
+                "message_id": int(message_id),
+                "confirmed_at": datetime.datetime.utcnow(),
+                "updated_at": datetime.datetime.utcnow(),
+            }},
+        )
+        return bool(result.matched_count)
+
     async def getAnimeArchiveEpisodePost(self, ani_id, season, episode, channel_id):
         """Return the durable /uploadchannel episode-card checkpoint for one destination."""
         if ani_id is None or season is None or episode is None or channel_id is None:
