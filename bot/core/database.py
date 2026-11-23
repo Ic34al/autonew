@@ -15,25 +15,40 @@ class MongoDB:
         self.__manga_banners = self.__db.manga_banners
         self.__ffmpeg_configs = self.__db.ffmpeg_configs
 
+    async def getAnimeArchiveEpisodePublishState(self, ani_id, season, episode, channel_id):
+        if any(value is None for value in (ani_id, season, episode, channel_id)):
+            return None
+        key = f"uploadchannel:publish:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
+        return await self.__anime_archive_episode_posts.find_one({"_id": key})
+
     async def claimAnimeArchiveEpisodePublish(self, ani_id, season, episode, channel_id, attempt_id):
-        """Fail-closed idempotency claim before sending an episode card to Telegram."""
+        """Claim before send; allow a new explicit run only after a confirmed prior send."""
         if any(value is None for value in (ani_id, season, episode, channel_id, attempt_id)):
             return False
         key = f"uploadchannel:publish:{int(ani_id)}:s{int(season):02d}e{int(episode):02d}:c{int(channel_id)}"
         now = datetime.datetime.utcnow()
         try:
-            await self.__anime_archive_episode_posts.insert_one({
-                "_id": key,
-                "ani_id": int(ani_id),
-                "season": int(season),
-                "episode": int(episode),
-                "channel_id": int(channel_id),
-                "attempt_id": str(attempt_id),
-                "publish_state": "sending",
-                "started_at": now,
-                "updated_at": now,
-            })
-            return True
+            result = await self.__anime_archive_episode_posts.update_one(
+                {
+                    "_id": key,
+                    "$or": [
+                        {"publish_state": {"$exists": False}},
+                        {"publish_state": "confirmed", "attempt_id": {"$ne": str(attempt_id)}},
+                    ],
+                },
+                {"$set": {
+                    "ani_id": int(ani_id),
+                    "season": int(season),
+                    "episode": int(episode),
+                    "channel_id": int(channel_id),
+                    "attempt_id": str(attempt_id),
+                    "publish_state": "sending",
+                    "started_at": now,
+                    "updated_at": now,
+                }},
+                upsert=True,
+            )
+            return bool(result.matched_count or result.upserted_id)
         except Exception as error:
             if "duplicate key" in str(error).lower() or "E11000" in str(error):
                 return False
