@@ -6,7 +6,7 @@ from os import path as ospath
 from aiofiles.os import remove as aioremove
 from pyrogram.errors import FloodWait
 import datetime
-from bot import bot, Var, ani_cache
+from bot import bot, Var, ani_cache, LOGS
 from .gdrive import gdrive
 from .database import db
 from .func_utils import editMessage, sendMessage, convertBytes, convertTime
@@ -204,9 +204,7 @@ class TgUploader:
             except Exception as status_error:
                 # Telegram progress edits run inside Pyrogram's upload callback.
                 # Never let a failed status edit abort the underlying file transfer.
-                await rep.report(
+                LOGS.warning(
                     f"Upload progress edit failed for {self.__name}: "
-                    f"{type(status_error).__name__}: {status_error}",
-                    "warning",
-                    log=False,
+                    f"{type(status_error).__name__}: {status_error}"
                 )
