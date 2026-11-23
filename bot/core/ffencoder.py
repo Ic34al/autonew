@@ -140,7 +140,14 @@ class FFEncoder:
     ‣ <b>Quality:</b> {self.__qual}p</blockquote>
 <blockquote>‣ <b>File(s) Encoded:</b> <code>{qual_index} / {total_quals}</code></blockquote>"""
 
-                await editMessage(self.message, progress_str)
+                try:
+                    await editMessage(self.message, progress_str)
+                except Exception as status_error:
+                    # A failed Telegram heartbeat must not stop FFmpeg or lose a valid output.
+                    LOGS.warning(
+                        f"FFmpeg progress edit failed for {self.__name} ({self.__qual}p): "
+                        f"{type(status_error).__name__}: {status_error}"
+                    )
 
                 if (prog := findall(r"progress=(\w+)", text)) and prog[-1] == 'end':
                     break
@@ -865,6 +872,11 @@ class FFEncoder:
                 await progress_task
             except asyncio.CancelledError:
                 pass
+            except Exception as progress_error:
+                LOGS.warning(
+                    f"FFmpeg progress task ended for {self.__name} ({self.__qual}p): "
+                    f"{type(progress_error).__name__}: {progress_error}"
+                )
 
         return_code = self.__proc.returncode
         if isinstance(stderr_output, bytes):
