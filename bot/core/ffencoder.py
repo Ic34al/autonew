@@ -404,8 +404,12 @@ class FFEncoder:
         # bundled by imageio-ffmpeg on Python-buildpack deployments.
         # Resolve and verify the actual executable before building any command.
         # Some buildpack deployments do not install system packages from Dockerfile.
-        ffmpeg_executable = shutil.which("ffmpeg")
-        candidates = [ffmpeg_executable] if ffmpeg_executable else []
+        # Ignore the old temporary shim directory: earlier releases could
+        # accidentally resolve ffmpeg to /tmp/.../ffmpeg and then symlink that
+        # path back to itself, creating ELOOP ("Too many levels of symlinks").
+        shim_dir = "/tmp/autoanime-ffmpeg-bin"
+        discovered_ffmpeg = shutil.which("ffmpeg")
+        candidates = [discovered_ffmpeg] if discovered_ffmpeg else []
         try:
             bundled_ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
             if bundled_ffmpeg not in candidates:
@@ -415,8 +419,18 @@ class FFEncoder:
 
         verified_ffmpeg = None
         ffmpeg_probe_errors = []
+        seen_realpaths = set()
         for candidate in candidates:
-            if not candidate or not ospath.isfile(candidate) or not __import__("os").access(candidate, __import__("os").X_OK):
+            if not candidate:
+                continue
+            candidate = ospath.realpath(ospath.abspath(candidate))
+            if candidate.startswith(ospath.realpath(shim_dir) + os.sep):
+                ffmpeg_probe_errors.append(f"{candidate!r} points inside the temporary shim directory")
+                continue
+            if candidate in seen_realpaths:
+                continue
+            seen_realpaths.add(candidate)
+            if not ospath.isfile(candidate) or not os.access(candidate, os.X_OK):
                 ffmpeg_probe_errors.append(f"{candidate!r} is missing or not executable")
                 continue
             try:
@@ -446,25 +460,28 @@ class FFEncoder:
             return None
         ffmpeg_executable = verified_ffmpeg
 
-        # Also expose the verified binary as the literal command "ffmpeg".
-        # Saved anime-specific FFmpeg templates and shell fragments may invoke
-        # that command directly; deployments which ignore Dockerfile packages
-        # otherwise fail with shell exit 127 even though imageio-ffmpeg exists.
+        # Use the real, probed executable directly. Do not create a symlink
+        # shim: a stale shim can be selected by shutil.which() and link to itself.
+        # Adding the binary's actual directory to PATH still supports custom
+        # templates that invoke the bare command "ffmpeg".
         try:
-            shim_dir = "/tmp/autoanime-ffmpeg-bin"
-            os.makedirs(shim_dir, exist_ok=True)
-            shim_path = ospath.join(shim_dir, "ffmpeg")
-            target_path = ospath.abspath(verified_ffmpeg)
-            if ospath.lexists(shim_path):
-                if not ospath.islink(shim_path) or os.readlink(shim_path) != target_path:
-                    os.remove(shim_path)
-            if not ospath.lexists(shim_path):
-                os.symlink(target_path, shim_path)
-            os.environ["PATH"] = shim_dir + os.pathsep + os.environ.get("PATH", "")
-            ffmpeg_executable = shim_path
+            ffmpeg_executable = ospath.realpath(verified_ffmpeg)
+            if not ospath.isfile(ffmpeg_executable) or not os.access(ffmpeg_executable, os.X_OK):
+                raise RuntimeError(f"Resolved FFmpeg is not executable: {ffmpeg_executable}")
+            os.environ["PATH"] = (
+                ospath.dirname(ffmpeg_executable) + os.pathsep
+                + os.environ.get("PATH", "")
+            )
+            final_probe = await asyncio.create_subprocess_exec(
+                ffmpeg_executable, "-version",
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            if await final_probe.wait() != 0:
+                raise RuntimeError(f"Resolved FFmpeg failed its final probe: {ffmpeg_executable}")
         except Exception as exc:
-            self.last_error = f"Could not expose verified FFmpeg on PATH: {type(exc).__name__}: {exc}"
-            LOGS.error(self.last_error)
+            self.last_error = f"Could not resolve a safe FFmpeg executable: {type(exc).__name__}: {exc}"
+            LOGS.exception(self.last_error)
             if not self.quiet_errors:
                 await rep.report(self.last_error, "error")
             return None
