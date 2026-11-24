@@ -223,6 +223,12 @@ def _season_number_from_release(title):
         r"\bS0*(\d{1,2})(?:E|\s*[._\-–—− ]*\d)",
         r"\bSeason\s*0*(\d{1,2})\b",
         r"\bS0*(\d{1,2})\b",
+        # AniList may model a split cour as a sequel ("2nd Cour") while
+        # SubsPlease labels the release S02 - 01. Recognize explicit cour/part.
+        r"\b(\d{1,2})(?:st|nd|rd|th)\s+Cour\b",
+        r"\bCour\s*0*(\d{1,2})\b",
+        r"\b(\d{1,2})(?:st|nd|rd|th)\s+Part\b",
+        r"\bPart\s*0*(\d{1,2})\b",
     )
     for pattern in patterns:
         match = re.search(pattern, str(title or ""), re.IGNORECASE)
@@ -378,7 +384,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
         # the base romaji title followed by "S2 - 01". Search both forms so
         # older episodes remain discoverable outside the latest RSS window.
         base_alias = re.sub(
-            r"(?i)\s+(?:season\s+\d{1,2}|s\d{1,2}|\d{1,2}(?:st|nd|rd|th)?\s+season)\s*$",
+            r"(?i)\s+(?:season\s+\d{1,2}|s\d{1,2}|\d{1,2}(?:st|nd|rd|th)?\s+(?:season|cour|part)|cour\s+\d{1,2}|part\s+\d{1,2})\s*$",
             "",
             alias,
         ).strip()
@@ -1246,12 +1252,22 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             if quality not in supported_missing
         ]
         if unsupported_missing and not supported_missing:
-            raise RuntimeError(
-                f"Found an exact {source_quality}p source for {title} "
-                f"S{target_season:02d}E{target_episode:02d}, but missing qualities "
-                f"{', '.join(unsupported_missing)} require a higher-resolution source. "
-                "No upscaled/falsely labelled files were created."
-            )
+            if buttons_by_quality:
+                await rep.report(
+                    f"Exact {source_quality}p source found for {title} "
+                    f"S{target_season:02d}E{target_episode:02d}, but the remaining "
+                    f"higher qualities ({', '.join(unsupported_missing)}) cannot be "
+                    "created without upscaling. Publishing already verified qualities.",
+                    "warning",
+                )
+            else:
+                raise RuntimeError(
+                    f"Found an exact {source_quality}p source for {title} "
+                    f"S{target_season:02d}E{target_episode:02d}, but none of the "
+                    f"missing qualities ({', '.join(unsupported_missing)}) can be "
+                    "created without upscaling. No falsely labelled files were created."
+                )
+            supported_missing = []
         if unsupported_missing:
             await rep.report(
                 f"Exact {source_quality}p source found for {title} "
@@ -1490,10 +1506,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         [buttons_by_quality[q] for q in ("1080", "HDRi") if q in buttons_by_quality],
     ]
     keyboard_rows = [row for row in keyboard_rows if row]
-    if len(buttons_by_quality) != 4 or not keyboard_rows:
+    if not buttons_by_quality or not keyboard_rows:
         raise RuntimeError(
             f"Refusing to publish {title} S{season_number}E{episode_number}: "
-            f"only {len(buttons_by_quality)}/4 quality buttons were prepared."
+            "no verified FILE_STORE quality is available."
         )
     keyboard = InlineKeyboardMarkup(keyboard_rows)
 
@@ -1610,7 +1626,8 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
     await send_checkpointed_sticker("episode")
 
     await rep.report(
-        f"Published {title} S{season_number}E{episode_number} with four quality buttons "
+        f"Published {title} S{season_number}E{episode_number} with "
+        f"{len(buttons_by_quality)} verified quality button(s) "
         "and AniList-ID-verified artwork/synopsis.",
         "info",
         log=False,
@@ -2089,10 +2106,11 @@ async def uploadchannel_callbacks(client, callback):
         # uploading Season 1 just because the prequel exists in AniList.
         channel_stage = "processing released episodes of the selected ongoing season"
         await report_stage(channel_stage)
-        # Run at most two different anime backfills concurrently. Each worker
-        # still processes that anime's episodes in strict episode order; a
-        # third/fourth selected anime remains queued until a worker completes.
-        archive_worker_semaphore = asyncio.Semaphore(2)
+        # Heroku Basic has a small CPU/RAM budget. Keep one archive worker
+        # active so concurrent torrent clients do not starve the single FFmpeg
+        # encoder or trigger dyno memory pressure/SIGTERM. Other selected anime
+        # remain queued while each worker processes episodes in strict order.
+        archive_worker_semaphore = asyncio.Semaphore(1)
 
         async def process_archive_job(selected_media, destination_id):
             async with archive_worker_semaphore:
@@ -2204,6 +2222,11 @@ async def uploadchannel_callbacks(client, callback):
                         "connection aborted", "server disconnected",
                         "temporarily unavailable", "network is unreachable",
                         "internal server error", "floodwait", "rate limit",
+                        # Retry an externally terminated FFmpeg attempt. The
+                        # encoder restores its source and removes partial output;
+                        # FILE_STORE checkpoints preserve already completed tiers.
+                        "return code -15", "signal 15", "sigterm",
+                        "terminated by signal",
                     )
                     publish_attempt_id = uuid.uuid4().hex
                     for attempt in range(1, 4):
