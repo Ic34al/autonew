@@ -256,7 +256,6 @@ try:
         api_id=Var.API_ID,
         api_hash=Var.API_HASH,
         bot_token=Var.BOT_TOKEN,
-        session_string=Var.PYROGRAM_SESSION or None,
         mongodb={"connection": SESSION_MONGO, "remove_peers": False},
         plugins=dict(root="bot/modules"),
         parse_mode=ParseMode.HTML,
