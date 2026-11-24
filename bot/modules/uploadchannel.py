@@ -1276,95 +1276,96 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 "warning",
             )
         missing_qualities = supported_missing
-        info.pdata["audio_type"] = (
-            "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
-            else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
-            else "Japanese [English Sub]"
-        )
-        await rep.report(
-            f"RSS source matched: {episode['title']} — {episode['link']}",
-            "success",
-        )
-        download_started_at = time.monotonic()
-        download_status = await create_optional_log_message(
-            f"<b>Download starting:</b> {_escape(title)} "
-            f"S{target_season:02d}E{target_episode:02d}\\n"
-            "Torrent client is being started; encoding has not started yet."
-        )
-        await set_progress(
-            f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}."
-        )
-        await rep.report(
-            f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}.",
-            "info",
-        )
-        download_task = asyncio.create_task(
-            TorDownloader(workdir).download(episode["link"])
-        )
-        # Torrent clients can be quiet for several minutes while connecting to
-        # peers. Keep both the command status and Anime Logs alive so the job
-        # never appears stuck at "Downloading" without explaining its state.
-        # Independent watchdog at the orchestration layer. Some torrentp
-        # versions can swallow cancellation inside start_download(), so do not
-        # rely only on wait_for() inside TorDownloader.
-        download_deadline = download_started_at + TORRENT_DOWNLOAD_TIMEOUT_SECONDS
-        while not download_task.done():
-            remaining = download_deadline - time.monotonic()
-            if remaining <= 0:
-                download_task.cancel()
-                download_task.add_done_callback(
-                    lambda task: task.exception() if not task.cancelled() else None
-                )
-                elapsed = int(time.monotonic() - download_started_at)
-                await create_optional_log_message(
-                    f"<b>Download timed out:</b> {_escape(title)} "
-                    f"S{target_season:02d}E{target_episode:02d}\\n"
-                    f"Torrent did not finish within {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s. "
-                    "Cancelled this job and releasing its queue slot."
-                )
-                await set_progress(
-                    f"Torrent timed out for {title} S{target_season:02d}E{target_episode:02d} "
-                    f"after {elapsed}s; moving to the next queued anime."
-                )
-                raise TimeoutError(
-                    f"Torrent download exceeded {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s; "
-                    "worker released by the upload-channel watchdog."
-                )
-            done, _ = await asyncio.wait({download_task}, timeout=min(15, remaining))
-            if not done:
-                elapsed = int(time.monotonic() - download_started_at)
-                heartbeat = (
-                    f"<b>Downloading torrent:</b> {_escape(title)} "
-                    f"S{target_season:02d}E{target_episode:02d}\\n"
-                    f"Torrent client is still running ({elapsed}s elapsed). "
-                    "FFmpeg encoding has not started yet."
-                )
-                await create_optional_log_message(heartbeat)
-                await set_progress(
-                    f"Downloading torrent for {title} S{target_season:02d}E{target_episode:02d}; "
-                    f"torrent client still running ({elapsed}s)."
-                )
-        downloaded = _coerce_path(await download_task)
-        download_elapsed = int(time.monotonic() - download_started_at)
-        if download_status:
-            await create_optional_log_message(
-                f"<b>Download completed:</b> {_escape(title)} "
+        if missing_qualities:
+            info.pdata["audio_type"] = (
+                "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
+                else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
+                else "Japanese [English Sub]"
+            )
+            await rep.report(
+                f"RSS source matched: {episode['title']} — {episode['link']}",
+                "success",
+            )
+            download_started_at = time.monotonic()
+            download_status = await create_optional_log_message(
+                f"<b>Download starting:</b> {_escape(title)} "
                 f"S{target_season:02d}E{target_episode:02d}\\n"
-                f"Torrent download finished in {download_elapsed}s; checking source video."
+                "Torrent client is being started; encoding has not started yet."
             )
-        if not downloaded or not os.path.exists(downloaded):
-            raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
-        video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
-        if len(video_files) != 1:
-            raise RuntimeError(
-                f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
+            await set_progress(
+                f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}."
             )
-        source = video_files[0]
-        await rep.report(
-            f"Torrent download completed for {title} S{target_season:02d}E{target_episode:02d}; "
-            f"found one video source. Preparing {len(missing_qualities)} missing quality encode(s).",
-            "success",
-        )
+            await rep.report(
+                f"Starting torrent download for {title} S{target_season:02d}E{target_episode:02d}.",
+                "info",
+            )
+            download_task = asyncio.create_task(
+                TorDownloader(workdir).download(episode["link"])
+            )
+            # Torrent clients can be quiet for several minutes while connecting to
+            # peers. Keep both the command status and Anime Logs alive so the job
+            # never appears stuck at "Downloading" without explaining its state.
+            # Independent watchdog at the orchestration layer. Some torrentp
+            # versions can swallow cancellation inside start_download(), so do not
+            # rely only on wait_for() inside TorDownloader.
+            download_deadline = download_started_at + TORRENT_DOWNLOAD_TIMEOUT_SECONDS
+            while not download_task.done():
+                remaining = download_deadline - time.monotonic()
+                if remaining <= 0:
+                    download_task.cancel()
+                    download_task.add_done_callback(
+                        lambda task: task.exception() if not task.cancelled() else None
+                    )
+                    elapsed = int(time.monotonic() - download_started_at)
+                    await create_optional_log_message(
+                        f"<b>Download timed out:</b> {_escape(title)} "
+                        f"S{target_season:02d}E{target_episode:02d}\\n"
+                        f"Torrent did not finish within {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s. "
+                        "Cancelled this job and releasing its queue slot."
+                    )
+                    await set_progress(
+                        f"Torrent timed out for {title} S{target_season:02d}E{target_episode:02d} "
+                        f"after {elapsed}s; moving to the next queued anime."
+                    )
+                    raise TimeoutError(
+                        f"Torrent download exceeded {TORRENT_DOWNLOAD_TIMEOUT_SECONDS}s; "
+                        "worker released by the upload-channel watchdog."
+                    )
+                done, _ = await asyncio.wait({download_task}, timeout=min(15, remaining))
+                if not done:
+                    elapsed = int(time.monotonic() - download_started_at)
+                    heartbeat = (
+                        f"<b>Downloading torrent:</b> {_escape(title)} "
+                        f"S{target_season:02d}E{target_episode:02d}\\n"
+                        f"Torrent client is still running ({elapsed}s elapsed). "
+                        "FFmpeg encoding has not started yet."
+                    )
+                    await create_optional_log_message(heartbeat)
+                    await set_progress(
+                        f"Downloading torrent for {title} S{target_season:02d}E{target_episode:02d}; "
+                        f"torrent client still running ({elapsed}s)."
+                    )
+            downloaded = _coerce_path(await download_task)
+            download_elapsed = int(time.monotonic() - download_started_at)
+            if download_status:
+                await create_optional_log_message(
+                    f"<b>Download completed:</b> {_escape(title)} "
+                    f"S{target_season:02d}E{target_episode:02d}\\n"
+                    f"Torrent download finished in {download_elapsed}s; checking source video."
+                )
+            if not downloaded or not os.path.exists(downloaded):
+                raise RuntimeError(f"Torrent download failed for {title} S{season_number}E{episode_number}.")
+            video_files = find_video_files(os.path.dirname(downloaded) if os.path.isfile(downloaded) else downloaded)
+            if len(video_files) != 1:
+                raise RuntimeError(
+                    f"Expected exactly one video for {title} S{season_number}E{episode_number}; found {len(video_files)}."
+                )
+            source = video_files[0]
+            await rep.report(
+                f"Torrent download completed for {title} S{target_season:02d}E{target_episode:02d}; "
+                f"found one video source. Preparing {len(missing_qualities)} missing quality encode(s).",
+                "success",
+            )
 
     for quality in missing_qualities:
         await set_progress(f"Encoding {title} S{target_season:02d}E{target_episode:02d} at {quality}p with FFmpeg.")
