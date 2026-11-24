@@ -21,8 +21,9 @@ from .reporter import rep
 from .text_utils import TextEditor
 from bot.core.database import db
 
-# Global process-wide cap: no more than two FFmpeg processes may run at once.
-FFENCODE_SEMAPHORE = asyncio.Semaphore(2)
+# Heroku Basic has limited CPU. Serializing encodes avoids CPU contention
+# that makes every concurrent job slower; each encode uses two FFmpeg threads.
+FFENCODE_SEMAPHORE = asyncio.Semaphore(1)
 
 ffargs = {
     'HDRi': Var.FFCODE_HDRi,
@@ -140,7 +141,8 @@ class FFEncoder:
 <blockquote>‣ <b>Status :</b> <i>Encoding</i>
     <code>[{bar}]</code> {percent}%</blockquote> 
 <blockquote>   ‣ <b>Generated so far :</b> {convertBytes(ensize)}
-    ‣ <b>Speed :</b> {convertBytes(speed)}/s
+    ‣ <b>Output rate :</b> {convertBytes(speed)}/s
+    ‣ <b>Encode speed :</b> {encode_speed:.2f}x realtime
     ‣ <b>Time Took :</b> {convertTime(diff)}
     ‣ <b>Time Left :</b> {convertTime(eta)}
     ‣ <b>Quality:</b> {self.__qual}p</blockquote>
@@ -588,17 +590,17 @@ class FFEncoder:
 
             if output_name in ffcode:
                 ffcode = ffcode.replace(
-                    output_name, f"-threads 1 {output_name}", 1
+                    output_name, f"-threads 2 {output_name}", 1
                 )
             elif double_output_name in ffcode:
                 ffcode = ffcode.replace(
                     double_output_name,
-                    f"-threads 1 {double_output_name}",
+                    f"-threads 2 {double_output_name}",
                     1,
                 )
             elif out_npath in ffcode:
                 ffcode = ffcode.replace(
-                    out_npath, f"-threads 1 {out_npath}", 1
+                    out_npath, f"-threads 2 {out_npath}", 1
                 )
         LOGS.info(f'Using FFmpeg command: {ffcode}')
         if not ffcode:
