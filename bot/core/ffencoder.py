@@ -525,10 +525,9 @@ class FFEncoder:
 
         ffcode = await self.get_ffmpeg_command(dl_npath, out_npath)
 
-        # Fast-encode profile: ultrafast reduces CPU time, while one encoder
-        # thread per process prevents two simultaneous anime jobs from creating
-        # competing x264 thread pools and exhausting a small dyno's CPU/RAM.
-        # The archive worker already runs two FFmpeg processes concurrently.
+        # Fast-encode profile: ultrafast reduces CPU time. Two encoder
+        # threads per job are a modest speed-up while limiting CPU/RAM pressure
+        # when the archive worker runs two FFmpeg processes concurrently.
         if ffcode:
             ffcode, preset_count = re.subn(
                 r"(?i)(-preset\s+)(ultrafast|superfast|veryfast|faster|fast|medium|slow|slower|veryslow)",
