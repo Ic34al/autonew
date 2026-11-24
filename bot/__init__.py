@@ -247,7 +247,7 @@ try:
         bot_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(bot_loop)
 
-    bot = Client(name=Var.PYROGRAM_SESSION or "AutoAnime", api_id=Var.API_ID, api_hash=Var.API_HASH, bot_token=Var.BOT_TOKEN, plugins=dict(root="bot/modules"), parse_mode=ParseMode.HTML)
+    bot = Client(name="AutoAnime", api_id=Var.API_ID, api_hash=Var.API_HASH, bot_token=Var.BOT_TOKEN, session_string=Var.PYROGRAM_SESSION or None, plugins=dict(root="bot/modules"), parse_mode=ParseMode.HTML)
     try:
         bot_loop = bot.loop or bot_loop
     except Exception:
