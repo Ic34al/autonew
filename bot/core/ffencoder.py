@@ -739,13 +739,13 @@ class FFEncoder:
             # total output targets (video + audio + container overhead), not
             # Telegram's maximum upload limit.
             quality_size_targets = {
-                "1080": 800,
-                "720": 450,
-                "480": 250,
-                "360": 180,
-                "240": 120,
-                "144": 80,
-                "HDRi": 1000,
+                "1080": 600,
+                "720": 320,
+                "480": 180,
+                "360": 130,
+                "240": 90,
+                "144": 60,
+                "HDRi": 800,
             }
             target_mib = self.size_target_mib or quality_size_targets.get(self.__qual, 800)
             target_bytes = target_mib * 1024 * 1024
@@ -756,8 +756,10 @@ class FFEncoder:
                 "360": 48_000, "240": 32_000, "144": 24_000,
                 "HDRi": 160_000,
             }.get(self.__qual, 96_000)
+            # Budget for up to two audio tracks; copied source audio previously
+            # bypassed this estimate and could make the final file much larger.
             total_budget_bps = int((target_bytes * 8 / source_duration) * 0.90)
-            video_bitrate = max(300_000, total_budget_bps - audio_bps - 100_000)
+            video_bitrate = max(150_000, total_budget_bps - (audio_bps * 2) - 100_000)
             video_maxrate = max(video_bitrate, int(video_bitrate * 1.15))
             video_bufsize = video_maxrate * 2
 
@@ -773,6 +775,21 @@ class FFEncoder:
                 if not output_token:
                     raise RuntimeError("Cannot select video encoder: output path not found.")
                 ffcode = ffcode.replace(output_token, f"-c:v libx264 {output_token}", 1)
+
+            # Force audio to AAC at the tier bitrate. A saved template using
+            # "-c:a copy" can otherwise preserve a high-bitrate source track and
+            # defeat the file-size budget even when video bitrate is constrained.
+            ffcode = re.sub(
+                r"(?i)(?<![\\w-])-(?:c:a|codec:a)\\s+\\S+",
+                "",
+                ffcode,
+            )
+            for option in ("-b:a", "-ab", "-ac"):
+                ffcode = re.sub(
+                    rf"(?i)(?<![\\w-]){re.escape(option)}\\s+\\S+",
+                    "",
+                    ffcode,
+                )
 
             # Remove conflicting rate-control options before applying the
             # final bitrate budget. This prevents a template CRF from overriding it.
@@ -792,7 +809,8 @@ class FFEncoder:
                 raise RuntimeError("Cannot insert Telegram bitrate budget: output path not found.")
             enforced_options = (
                 f"-preset ultrafast -threads 2 -b:v {video_bitrate} "
-                f"-maxrate {video_maxrate} -bufsize {video_bufsize}"
+                f"-maxrate {video_maxrate} -bufsize {video_bufsize} "
+                f"-c:a aac -b:a {audio_bps} -ac 2"
             )
             ffcode = ffcode.replace(output_token, f"{enforced_options} {output_token}", 1)
 
