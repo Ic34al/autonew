@@ -188,6 +188,22 @@ if __name__ == '__main__':
         bot.run(main())
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
-    except Exception:
+    except Exception as exc:
+        error_text = f"{type(exc).__name__}: {exc}"
+        # Telegram has been returning transient 500 RPC_CALL_FAIL errors while
+        # authorizing bot sessions. Do not let one Telegram-side outage crash
+        # the Heroku worker; restart the process with bounded backoff instead.
+        if "RPC_CALL_FAIL" in error_text or "RpcCallFail" in error_text:
+            retry_count = int(environ.get("TELEGRAM_AUTH_RETRY", "0")) + 1
+            delay = min(30 * (2 ** min(retry_count - 1, 4)), 300)
+            environ["TELEGRAM_AUTH_RETRY"] = str(retry_count)
+            LOGS.exception(
+                "Telegram authorization temporarily failed "
+                f"(attempt {retry_count}); retrying in {delay} seconds. "
+                "The worker will remain managed by Heroku."
+            )
+            import time
+            time.sleep(delay)
+            execl(executable, executable, "-m", "bot")
         LOGS.exception("Fatal worker error")
         raise
