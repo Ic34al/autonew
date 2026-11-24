@@ -134,12 +134,12 @@ async def start_bot_with_retry():
     succeeds, so a retry cannot create duplicate workers.
     """
     attempt = 0
-    delay = 5
+    delay = 2
     while True:
         attempt += 1
         try:
             LOGS.info("Connecting Telegram bot (attempt %s)...", attempt)
-            await start_bot_with_retry()
+            await bot.start()
             LOGS.info("Telegram bot connected successfully.")
             return
         except (InternalServerError, OSError, TimeoutError, ConnectionError):
@@ -158,7 +158,7 @@ async def start_bot_with_retry():
                 LOGS.exception("Could not fully clean up the partial Telegram session.")
 
             await asleep(delay)
-            delay = min(delay * 2, 120)
+            delay = min(delay * 2, 30)
         except Exception:
             # Invalid credentials/configuration and programming errors are
             # not transient; preserve the traceback instead of hiding them.
@@ -193,7 +193,7 @@ async def main():
         # Mark before awaiting: Pyrogram can create recv/ping tasks and then
         # fail part-way through startup. The finally block must still stop it.
         bot_start_attempted = True
-        await bot.start()
+        await start_bot_with_retry()
         await restart()
         
         LOGS.info("Starting tasks...")
