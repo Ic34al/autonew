@@ -735,14 +735,17 @@ class FFEncoder:
             if source_duration <= 0:
                 raise ValueError(f"Invalid source duration: {source_duration!r}")
 
+            # Conservative per-resolution file-size budgets. These are
+            # total output targets (video + audio + container overhead), not
+            # Telegram's maximum upload limit.
             quality_size_targets = {
-                "1080": 1300,
-                "720": 800,
-                "480": 450,
-                "360": 300,
-                "240": 200,
-                "144": 120,
-                "HDRi": 1500,
+                "1080": 800,
+                "720": 450,
+                "480": 250,
+                "360": 180,
+                "240": 120,
+                "144": 80,
+                "HDRi": 1000,
             }
             target_mib = self.size_target_mib or quality_size_targets.get(self.__qual, 800)
             target_bytes = target_mib * 1024 * 1024
