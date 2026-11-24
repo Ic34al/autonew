@@ -2166,28 +2166,10 @@ async def uploadchannel_callbacks(client, callback):
                     "", f"released-episodes-only S{season_index} 4-quality",
                 )
         
-                # Preflight all released episodes first, but do not publish any episode
-                # until the synopsis card and its sticker have been confirmed in-channel.
-                episodes_ready_to_reuse = []
-                episodes_requiring_encode = []
-        
-                for episode_number in range(1, released_episode_count + 1):
-                    await report_stage(
-                        f"checking saved FILE_STORE qualities for {selected_title} "
-                        f"S{season_index:02d}E{episode_number:02d}",
-                        selected_title,
-                    )
-                    ready = await _upload_single_episode(
-                        selected_media, destination_id, season_index, episode_number,
-                        user_client, progress_callback=report_stage, preflight_only=True,
-                    )
-                    if ready:
-                        episodes_ready_to_reuse.append(episode_number)
-                    else:
-                        episodes_requiring_encode.append(episode_number)
-        
-                # Explicitly publish/reuse the single synopsis thumbnail first, then
-                # its sticker. info_only exits before any episode download or upload.
+                # Publish the synopsis card first, then process episodes one at a time.
+                # Do not preflight every released episode: that caused long delays before
+                # the first download/encode on larger seasons. _upload_single_episode
+                # already verifies/reuses FILE_STORE qualities for the current episode.
                 await report_stage(
                     f"publishing the ANIME SOUL synopsis card first for {selected_title}",
                     selected_title,
@@ -2196,64 +2178,34 @@ async def uploadchannel_callbacks(client, callback):
                     selected_media, destination_id, season_index, 1,
                     user_client, progress_callback=report_stage, info_only=True,
                 )
-        
+
                 await report_stage(
-                    f"synopsis card and opening sticker confirmed; publishing episodes "
-                    f"in order for {selected_title}",
+                    f"synopsis card and opening sticker confirmed; starting episode processing immediately",
                     selected_title,
                 )
-        
-                # Merge both work queues and process strictly E01, E02, E03...
-                # This prevents the old two-pass behavior from publishing a later
-                # reusable episode before an earlier episode that needs encoding.
-                reusable_set = set(episodes_ready_to_reuse)
-                encode_set = set(episodes_requiring_encode)
-                for episode_number in sorted(reusable_set | encode_set):
+
+                for episode_number in range(1, released_episode_count + 1):
                     async def episode_progress(stage):
                         nonlocal channel_stage
                         channel_stage = stage
                         await report_stage(stage, selected_title)
 
-                    # Retry only transient transport failures. Every completed
-                    # quality is saved in FILE_STORE/MongoDB immediately, so the
-                    # next attempt resumes missing work rather than re-uploading
-                    # completed qualities.
-                    transient_markers = (
-                        "timeout", "timed out", "connection reset",
-                        "connection aborted", "server disconnected",
-                        "temporarily unavailable", "network is unreachable",
-                        "internal server error", "floodwait", "rate limit",
-                        # Retry an externally terminated FFmpeg attempt. The
-                        # encoder restores its source and removes partial output;
-                        # FILE_STORE checkpoints preserve already completed tiers.
-                        "return code -15", "signal 15", "sigterm",
-                        "terminated by signal",
-                    )
+                    # Each episode independently reuses verified FILE_STORE qualities
+                    # and immediately downloads/encodes only what is missing. This
+                    # keeps Direct Start responsive without scanning the whole season.
                     publish_attempt_id = uuid.uuid4().hex
                     for attempt in range(1, 4):
                         try:
-                            if episode_number in reusable_set:
-                                await _upload_single_episode(
-                                    selected_media, destination_id, season_index, episode_number,
-                                    user_client, progress_callback=episode_progress,
-                                    reuse_only=True, force_repost=True,
-                                    publish_attempt_id=publish_attempt_id,
-                                )
-                                action = "reposted using saved FILE_STORE qualities"
-                            else:
-                                await _upload_single_episode(
-                                    selected_media, destination_id, season_index, episode_number,
-                                    user_client, progress_callback=episode_progress,
-                                    force_repost=True,
-                                    publish_attempt_id=publish_attempt_id,
-                                )
-                                action = "encoded missing qualities and published"
+                            await _upload_single_episode(
+                                selected_media, destination_id, season_index, episode_number,
+                                user_client, progress_callback=episode_progress,
+                                force_repost=True,
+                                publish_attempt_id=publish_attempt_id,
+                            )
+                            action = "reused saved qualities or encoded missing qualities and published"
                             break
                         except Exception as episode_error:
                             error_text = f"{type(episode_error).__name__}: {episode_error}".casefold()
-                            # A torrent that exceeds its hard download deadline is
-                            # not retried in-place: release this anime worker so the
-                            # next queued anime can start instead of waiting 3 x 5 minutes.
                             stalled_torrent = "torrent download exceeded" in error_text
                             transient = not stalled_torrent and (
                                 isinstance(
@@ -2265,7 +2217,7 @@ async def uploadchannel_callbacks(client, callback):
                                 raise
                             delay = min(30, 5 * (2 ** (attempt - 1)))
                             await report_stage(
-                                f"temporary Telegram/network error for "
+                                f"temporary download/encode/Telegram error for "
                                 f"S{season_index:02d}E{episode_number:02d}; "
                                 f"retrying in {delay}s (attempt {attempt + 1}/3)",
                                 selected_title,
@@ -2276,7 +2228,7 @@ async def uploadchannel_callbacks(client, callback):
                         f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
                         selected_title,
                     )
-        
+
                 await db.set_anime_archive_batch(
                     anime_id, season_index, destination_id, "complete",
                     "", f"released-episodes-only S{season_index} 4-quality",
