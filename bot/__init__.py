@@ -6,6 +6,7 @@ import time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client
 from pyrogram.enums import ParseMode
+from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from uvloop import install
 from datetime import datetime
@@ -247,7 +248,19 @@ try:
         bot_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(bot_loop)
 
-    bot = Client(name="AutoAnime", api_id=Var.API_ID, api_hash=Var.API_HASH, bot_token=Var.BOT_TOKEN, session_string=Var.PYROGRAM_SESSION or None, plugins=dict(root="bot/modules"), parse_mode=ParseMode.HTML)
+    # Store Pyrogram's MTProto auth key in MongoDB: Heroku dyno filesystems
+    # are disposable, so the default *.session file is not durable.
+    SESSION_MONGO = AsyncIOMotorClient(Var.MONGO_URI)
+    bot = Client(
+        name=Var.MONGO_NAME,
+        api_id=Var.API_ID,
+        api_hash=Var.API_HASH,
+        bot_token=Var.BOT_TOKEN,
+        session_string=Var.PYROGRAM_SESSION or None,
+        mongodb={"connection": SESSION_MONGO, "remove_peers": False},
+        plugins=dict(root="bot/modules"),
+        parse_mode=ParseMode.HTML,
+    )
     try:
         bot_loop = bot.loop or bot_loop
     except Exception:
