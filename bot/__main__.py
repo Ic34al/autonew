@@ -4,6 +4,7 @@ from asyncio import (
 )
 from aiofiles import open as aiopen
 from pyrogram import idle
+from pyrogram.errors import InternalServerError
 from pyrogram.filters import command, user
 from os import path as ospath, execl, kill, environ
 from sys import executable
@@ -124,6 +125,46 @@ async def load_settings():
     
     LOGS.info(f"Settings loaded! Admins: {Var.ADMINS}")
     
+
+async def start_bot_with_retry():
+    """
+    Telegram can temporarily return RPC_CALL_FAIL (500) while importing a
+    bot authorization. Keep the Heroku worker alive and retry startup instead
+    of exiting the process. Do not start upload/scheduler tasks until this
+    succeeds, so a retry cannot create duplicate workers.
+    """
+    attempt = 0
+    delay = 5
+    while True:
+        attempt += 1
+        try:
+            LOGS.info("Connecting Telegram bot (attempt %s)...", attempt)
+            await start_bot_with_retry()
+            LOGS.info("Telegram bot connected successfully.")
+            return
+        except (InternalServerError, OSError, TimeoutError, ConnectionError):
+            LOGS.exception(
+                "Temporary Telegram/network error during bot startup; "
+                "the worker will retry in %s seconds.",
+                delay,
+            )
+
+            # Pyrogram may have partially opened its session before failing.
+            # Best-effort cleanup before retrying the same shared Client.
+            try:
+                if getattr(bot, "is_connected", False):
+                    await bot.stop()
+            except Exception:
+                LOGS.exception("Could not fully clean up the partial Telegram session.")
+
+            await asleep(delay)
+            delay = min(delay * 2, 120)
+        except Exception:
+            # Invalid credentials/configuration and programming errors are
+            # not transient; preserve the traceback instead of hiding them.
+            LOGS.exception("Non-retryable error while starting Telegram bot.")
+            raise
+
 
 async def main():
     # Keep references only to tasks created by this application.
