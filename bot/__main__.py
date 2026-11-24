@@ -142,20 +142,45 @@ async def start_bot_with_retry():
             await bot.start()
             LOGS.info("Telegram bot connected successfully.")
             return
-        except (InternalServerError, OSError, TimeoutError, ConnectionError):
-            LOGS.exception(
-                "Temporary Telegram/network error during bot startup; "
-                "the worker will retry in %s seconds.",
+        except InternalServerError as e:
+            # Telegram's RPC_CALL_FAIL during auth.ImportBotAuthorization is
+            # a Telegram-side 500. It is transient and must not kill the
+            # Heroku worker. Log a warning (not a traceback that looks like
+            # an uncaught crash), then retry the same Client.
+            LOGS.warning(
+                "Telegram startup RPC 500 on attempt %s (%s): %s. "
+                "Retrying in %s seconds; worker remains alive.",
+                attempt,
+                type(e).__name__,
+                e,
                 delay,
             )
 
-            # Pyrogram may have partially opened its session before failing.
-            # Best-effort cleanup before retrying the same shared Client.
             try:
                 if getattr(bot, "is_connected", False):
                     await bot.stop()
-            except Exception:
-                LOGS.exception("Could not fully clean up the partial Telegram session.")
+            except Exception as cleanup_error:
+                LOGS.warning(
+                    "Partial Telegram session cleanup failed: %s",
+                    cleanup_error,
+                )
+
+            await asleep(delay)
+            delay = min(delay * 2, 30)
+
+        except (OSError, TimeoutError, ConnectionError) as e:
+            LOGS.warning(
+                "Temporary network error during Telegram startup on attempt %s: %s. "
+                "Retrying in %s seconds.",
+                attempt,
+                e,
+                delay,
+            )
+            try:
+                if getattr(bot, "is_connected", False):
+                    await bot.stop()
+            except Exception as cleanup_error:
+                LOGS.warning("Partial Telegram session cleanup failed: %s", cleanup_error)
 
             await asleep(delay)
             delay = min(delay * 2, 30)
