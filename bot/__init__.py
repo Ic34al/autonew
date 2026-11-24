@@ -44,12 +44,31 @@ ffQueue = Queue()
 ff_queued = dict()
 
 class Var:
-    API_ID, API_HASH, BOT_TOKEN = getenv("API_ID"), getenv("API_HASH"), getenv("BOT_TOKEN")
-    MONGO_URI = getenv("MONGO_URI")
-    
-    if not BOT_TOKEN or not API_HASH or not API_ID or not MONGO_URI:
-        LOGS.critical('Important Variables Missing. Fill Up and Retry..!! Exiting Now...')
-        exit(1)
+    # Parse API_ID as an integer before passing it to Pyrogram. Keep secrets
+    # as strings and fail with a clear message when required config is absent.
+    API_ID = getenv("API_ID", "").strip()
+    API_HASH = getenv("API_HASH", "").strip()
+    BOT_TOKEN = getenv("BOT_TOKEN", "").strip()
+    MONGO_URI = getenv("MONGO_URI", "").strip()
+
+    missing = [
+        name for name, value in (
+            ("API_ID", API_ID),
+            ("API_HASH", API_HASH),
+            ("BOT_TOKEN", BOT_TOKEN),
+            ("MONGO_URI", MONGO_URI),
+        )
+        if not value
+    ]
+    if missing:
+        LOGS.critical("Missing required environment variables: %s", ", ".join(missing))
+        raise SystemExit(1)
+
+    try:
+        API_ID = int(API_ID)
+    except ValueError:
+        LOGS.critical("API_ID must be a numeric Telegram API ID.")
+        raise SystemExit(1)
 
     MONGO_NAME = getenv("MONGO_NAME", "AutoAnime")
     USER_SESSION = getenv("USER_SESSION")
@@ -60,7 +79,12 @@ class Var:
     }
     RSS_ITEMS_ANIME= getenv("RSS_ITEMS_ANIME", "https://subsplease.org/rss/?r=1080").split()
     RSS_ITEMS_MANGA= getenv("RSS_ITEMS_MANGA", "https://mdrss.tijlvdb.me/feed?q=tl:en").split()
-    FSUB_CHATS = list(map(int, getenv('FSUB_CHATS').split()))
+    # Force-subscription channels are optional; tolerate an unset/blank value.
+    try:
+        FSUB_CHATS = [int(chat_id) for chat_id in getenv("FSUB_CHATS", "").split()]
+    except ValueError:
+        LOGS.critical("FSUB_CHATS must contain space-separated numeric chat IDs.")
+        raise SystemExit(1)
     MAIN_CHANNEL = int(getenv("MAIN_CHANNEL"))
     BACKUP_CHANNEL = int(getenv("BACKUP_CHANNEL") or 0)
     LOG_CHANNEL = int(getenv("LOG_CHANNEL") or 0)
