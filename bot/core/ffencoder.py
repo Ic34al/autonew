@@ -47,10 +47,11 @@ class FFEncoder:
     def __init__(
         self, message, path, name, qual, is_movie=False,
         force_default=False, force_encode=False, bypass_pause=False,
-        quiet_errors=False, fallback_mode=0,
+        quiet_errors=False, fallback_mode=0, size_target_mib=1400,
     ):
         self.force_default = bool(force_default)
         self.fallback_mode = max(0, min(2, int(fallback_mode or 0)))
+        self.size_target_mib = max(700, min(1700, int(size_target_mib or 1400)))
         self.force_encode = bool(force_encode)
         self.bypass_pause = bool(bypass_pause)
         self.quiet_errors = bool(quiet_errors)
@@ -731,7 +732,7 @@ class FFEncoder:
 
             # Aim for 1,400 MiB so audio, subtitles, attachments and muxing
             # overhead still leave a wide margin below the 1,900 MiB preflight.
-            target_bytes = 1400 * 1024 * 1024
+            target_bytes = self.size_target_mib * 1024 * 1024
             target_total_bps = int((target_bytes * 8 / source_duration) * 0.82)
             # Reserve 1.5 Mbps for audio and container overhead. The average
             # video bitrate is the key size control; VBV limits bitrate peaks.
@@ -782,7 +783,7 @@ class FFEncoder:
             LOGS.info(
                 f"Enforced Telegram-safe average bitrate for {self.__name} ({self.__qual}p): "
                 f"duration={source_duration:.1f}s, video bitrate={video_bitrate} bps, "
-                f"peak={video_maxrate} bps, target output<=1400 MiB."
+                f"peak={video_maxrate} bps, target output<={self.size_target_mib} MiB."
             )
         except Exception as size_profile_error:
             self.last_error = (
