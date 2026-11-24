@@ -15,6 +15,7 @@ from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
 from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
+from bot.core.auto_animes import fetch_animes
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
 async def restart(client, message):
@@ -126,40 +127,54 @@ async def load_settings():
 
 
 async def start_bot_with_retry():
-    """
-    Start immediately with BOT_TOKEN. If Telegram's authorization endpoint
-    temporarily returns RPC 500, keep the Heroku worker alive and retry.
-    Configuration/authentication errors other than this transient 500 fail fast.
-    """
+    """Keep the Heroku worker alive during temporary Telegram auth RPC 500s."""
     attempt = 0
     while True:
         attempt += 1
         try:
-            LOGS.info("Connecting Telegram bot (attempt %s)...", attempt)
-            await bot.start()
-            LOGS.info("Telegram bot connected successfully.")
+            await asyncio.wait_for(bot.start(), timeout=120)
+            LOGS.info("Telegram bot client started successfully with BOT_TOKEN.")
             return
         except Exception as exc:
-            error_text = f"{type(exc).__name__}: {exc}".upper()
-            transient_telegram_500 = (
-                "RPC_CALL_FAIL" in error_text
-                or ("500" in error_text and "IMPORTBOTA UTHORIZATION" in error_text)
-                or ("500" in error_text and "IMPORTBOTA" in error_text)
+            error_text = f"{type(exc).__name__}: {exc}".casefold()
+            is_rpc_500 = (
+                "rpc_call_fail" in error_text
+                and ("500" in error_text or "internal_server_error" in error_text)
+            ) or "internal_server_error_500" in error_text
+            is_auth_rpc_500 = (
+                "auth.importbotauthorization" in error_text and is_rpc_500
+            ) or (
+                "auth.importbotauthorization" in error_text
+                and "internal_server_error" in error_text
             )
-            if not transient_telegram_500:
-                LOGS.exception("Telegram startup failed with a non-retryable error.")
+
+            # A bad/revoked token is a configuration error, not a transient
+            # server failure. Stop immediately with a clear log instead of
+            # retrying forever.
+            if not is_auth_rpc_500:
+                LOGS.exception(
+                    "Telegram bot startup failed (non-retryable). "
+                    "Verify API_ID, API_HASH and BOT_TOKEN."
+                )
                 raise
 
-            # First connection is immediate; only retries wait. Cap the delay
-            # so a temporary Telegram outage never crashes the Heroku worker.
-            delay = min(2 ** min(attempt, 5), 30)
+            try:
+                if bot.is_connected:
+                    await bot.stop()
+            except Exception as cleanup_error:
+                LOGS.warning(
+                    "Telegram startup cleanup failed on attempt %s: %s",
+                    attempt, cleanup_error,
+                )
+
+            delay = min(600, 60 * (2 ** min(attempt - 1, 4)))
             LOGS.warning(
-                "Telegram authorization returned RPC 500 on attempt %s. "
-                "Worker stays alive; retrying in %s seconds.",
-                attempt,
-                delay,
+                "Telegram auth.ImportBotAuthorization returned RPC 500 "
+                "(attempt %s). Keeping the Heroku worker alive; retrying "
+                "in %s seconds. This is a Telegram-side transient error.",
+                attempt, delay,
             )
-            await asleep(delay)
+            await asyncio.sleep(delay)
 
 
 async def main():
@@ -197,6 +212,7 @@ async def main():
             )
             tasks = [
                 create_task(queue_loop(), name="app-queue-loop"),
+                create_task(fetch_animes(), name="app-anime-rss"),
             ]
 
             LOGS.info("Auto Anime Bot Started!")
