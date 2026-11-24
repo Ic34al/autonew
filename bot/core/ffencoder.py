@@ -742,18 +742,24 @@ class FFEncoder:
             # Force a predictable software encoder. Custom templates may use
             # stream copy or hardware encoders that ignore/interpret rate
             # controls differently. Keep audio/subtitle mappings untouched.
-            ffcode = re.sub(
-                r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+\\S+",
-                "-c:v libx264",
-                ffcode,
-            )
-            if not re.search(r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+\\S+", ffcode):
-                ffcode = ffcode.replace(" -y", " -c:v libx264 -y", 1) if " -y" in ffcode else ffcode
+            codec_pattern = r"(?i)(?<![\w-])-(?:c:v|codec:v)\s+\S+"
+            ffcode, codec_count = re.subn(codec_pattern, "-c:v libx264", ffcode)
+            if not codec_count:
+                # Add the encoder before other output options when the template
+                # omitted an explicit video codec.
+                output_token = next(
+                    (token for token in (shlex.quote(out_npath), f"'{out_npath}'", f'"{out_npath}"', out_npath)
+                     if token in ffcode),
+                    None,
+                )
+                if not output_token:
+                    raise RuntimeError("Cannot select video encoder: output path not found.")
+                ffcode = ffcode.replace(output_token, f"-c:v libx264 {output_token}", 1)
 
             # Remove conflicting rate-control options from custom templates.
             for option in ("-crf", "-qp", "-b:v", "-vb", "-maxrate", "-bufsize", "-minrate"):
                 ffcode = re.sub(
-                    rf"(?i)(?<![\\w-]){re.escape(option)}\\s+\\S+",
+                    rf"(?i)(?<![\w-]){re.escape(option)}\s+\S+",
                     "",
                     ffcode,
                 )
