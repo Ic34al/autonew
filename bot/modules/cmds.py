@@ -3288,7 +3288,7 @@ async def run_selected_retry(client, status, target_date, queue):
                     f"<code>{title}</code>\\n"
                     f"<i>Reusing saved quality checkpoints...</i>"
                 )
-                result = await get_animes(title, link, force=True)
+                result = await get_animes(title, link, force=True, manual_search=True)
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 verify = TextEditor(title)
