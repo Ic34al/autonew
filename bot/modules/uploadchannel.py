@@ -1236,7 +1236,7 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
             )
         source_quality = str(episode.get("source_quality") or "720")
         source_rank = {"480": 1, "720": 2, "1080": 3}.get(source_quality, 0)
-        output_rank = {"480": 1, "720": 2, "1080": 3, "HDRi": 4}
+        output_rank = {"480": 1, "720": 2, "1080": 3, "HDRi": 3}
         supported_missing = [
             quality for quality in missing_qualities
             if output_rank.get(quality, 99) <= source_rank
