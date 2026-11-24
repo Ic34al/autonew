@@ -125,6 +125,45 @@ async def load_settings():
     
 
 
+async def start_bot_with_retry():
+    """Retry Telegram bot authorization failures without crashing the Heroku worker."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await asyncio.wait_for(bot.start(), timeout=120)
+            LOGS.info("Telegram bot client started successfully.")
+            return
+        except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}".casefold()
+            transient_auth_rpc = (
+                "auth.importbotauthorization" in error_text
+                or (
+                    "rpc_call_fail" in error_text
+                    and ("500" in error_text or "internal_server_error" in error_text)
+                )
+                or "internal_server_error_500" in error_text
+            )
+            try:
+                if bot.is_connected:
+                    await bot.stop()
+            except Exception as cleanup_error:
+                LOGS.warning(
+                    "Bot startup cleanup failed on attempt %s: %s",
+                    attempt, cleanup_error,
+                )
+            if not transient_auth_rpc:
+                LOGS.exception("Bot startup failed with a non-retryable error.")
+                raise
+            delay = min(600, 60 * (2 ** min(attempt - 1, 4)))
+            LOGS.error(
+                "Telegram authorization endpoint returned a transient 500 "
+                "(attempt %s). Worker will stay alive and retry in %ss: %s",
+                attempt, delay, exc,
+            )
+            await asyncio.sleep(delay)
+
+
 async def main():
     # Keep references to application-owned tasks; Pyrofork owns its
     # internal recv/ping workers and must control their lifecycle.
@@ -147,29 +186,31 @@ async def main():
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
 
-        # Client context guarantees Pyrofork startup and shutdown are paired.
-        async with bot:
-            try:
-                await restart()
+        # Telegram can temporarily fail auth.ImportBotAuthorization with RPC 500.
+        # Retry startup instead of exiting the Heroku worker on that server-side error.
+        await start_bot_with_retry()
+        try:
+            await restart()
 
-                LOGS.info("Starting tasks...")
-                LOGS.info(
-                    "Automatic RSS anime uploads are OFF. "
-                    "Manual /uploadchannel remains available."
-                )
-                tasks = [
-                    create_task(queue_loop(), name="app-queue-loop"),
-                ]
+            LOGS.info("Starting tasks...")
+            LOGS.info(
+                "Automatic RSS anime uploads are OFF. "
+                "Manual /uploadchannel remains available."
+            )
+            tasks = [
+                create_task(queue_loop(), name="app-queue-loop"),
+            ]
 
-                LOGS.info("Auto Anime Bot Started!")
-                await idle()
-            finally:
-                # Await only our own tasks before the client context exits.
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                if tasks:
-                    await gather(*tasks, return_exceptions=True)
+            LOGS.info("Auto Anime Bot Started!")
+            await idle()
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await gather(*tasks, return_exceptions=True)
+            if bot.is_connected:
+                await bot.stop()
 
     except Exception:
         LOGS.exception("Application startup/runtime error")
