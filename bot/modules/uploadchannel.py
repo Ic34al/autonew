@@ -1360,6 +1360,70 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 f"at {quality} after {max_encode_attempts} attempts: "
                 f"{encode_error or 'no output produced'}. Earlier qualities remain saved."
             )
+
+        # Recover oversized encodes automatically before Telegram upload.
+        # Keep the original downloaded source and progressively lower only
+        # the video bitrate budget; never split or truncate an episode.
+        safe_upload_bytes = 1800 * 1024 * 1024
+        current_size = os.path.getsize(encoded_path)
+        if current_size > safe_upload_bytes:
+            await create_optional_log_message(
+                f"<b>Oversized encode detected:</b> {_escape(title)} "
+                f"S{target_season:02d}E{target_episode:02d} — {quality}p\\n"
+                f"Current size: {current_size / (1024 * 1024):.1f} MiB. "
+                "Automatically re-encoding with a smaller Telegram-safe size target."
+            )
+            recovered = False
+            for size_target_mib in (1200, 1000, 850):
+                if not os.path.exists(quality_source):
+                    raise RuntimeError(
+                        f"Cannot recover oversized {quality} encode: original source "
+                        f"{quality_source} is missing; refusing to upload an oversized file."
+                    )
+                await set_progress(
+                    f"Shrinking oversized {title} S{target_season:02d}E{target_episode:02d} "
+                    f"{quality}p to a {size_target_mib} MiB target."
+                )
+                retry_encoder = FFEncoder(
+                    encode_status, quality_source, upload_name, quality,
+                    force_default=True, fallback_mode=2, size_target_mib=size_target_mib,
+                    force_encode=True, bypass_pause=True, quiet_errors=True,
+                )
+                try:
+                    retry_path = _coerce_path(await retry_encoder.start_encode())
+                except Exception as shrink_error:
+                    retry_path = None
+                    encode_error = f"{type(shrink_error).__name__}: {shrink_error}"
+                if retry_path and os.path.exists(retry_path) and os.path.getsize(retry_path) > 0:
+                    encoded_path = retry_path
+                    current_size = os.path.getsize(encoded_path)
+                    await create_optional_log_message(
+                        f"<b>Size-reduction attempt complete:</b> {_escape(title)} "
+                        f"S{target_season:02d}E{target_episode:02d} — {quality}p\\n"
+                        f"Result: {current_size / (1024 * 1024):.1f} MiB "
+                        f"(target {size_target_mib} MiB)."
+                    )
+                    if current_size <= safe_upload_bytes:
+                        recovered = True
+                        break
+                else:
+                    encode_error = getattr(retry_encoder, "last_error", None) or encode_error
+            if not recovered:
+                raise RuntimeError(
+                    f"Automatic size reduction could not bring {title} "
+                    f"S{target_season:02d}E{target_episode:02d} {quality} below "
+                    f"{safe_upload_bytes / (1024 * 1024):.0f} MiB. Last size: "
+                    f"{current_size / (1024 * 1024):.1f} MiB. Upload was safely blocked; "
+                    f"source retained. {encode_error or ''}"
+                )
+
+        # Final hard check immediately before TgUploader's 1,900 MiB preflight.
+        final_size = os.path.getsize(encoded_path)
+        if final_size > safe_upload_bytes:
+            raise RuntimeError(
+                f"Refusing oversized upload for {title} S{target_season:02d}E{target_episode:02d}: "
+                f"{final_size / (1024 * 1024):.1f} MiB."
+            )
         await set_progress(f"Uploading {title} S{target_season:02d}E{target_episode:02d} {quality}p to FILE_STORE.")
         upload_status = await create_optional_log_message(
             f"<b>Uploading:</b> {_escape(title)} S{season_number}E{episode_number} — {quality}p"
