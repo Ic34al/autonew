@@ -389,14 +389,16 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 search_aliases.append(candidate)
 
     for alias in search_aliases:
-        # Include SubsPlease's exact "S2 - 01" naming as well as S02E01.
-        queries.extend([
-            f"{alias} S{season:02d}E{episode:02d} 1080p",
-            f"{alias} S{season}E{episode:02d} 1080p",
-            f"{alias} S{season} - {episode:02d} 1080p",
-            f"{alias} Season {season} Episode {episode} 1080p",
-            f"{alias} {episode:02d} 1080p",
-        ])
+        # Search the best source first, but do not hide a valid 720p/480p
+        # SubsPlease release when a 1080p source does not exist.
+        for resolution in ("1080p", "720p", "480p"):
+            queries.extend([
+                f"{alias} S{season:02d}E{episode:02d} {resolution}",
+                f"{alias} S{season}E{episode:02d} {resolution}",
+                f"{alias} S{season} - {episode:02d} {resolution}",
+                f"{alias} Season {season} Episode {episode} {resolution}",
+                f"{alias} {episode:02d} {resolution}",
+            ])
     queries = list(dict.fromkeys(queries))
     feeds = [
         f"https://nyaa.si/?page=rss&q={quote_plus(query)}&c=1_2&f=0"
@@ -429,13 +431,13 @@ async def _find_episode_torrent(media, season_number, episode_number):
             seen_entries.add(entry_key)
             scanned += 1
 
-            # Do not silently accept a 720p/480p release as the source for
-            # the 1080p master. That was the reason every output could look
-            # like the same low-resolution source. Only encode from an actual
-            # 1080p source; if SubsPlease has none, fail clearly instead of
-            # upscaling and labelling it 1080p.
-            if not re.search(r"(?i)\b1080p\b", title):
+            # Accept only known source resolutions. The caller will limit
+            # output qualities to this source resolution so we never upscale
+            # a 720p/480p torrent and mislabel it as 1080p.
+            source_match = re.search(r"(?i)\b(1080|720|480)p\b", title)
+            if not source_match:
                 continue
+            source_quality = source_match.group(1)
 
             normalized_release = _plain_title(title)
             # Match the 16-Nov scheduled uploader's 60% meaningful-token
@@ -527,7 +529,11 @@ async def _find_episode_torrent(media, season_number, episode_number):
             )
             if match:
                 torrent_link = f"https://nyaa.si/download/{match.group(1)}.torrent"
-            return {"title": title, "link": str(torrent_link)}
+            return {
+                "title": title,
+                "link": str(torrent_link),
+                "source_quality": source_quality,
+            }
 
     # RSS is a rolling window and may not contain an older episode even
     # though SubsPlease still exposes it through its search API. Query the
@@ -646,7 +652,7 @@ async def _find_episode_torrent(media, season_number, episode_number):
                     resolution = str(
                         download.get("res") or download.get("resolution") or ""
                     ).strip()
-                    rank = {"720": 0, "1080": 1, "480": 2}.get(
+                    rank = {"1080": 0, "720": 1, "480": 2}.get(
                         re.sub(r"[^0-9]", "", resolution), 3
                     )
                     ranked.append((rank, candidate, resolution))
@@ -658,7 +664,11 @@ async def _find_episode_torrent(media, season_number, episode_number):
                     display = f"{show_name} - Episode {episode:02d}"
                     if resolution:
                         display += f" [{resolution}p]"
-                    return {"title": display, "link": candidate}
+                    return {
+                        "title": display,
+                        "link": candidate,
+                        "source_quality": re.sub(r"[^0-9]", "", resolution) or "720",
+                    }
     except Exception as api_error:
         await rep.report(
             f"SubsPlease API episode lookup failed: {type(api_error).__name__}: {api_error}",
@@ -1221,9 +1231,35 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
         episode = await _find_episode_torrent(media, season_number, episode_number)
         if not episode:
             raise RuntimeError(
-                f"No exact RSS torrent found for {title} S{target_season:02d}E{target_episode:02d}; "
+                f"No exact RSS/API torrent found for {title} S{target_season:02d}E{target_episode:02d}; "
                 "no download or encoding was started. Existing FILE_STORE qualities remain reusable."
             )
+        source_quality = str(episode.get("source_quality") or "720")
+        source_rank = {"480": 1, "720": 2, "1080": 3}.get(source_quality, 0)
+        output_rank = {"480": 1, "720": 2, "1080": 3, "HDRi": 4}
+        supported_missing = [
+            quality for quality in missing_qualities
+            if output_rank.get(quality, 99) <= source_rank
+        ]
+        unsupported_missing = [
+            quality for quality in missing_qualities
+            if quality not in supported_missing
+        ]
+        if unsupported_missing and not supported_missing:
+            raise RuntimeError(
+                f"Found an exact {source_quality}p source for {title} "
+                f"S{target_season:02d}E{target_episode:02d}, but missing qualities "
+                f"{', '.join(unsupported_missing)} require a higher-resolution source. "
+                "No upscaled/falsely labelled files were created."
+            )
+        if unsupported_missing:
+            await rep.report(
+                f"Exact {source_quality}p source found for {title} "
+                f"S{target_season:02d}E{target_episode:02d}; skipping unsupported "
+                f"higher outputs {', '.join(unsupported_missing)} rather than upscaling.",
+                "warning",
+            )
+        missing_qualities = supported_missing
         info.pdata["audio_type"] = (
             "Dual" if re.search(r"(?i)\bdual\b", episode["title"])
             else "Dub" if re.search(r"(?i)\b(dub|english)\b", episode["title"])
