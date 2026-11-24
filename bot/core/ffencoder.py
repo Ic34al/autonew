@@ -536,13 +536,13 @@ class FFEncoder:
                 ffcode,
             )
             ffcode, thread_count = re.subn(
-                r"(?i)(?<![\w-])-threads\s+1(?!\d)",
-                "-threads 1",
+                r"(?i)(?<![\w-])-threads\s+\d+(?!\d)",
+                "-threads 2",
                 ffcode,
             )
             LOGS.info(
                 f"Fast encode profile applied for {self.__name} ({self.__qual}p): "
-                f"ultrafast preset; automatic encoder threads "
+                f"ultrafast preset; 2 encoder threads per job "
                 f"(presets updated: {preset_count}, thread settings updated: {thread_count})."
             )
 
@@ -789,7 +789,7 @@ class FFEncoder:
             if not output_token:
                 raise RuntimeError("Cannot insert Telegram bitrate budget: output path not found.")
             enforced_options = (
-                f"-preset veryfast -b:v {video_bitrate} "
+                f"-preset ultrafast -threads 2 -b:v {video_bitrate} "
                 f"-maxrate {video_maxrate} -bufsize {video_bufsize}"
             )
             ffcode = ffcode.replace(output_token, f"{enforced_options} {output_token}", 1)
