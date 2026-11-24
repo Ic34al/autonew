@@ -174,9 +174,12 @@ async def _start_telegram_with_retry():
                 or getattr(exc, "x", None)
                 or getattr(exc, "seconds", None)
             )
-            if server_wait:
-                delay = max(1, int(server_wait))
-            else:
+            try:
+                delay = max(1, int(server_wait)) if server_wait else 0
+            except (TypeError, ValueError, OverflowError):
+                delay = 0
+
+            if not delay:
                 delay = min(60 * (2 ** min(attempt - 1, 4)), 900)
 
             LOGS.error(

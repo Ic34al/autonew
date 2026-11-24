@@ -45,7 +45,12 @@ ffQueue = Queue()
 ff_queued = dict()
 
 class Var:
-    API_ID, API_HASH, BOT_TOKEN = getenv("API_ID"), getenv("API_HASH"), getenv("BOT_TOKEN")
+    # Pyrogram expects API_ID as an integer; validate it before creating the client.
+    try:
+        API_ID = int(getenv("API_ID", "0") or 0)
+    except (TypeError, ValueError):
+        API_ID = 0
+    API_HASH, BOT_TOKEN = getenv("API_HASH"), getenv("BOT_TOKEN")
     MONGO_URI = getenv("MONGO_URI")
     
     if not BOT_TOKEN or not API_HASH or not API_ID or not MONGO_URI:
