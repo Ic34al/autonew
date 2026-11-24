@@ -3284,11 +3284,11 @@ async def run_selected_retry(client, status, target_date, queue):
                 raise asyncio.CancelledError()
             try:
                 await status.edit_text(
-                    f"<b>Retrying {index}/{len(queue)}</b>\n"
-                    f"<code>{title}</code>\n"
+                    f"<b>Retrying {index}/{len(queue)}</b>\\n"
+                    f"<code>{title}</code>\\n"
                     f"<i>Reusing saved quality checkpoints...</i>"
                 )
-                await get_animes(title, link, force=True)
+                result = await get_animes(title, link, force=True)
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 verify = TextEditor(title)
@@ -3300,21 +3300,39 @@ async def run_selected_retry(client, status, target_date, queue):
                 saved = await db.getAnime(ani_id) if ani_id is not None else {}
                 episode = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
                 has_post = bool(await db.getAnimeMainPost(ani_id, str(ep_no))) if ani_id is not None and ep_no is not None else False
-                if not isinstance(episode, dict) or not all(episode.get(q) for q in required_qualities) or not has_post:
-                    failed.append(title)
-                    break
+                missing = []
+                if not isinstance(episode, dict):
+                    missing.extend(required_qualities)
+                else:
+                    missing.extend(q for q in required_qualities if not episode.get(q))
+                if not has_post:
+                    missing.append("Main Channel post")
+                if missing:
+                    reason = f"not complete ({', '.join(missing)}); pipeline result={result!r}"
+                    failed.append((title, reason))
+                    await rep.report(f"/retry verification failed for {title}: {reason}", "error")
+                    continue
                 completed += 1
             except asyncio.CancelledError:
                 raise
             except Exception as error:
-                failed.append(title)
-                await rep.report(f"/retry failed for {title}: {error}", "error")
-                break
-        await status.edit_text(
-            f"<b>/retry finished.</b>\nDate: <code>{target_date.isoformat()}</code> (IST)\n"
-            f"Selected: <code>{len(queue)}</code>\nCompleted: <code>{completed}</code>\nFailed: <code>{len(failed)}</code>"
-            + (f"\nStopped at: <code>{failed[0]}</code>" if failed else "")
+                reason = f"{type(error).__name__}: {error}"
+                failed.append((title, reason))
+                await rep.report(f"/retry failed for {title}: {reason}", "error")
+                # Continue with the remaining selected episodes. A single bad
+                # torrent, transient RPC, or channel error must not abandon the
+                # rest of the user's explicitly selected retry queue.
+                continue
+        summary = (
+            f"<b>/retry finished.</b>\\nDate: <code>{target_date.isoformat()}</code> (IST)\\n"
+            f"Selected: <code>{len(queue)}</code>\\nCompleted: <code>{completed}</code>\\n"
+            f"Failed: <code>{len(failed)}</code>"
         )
+        if failed:
+            summary += "\\n\\n<b>Failed items and reasons:</b>\\n" + "\\n".join(
+                f"• <code>{title[:90]}</code> — {reason[:220]}" for title, reason in failed[:8]
+            )
+        await status.edit_text(summary)
     except asyncio.CancelledError:
         try:
             await status.edit_text("<b>Previous retry cancelled. Its remaining queue will not be started.</b>")
