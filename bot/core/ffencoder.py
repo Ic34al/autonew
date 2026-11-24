@@ -721,58 +721,66 @@ class FFEncoder:
                 f"CRF {crf_value}, audio {audio_bitrate}."
             )
 
-        # Keep outputs comfortably below Telegram's 2,000 MiB Bot API limit.
-        # A 1,600 MiB target leaves room for container metadata, multiple audio
-        # streams and Telegram's own size accounting. CRF remains the quality
-        # controller; VBV maxrate/bufsize only constrain peaks for long sources.
-        # This is applied to the final command after custom templates are loaded,
-        # so anime-specific settings cannot silently bypass the upload-size cap.
+        # Enforce an average bitrate budget, not only VBV peak limits.
+        # A peak-only maxrate does not guarantee a bounded total file size and
+        # allowed long HDRip episodes to exceed the upload preflight limit.
         try:
             source_duration = float(await mediainfo(dl_npath, get_duration=True))
             if source_duration <= 0:
                 raise ValueError(f"Invalid source duration: {source_duration!r}")
 
-            target_bytes = 1600 * 1024 * 1024
-            target_total_bps = int((target_bytes * 8 / source_duration) * 0.88)
-            # Reserve bandwidth for audio (including alternate tracks), subtitles,
-            # container overhead and bitrate variation.
-            video_maxrate = max(250_000, target_total_bps - 1_200_000)
+            # Aim for 1,400 MiB so audio, subtitles, attachments and muxing
+            # overhead still leave a wide margin below the 1,900 MiB preflight.
+            target_bytes = 1400 * 1024 * 1024
+            target_total_bps = int((target_bytes * 8 / source_duration) * 0.82)
+            # Reserve 1.5 Mbps for audio and container overhead. The average
+            # video bitrate is the key size control; VBV limits bitrate peaks.
+            video_bitrate = max(300_000, target_total_bps - 1_500_000)
+            video_maxrate = max(video_bitrate, int(video_bitrate * 1.10))
             video_bufsize = video_maxrate * 2
 
-            # A stream-copy video cannot be rate-limited. Transcode it rather
-            # than allowing an oversized source stream through unchanged.
+            # Force a predictable software encoder. Custom templates may use
+            # stream copy or hardware encoders that ignore/interpret rate
+            # controls differently. Keep audio/subtitle mappings untouched.
             ffcode = re.sub(
-                r"(?i)(?<![\w-])-(?:c:v|codec:v)\s+copy(?=\s|$)",
+                r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+\\S+",
                 "-c:v libx264",
                 ffcode,
             )
+            if not re.search(r"(?i)(?<![\\w-])-(?:c:v|codec:v)\\s+\\S+", ffcode):
+                ffcode = ffcode.replace(" -y", " -c:v libx264 -y", 1) if " -y" in ffcode else ffcode
 
-            for option, value in (("-maxrate", video_maxrate), ("-bufsize", video_bufsize)):
-                option_pattern = rf"(?i)(?<![\w-]){re.escape(option)}\s+\S+"
-                if re.search(option_pattern, ffcode):
-                    ffcode = re.sub(option_pattern, f"{option} {value}", ffcode)
-                    continue
+            # Remove conflicting rate-control options from custom templates.
+            for option in ("-crf", "-qp", "-b:v", "-vb", "-maxrate", "-bufsize", "-minrate"):
+                ffcode = re.sub(
+                    rf"(?i)(?<![\\w-]){re.escape(option)}\\s+\\S+",
+                    "",
+                    ffcode,
+                )
 
-                output_token = shlex.quote(out_npath)
-                if output_token not in ffcode:
-                    output_token = next(
-                        (token for token in (f"'{out_npath}'", f'"{out_npath}"', out_npath)
-                         if token in ffcode),
-                        None,
-                    )
-                if not output_token:
-                    raise RuntimeError("Cannot insert Telegram size limits: output path not found.")
-                ffcode = ffcode.replace(output_token, f"{option} {value} {output_token}", 1)
+            # Apply a deterministic average bitrate and VBV ceiling after the
+            # custom template, immediately before the output path.
+            output_token = next(
+                (token for token in (shlex.quote(out_npath), f"'{out_npath}'", f'"{out_npath}"', out_npath)
+                 if token in ffcode),
+                None,
+            )
+            if not output_token:
+                raise RuntimeError("Cannot insert Telegram bitrate budget: output path not found.")
+            enforced_options = (
+                f"-preset veryfast -b:v {video_bitrate} "
+                f"-maxrate {video_maxrate} -bufsize {video_bufsize}"
+            )
+            ffcode = ffcode.replace(output_token, f"{enforced_options} {output_token}", 1)
 
             LOGS.info(
-                f"Telegram-safe size profile for {self.__name} ({self.__qual}p): "
-                f"duration={source_duration:.1f}s, video maxrate={video_maxrate} bps, "
-                "target output<=1600 MiB."
+                f"Enforced Telegram-safe average bitrate for {self.__name} ({self.__qual}p): "
+                f"duration={source_duration:.1f}s, video bitrate={video_bitrate} bps, "
+                f"peak={video_maxrate} bps, target output<=1400 MiB."
             )
         except Exception as size_profile_error:
-            # Do not silently proceed with a potentially unbounded custom encode.
             self.last_error = (
-                f"Could not apply Telegram-safe output-size profile: "
+                f"Could not apply Telegram-safe average bitrate profile: "
                 f"{type(size_profile_error).__name__}: {size_profile_error}"
             )
             LOGS.exception(f"Could not apply Telegram-safe bitrate for {self.__name} ({self.__qual}p)")
