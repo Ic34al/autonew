@@ -1,10 +1,10 @@
+import asyncio
 from asyncio import (
     create_task, create_subprocess_exec, create_subprocess_shell,
     run as asyrun, gather, sleep as asleep, get_event_loop
 )
 from aiofiles import open as aiopen
 from pyrogram import idle
-from pyrogram.errors import InternalServerError
 from pyrogram.filters import command, user
 from os import path as ospath, execl, kill, environ
 from sys import executable
@@ -15,8 +15,6 @@ from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
 from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
-from bot.core.auto_animes import fetch_animes
-
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
 async def restart(client, message):
@@ -126,83 +124,18 @@ async def load_settings():
     LOGS.info(f"Settings loaded! Admins: {Var.ADMINS}")
     
 
-async def start_bot_with_retry():
-    """
-    Telegram can temporarily return RPC_CALL_FAIL (500) while importing a
-    bot authorization. Keep the Heroku worker alive and retry startup instead
-    of exiting the process. Do not start upload/scheduler tasks until this
-    succeeds, so a retry cannot create duplicate workers.
-    """
-    attempt = 0
-    delay = 2
-    while True:
-        attempt += 1
-        try:
-            LOGS.info("Connecting Telegram bot (attempt %s)...", attempt)
-            await bot.start()
-            LOGS.info("Telegram bot connected successfully.")
-            return
-        except InternalServerError as e:
-            # Telegram's RPC_CALL_FAIL during auth.ImportBotAuthorization is
-            # a Telegram-side 500. It is transient and must not kill the
-            # Heroku worker. Log a warning (not a traceback that looks like
-            # an uncaught crash), then retry the same Client.
-            LOGS.warning(
-                "Telegram startup RPC 500 on attempt %s (%s): %s. "
-                "Retrying in %s seconds; worker remains alive.",
-                attempt,
-                type(e).__name__,
-                e,
-                delay,
-            )
-
-            try:
-                if getattr(bot, "is_connected", False):
-                    await bot.stop()
-            except Exception as cleanup_error:
-                LOGS.warning(
-                    "Partial Telegram session cleanup failed: %s",
-                    cleanup_error,
-                )
-
-            await asleep(delay)
-            delay = min(delay * 2, 30)
-
-        except (OSError, TimeoutError, ConnectionError) as e:
-            LOGS.warning(
-                "Temporary network error during Telegram startup on attempt %s: %s. "
-                "Retrying in %s seconds.",
-                attempt,
-                e,
-                delay,
-            )
-            try:
-                if getattr(bot, "is_connected", False):
-                    await bot.stop()
-            except Exception as cleanup_error:
-                LOGS.warning("Partial Telegram session cleanup failed: %s", cleanup_error)
-
-            await asleep(delay)
-            delay = min(delay * 2, 30)
-        except Exception:
-            # Invalid credentials/configuration and programming errors are
-            # not transient; preserve the traceback instead of hiding them.
-            LOGS.exception("Non-retryable error while starting Telegram bot.")
-            raise
-
 
 async def main():
-    # Keep references only to tasks created by this application.
-    # Pyrogram owns and manages its internal session tasks.
+    # Keep references to application-owned tasks; Pyrofork owns its
+    # internal recv/ping workers and must control their lifecycle.
     tasks = []
-    bot_start_attempted = False
     try:
         LOGS.info("Starting Web Server...")
         await start_server()
-        
+
         LOGS.info("Loading settings...")
         await load_settings()
-        
+
         LOGS.info("Starting scheduler...")
         sch.add_job(
             upcoming_animes,
@@ -213,58 +146,48 @@ async def main():
         )
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
-        
-        LOGS.info("Starting bot...")
-        # Mark before awaiting: Pyrogram can create recv/ping tasks and then
-        # fail part-way through startup. The finally block must still stop it.
-        bot_start_attempted = True
-        await start_bot_with_retry()
-        await restart()
-        
-        LOGS.info("Starting tasks...")
-        # Start the scheduled ongoing-anime RSS detector.
-        # Dual-audio releases are filtered out and handled only through /dualaudio.
-        LOGS.info("Automatic ongoing anime detection/upload is ON; dual-audio releases are manual-only.")
-        tasks = [
-            create_task(queue_loop()),
-            create_task(fetch_animes()),
-        ]
-        
-        LOGS.info('Auto Anime Bot Started!')
-        await idle()
-        
-    except Exception as e:
+
+        # Client context guarantees Pyrofork startup and shutdown are paired.
+        async with bot:
+            try:
+                await restart()
+
+                LOGS.info("Starting tasks...")
+                LOGS.info(
+                    "Automatic RSS anime uploads are OFF. "
+                    "Manual /uploadchannel remains available."
+                )
+                tasks = [
+                    create_task(queue_loop(), name="app-queue-loop"),
+                ]
+
+                LOGS.info("Auto Anime Bot Started!")
+                await idle()
+            finally:
+                # Await only our own tasks before the client context exits.
+                for task in tasks:
+                    if not task.done():
+                        task.cancel()
+                if tasks:
+                    await gather(*tasks, return_exceptions=True)
+
+    except Exception:
         LOGS.exception("Application startup/runtime error")
         raise
-    
+
     finally:
-        LOGS.info('Shutting down...')
+        LOGS.info("Shutting down...")
         if sch.running:
             sch.shutdown(wait=False)
-
-        # Stop only application-owned background jobs. Do not cancel
-        # Pyrogram's recv_worker/ping_worker tasks directly.
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-
-        if tasks:
-            await gather(*tasks, return_exceptions=True)
-
-        if bot_start_attempted:
-            try:
-                await bot.stop()
-            except Exception:
-                LOGS.exception("Error while stopping Pyrogram client during shutdown")
-
         await clean_up()
-        LOGS.info('Cleanup complete!')
+        LOGS.info("Cleanup complete!")
 
 if __name__ == '__main__':
-    loop = get_event_loop()
     try:
-        loop.run_until_complete(main())
+        # Let Pyrofork drive its client coroutine on the owning event loop.
+        bot.run(main())
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
-    finally:
-        loop.close()
+    except Exception:
+        LOGS.exception("Fatal worker error")
+        raise
