@@ -125,9 +125,62 @@ async def load_settings():
     LOGS.info(f"Settings loaded! Admins: {Var.ADMINS}")
     
 
+async def start_bot_with_retry():
+    """Keep the Heroku worker alive during temporary Telegram auth RPC 500s."""
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            await asyncio.wait_for(bot.start(), timeout=120)
+            LOGS.info("Telegram bot client started successfully with BOT_TOKEN.")
+            return
+        except Exception as exc:
+            error_text = f"{type(exc).__name__}: {exc}".casefold()
+            is_rpc_500 = (
+                "rpc_call_fail" in error_text
+                and ("500" in error_text or "internal_server_error" in error_text)
+            ) or "internal_server_error_500" in error_text
+            is_auth_rpc_500 = (
+                "auth.importbotauthorization" in error_text and is_rpc_500
+            ) or (
+                "auth.importbotauthorization" in error_text
+                and "internal_server_error" in error_text
+            )
+
+            # A bad/revoked token is a configuration error, not a transient
+            # server failure. Stop immediately with a clear log instead of
+            # retrying forever.
+            if not is_auth_rpc_500:
+                LOGS.exception(
+                    "Telegram bot startup failed (non-retryable). "
+                    "Verify API_ID, API_HASH and BOT_TOKEN."
+                )
+                raise
+
+            try:
+                if bot.is_connected:
+                    await bot.stop()
+            except Exception as cleanup_error:
+                LOGS.warning(
+                    "Telegram startup cleanup failed on attempt %s: %s",
+                    attempt, cleanup_error,
+                )
+
+            delay = min(600, 60 * (2 ** min(attempt - 1, 4)))
+            LOGS.warning(
+                "Telegram auth.ImportBotAuthorization returned RPC 500 "
+                "(attempt %s). Keeping the Heroku worker alive; retrying "
+                "in %s seconds. This is a Telegram-side transient error.",
+                attempt, delay,
+            )
+            await asyncio.sleep(delay)
+
+
 async def main():
     # Keep strong references to application-owned background tasks.
+    # Pyrogram owns its internal recv/ping workers and their lifecycle.
     tasks = []
+    bot_started = False
     try:
         LOGS.info("Starting Web Server...")
         await start_server()
@@ -146,32 +199,36 @@ async def main():
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
 
-        # Let Pyrofork own the complete Client start/stop lifecycle. This
-        # ensures its internal recv/ping workers are shut down on exceptions.
-        async with bot:
-            try:
-                await restart()
+        # Use the BOT_TOKEN-based Client created in bot/__init__.py.
+        # Do not enter "async with bot" here: that would call bot.start()
+        # outside the retry loop and crash the Heroku worker on an RPC 500.
+        await start_bot_with_retry()
+        bot_started = True
 
-                LOGS.info("Starting tasks...")
-                LOGS.info(
-                    "Automatic ongoing anime detection/upload is ON; "
-                    "dual-audio releases are manual-only."
-                )
-                tasks = [
-                    create_task(queue_loop(), name="app-queue-loop"),
-                    create_task(fetch_animes(), name="app-anime-rss"),
-                ]
+        try:
+            await restart()
 
-                LOGS.info("Auto Anime Bot Started!")
-                await idle()
-            finally:
-                # Finish our own background jobs before the Client context
-                # exits and Pyrofork disconnects its internal workers.
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                if tasks:
-                    await gather(*tasks, return_exceptions=True)
+            LOGS.info("Starting tasks...")
+            LOGS.info(
+                "Automatic ongoing-anime RSS uploads are ON; "
+                "dual-audio releases remain manual-only."
+            )
+            tasks = [
+                create_task(queue_loop(), name="app-queue-loop"),
+                create_task(fetch_animes(), name="app-anime-rss"),
+            ]
+
+            LOGS.info("Auto Anime Bot Started!")
+            await idle()
+        finally:
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await gather(*tasks, return_exceptions=True)
+
+            if bot_started and bot.is_connected:
+                await bot.stop()
 
     except Exception:
         LOGS.exception("Application startup/runtime error")
@@ -183,6 +240,7 @@ async def main():
             sch.shutdown(wait=False)
         await clean_up()
         LOGS.info("Cleanup complete!")
+
 
 if __name__ == '__main__':
     try:
