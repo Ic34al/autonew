@@ -8930,11 +8930,10 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 f"Could not identify an episode number from the selected RSS release: {name}"
             )
 
-        # Global MongoDB claim protects normal mode across multiple workers.
-        episode_lock_token = uuid.uuid4().hex
-        if not await db.claimAnimeEpisode(ani_id, ep_no, episode_lock_token):
-            return "in_progress"
-
+        # Check cache and confirmed channel posts before claiming the global
+        # episode lock. Returning "already_published" after claiming used to
+        # leak a 12-hour MongoDB lock and make every later /retry return
+        # "in_progress" for an otherwise completed episode.
         # Cache state per anime episode, not per series. Using ani_id alone
         # incorrectly blocks later episodes.
         episode_key = f"{ani_id}:{ep_no or 'unknown'}"
@@ -8972,6 +8971,13 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             ani_cache['completed'].add(episode_key)
             ani_cache['ongoing'].discard(episode_key)
             return "already_published"
+
+        # Claim only after duplicate/complete-post checks. Every path after this
+        # point is inside the function's try/finally and releases the token.
+        episode_lock_token = uuid.uuid4().hex
+        if not await db.claimAnimeEpisode(ani_id, ep_no, episode_lock_token):
+            ani_cache['ongoing'].discard(episode_key)
+            return "in_progress"
 
         # Telegram Bot API accounts cannot read channel history (messages.GetHistory).
         # Duplicate prevention must use the durable MongoDB post checkpoint above.
