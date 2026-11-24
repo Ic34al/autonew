@@ -2184,6 +2184,15 @@ async def uploadchannel_callbacks(client, callback):
                     selected_title,
                 )
 
+                transient_markers = (
+                    "timeout", "timed out", "connection reset",
+                    "connection aborted", "server disconnected",
+                    "temporarily unavailable", "network is unreachable",
+                    "internal server error", "floodwait", "rate limit",
+                    "return code -15", "signal 15", "sigterm",
+                    "terminated by signal", "torrent download failed",
+                    "torrent download error", "download failed - no files found",
+                )
                 for episode_number in range(1, released_episode_count + 1):
                     async def episode_progress(stage):
                         nonlocal channel_stage
