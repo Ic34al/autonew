@@ -53,6 +53,10 @@ class Var:
 
     MONGO_NAME = getenv("MONGO_NAME", "AutoAnime")
     USER_SESSION = getenv("USER_SESSION")
+    # Optional persistent Pyrogram bot session. Set this after exporting a
+    # successful bot session once; it avoids cold bot-token authorization on
+    # every Heroku dyno replacement/redeploy.
+    BOT_SESSION_STRING = getenv("BOT_SESSION_STRING", "").strip()
     RSS_LOW_END = {
     "480": "https://subsplease.org/rss/?r=sd",
     "720": "https://subsplease.org/rss/?r=720",
@@ -243,7 +247,22 @@ try:
         bot_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(bot_loop)
 
-    bot = Client(name="AutoAnime", api_id=Var.API_ID, api_hash=Var.API_HASH, bot_token=Var.BOT_TOKEN, plugins=dict(root="bot/modules"), parse_mode=ParseMode.HTML)
+    client_options = {
+        "name": "AutoAnime",
+        "api_id": Var.API_ID,
+        "api_hash": Var.API_HASH,
+        "plugins": dict(root="bot/modules"),
+        "parse_mode": ParseMode.HTML,
+    }
+    if Var.BOT_SESSION_STRING:
+        # Reuse the already-authorized MTProto session on Heroku deploys.
+        # Do not pass bot_token together with session_string.
+        LOGS.info("Using persistent BOT_SESSION_STRING for Telegram authorization.")
+        bot = Client(session_string=Var.BOT_SESSION_STRING, **client_options)
+    else:
+        # First-time authorization path. Once this succeeds, create and store
+        # a persistent session string in Heroku Config Vars.
+        bot = Client(bot_token=Var.BOT_TOKEN, **client_options)
     try:
         bot_loop = bot.loop or bot_loop
     except Exception:
