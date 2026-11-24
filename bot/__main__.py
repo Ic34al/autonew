@@ -147,29 +147,55 @@ async def main():
         sch.add_job(clean_old_files, "interval", hours=1)
         sch.start()
 
-        # Client context guarantees Pyrofork startup and shutdown are paired.
-        async with bot:
+        # Retry Telegram's transient auth ImportBotAuthorization 500 errors
+        # at the actual Client.start() boundary. Pyrogram disconnects a
+        # partially-started client before re-raising, so the next attempt is safe.
+        auth_retry_count = 0
+        while True:
             try:
-                await restart()
-
-                LOGS.info("Starting tasks...")
-                LOGS.info(
-                    "Automatic RSS anime uploads are OFF. "
-                    "Manual /uploadchannel remains available."
+                await bot.start()
+                break
+            except Exception as exc:
+                error_text = f"{type(exc).__name__}: {exc}"
+                transient_auth_error = (
+                    "RPC_CALL_FAIL" in error_text
+                    or "RpcCallFail" in error_text
+                    or "ImportBotAuthorization" in error_text
                 )
-                tasks = [
-                    create_task(queue_loop(), name="app-queue-loop"),
-                ]
+                if not transient_auth_error:
+                    raise
+                auth_retry_count += 1
+                delay = min(30 * (2 ** min(auth_retry_count - 1, 4)), 300)
+                LOGS.exception(
+                    "Telegram bot authorization returned a transient server "
+                    f"error (attempt {auth_retry_count}); retrying in {delay}s. "
+                    "The Heroku worker will remain alive."
+                )
+                await asleep(delay)
 
-                LOGS.info("Auto Anime Bot Started!")
-                await idle()
-            finally:
-                # Await only our own tasks before the client context exits.
-                for task in tasks:
-                    if not task.done():
-                        task.cancel()
-                if tasks:
-                    await gather(*tasks, return_exceptions=True)
+        try:
+            await restart()
+
+            LOGS.info("Starting tasks...")
+            LOGS.info(
+                "Automatic RSS anime uploads are OFF. "
+                "Manual /uploadchannel remains available."
+            )
+            tasks = [
+                create_task(queue_loop(), name="app-queue-loop"),
+            ]
+
+            LOGS.info("Auto Anime Bot Started!")
+            await idle()
+        finally:
+            # Await only our own tasks before stopping the Pyrogram client.
+            for task in tasks:
+                if not task.done():
+                    task.cancel()
+            if tasks:
+                await gather(*tasks, return_exceptions=True)
+            if bot.is_initialized:
+                await bot.stop()
 
     except Exception:
         LOGS.exception("Application startup/runtime error")
@@ -188,22 +214,6 @@ if __name__ == '__main__':
         bot.run(main())
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
-    except Exception as exc:
-        error_text = f"{type(exc).__name__}: {exc}"
-        # Telegram has been returning transient 500 RPC_CALL_FAIL errors while
-        # authorizing bot sessions. Do not let one Telegram-side outage crash
-        # the Heroku worker; restart the process with bounded backoff instead.
-        if "RPC_CALL_FAIL" in error_text or "RpcCallFail" in error_text:
-            retry_count = int(environ.get("TELEGRAM_AUTH_RETRY", "0")) + 1
-            delay = min(30 * (2 ** min(retry_count - 1, 4)), 300)
-            environ["TELEGRAM_AUTH_RETRY"] = str(retry_count)
-            LOGS.exception(
-                "Telegram authorization temporarily failed "
-                f"(attempt {retry_count}); retrying in {delay} seconds. "
-                "The worker will remain managed by Heroku."
-            )
-            import time
-            time.sleep(delay)
-            execl(executable, executable, "-m", "bot")
+    except Exception:
         LOGS.exception("Fatal worker error")
         raise
