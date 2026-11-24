@@ -15,6 +15,7 @@ from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
 from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
+
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
 async def restart(client, message):
@@ -22,7 +23,7 @@ async def restart(client, message):
     if sch.running:
         sch.shutdown(wait=False)
     await clean_up()
-    if len(ffpids_cache) != 0: 
+    if len(ffpids_cache) != 0:
         for pid in ffpids_cache:
             try:
                 LOGS.info(f"Process ID : {pid}")
@@ -34,6 +35,7 @@ async def restart(client, message):
         await f.write(f"{rmessage.chat.id}\n{rmessage.id}\n")
     execl(executable, executable, "-m", "bot")
 
+
 async def restart():
     if ospath.isfile(".restartmsg"):
         async with aiopen(".restartmsg") as f:
@@ -42,6 +44,7 @@ async def restart():
             await bot.edit_message_text(chat_id=chat_id, message_id=msg_id, text="<i>Restarted !</i>")
         except Exception as e:
             LOGS.error(e)
+
 
 async def queue_loop():
     LOGS.info("Queue Loop Started !!")
@@ -54,6 +57,7 @@ async def queue_loop():
             async with ffLock:
                 ffQueue.task_done()
         await asleep(10)
+
 
 async def load_settings():
     LOGS.info("Loading settings...")
@@ -82,18 +86,15 @@ async def load_settings():
         pass
     try:
         db_schedule_setting = await db.get_send_schedule()
-
         env_schedule_setting = (
             environ.get("SEND_SCHEDULE", "False").lower() == "true"
         )
-
         if "SEND_SCHEDULE" in environ:
             Var.SEND_SCHEDULE = env_schedule_setting
         elif db_schedule_setting is not None:
             Var.SEND_SCHEDULE = db_schedule_setting
         else:
             Var.SEND_SCHEDULE = False
-
     except Exception as e:
         LOGS.warning(
             f"Could not load schedule setting from database: {e}"
@@ -120,14 +121,74 @@ async def load_settings():
         elif link["type"] == "lowend":
             if link.get("quality") and link["quality"] not in Var.RSS_LOW_END:
                 Var.RSS_LOW_END[link["quality"]] = link["link"]
-    
+
     LOGS.info(f"Settings loaded! Admins: {Var.ADMINS}")
-    
+
+
+async def _disconnect_after_failed_start():
+    """Release a half-open Pyrogram connection before retrying authorization."""
+    try:
+        if getattr(bot, "is_connected", False):
+            await bot.disconnect()
+            LOGS.warning("Disconnected the incomplete Telegram session before retry.")
+    except Exception:
+        LOGS.exception(
+            "Could not cleanly disconnect the failed Telegram startup; "
+            "the next authorization attempt may still fail."
+        )
+
+
+def _is_retryable_telegram_start_error(exc):
+    """Identify temporary Telegram authorization/server failures."""
+    error_text = f"{type(exc).__name__}: {exc}"
+    error_code = getattr(exc, "CODE", None)
+    error_id = str(getattr(exc, "ID", "") or "")
+    return (
+        error_code in (420, 500, 502, 503, 504)
+        or "RPC_CALL_FAIL" in error_text
+        or "RpcCallFail" in error_text
+        or "ImportBotAuthorization" in error_text
+        or "INTERNAL_SERVER_ERROR_500" in error_id
+        or "FLOOD_WAIT" in error_id
+    )
+
+
+async def _start_telegram_with_retry():
+    """Start the existing client safely; never create a second bot session."""
+    attempt = 0
+    while True:
+        try:
+            await bot.start()
+            LOGS.info("Telegram client authorized and started successfully.")
+            return
+        except Exception as exc:
+            if not _is_retryable_telegram_start_error(exc):
+                raise
+
+            attempt += 1
+            await _disconnect_after_failed_start()
+
+            # Respect Telegram's server-provided flood wait when available.
+            server_wait = (
+                getattr(exc, "value", None)
+                or getattr(exc, "x", None)
+                or getattr(exc, "seconds", None)
+            )
+            if server_wait:
+                delay = max(1, int(server_wait))
+            else:
+                delay = min(60 * (2 ** min(attempt - 1, 4)), 900)
+
+            LOGS.error(
+                "Telegram bot authorization failed with a temporary error "
+                f"(attempt {attempt}: {type(exc).__name__}: {exc}). "
+                f"Client cleanup attempted; retrying in {delay}s. "
+                "No upload/scheduler jobs will run until authorization succeeds."
+            )
+            await asleep(delay)
 
 
 async def main():
-    # Keep references to application-owned tasks; Pyrofork owns its
-    # internal recv/ping workers and must control their lifecycle.
     tasks = []
     try:
         LOGS.info("Starting Web Server...")
@@ -136,40 +197,11 @@ async def main():
         LOGS.info("Loading settings...")
         await load_settings()
 
-        # Telegram has an externally reported cold-bot authorization incident
-        # affecting auth.ImportBotAuthorization. Keep this worker alive and
-        # retry with capped exponential backoff. Pyrogram's start() disconnects
-        # a partially-started client before re-raising.
-        auth_retry_count = 0
-        while True:
-            try:
-                await bot.start()
-                break
-            except Exception as exc:
-                error_text = f"{type(exc).__name__}: {exc}"
-                error_code = getattr(exc, "CODE", None)
-                error_id = str(getattr(exc, "ID", "") or "")
-                transient_auth_error = (
-                    error_code == 500
-                    or "RPC_CALL_FAIL" in error_text
-                    or "RpcCallFail" in error_text
-                    or "ImportBotAuthorization" in error_text
-                    or "INTERNAL_SERVER_ERROR_500" in error_id
-                )
-                if not transient_auth_error:
-                    raise
-                auth_retry_count += 1
-                delay = min(60 * (2 ** min(auth_retry_count - 1, 4)), 900)
-                LOGS.error(
-                    "Telegram bot authorization returned a transient server "
-                    f"error (attempt {auth_retry_count}); retrying in {delay}s. "
-                    "The Heroku worker will remain alive. Check Telegram service "
-                    "status if auth.ImportBotAuthorization keeps failing."
-                )
-                await asleep(delay)
+        # Telegram may temporarily fail auth.ImportBotAuthorization with RPC 500.
+        # Reconnect the same client only after explicitly cleaning up its failed
+        # connection; keep the Heroku worker alive while Telegram recovers.
+        await _start_telegram_with_retry()
 
-        # Only start background jobs after Telegram authorization succeeds.
-        # This prevents jobs from running against a client that never logged in.
         LOGS.info("Starting scheduler...")
         sch.add_job(
             upcoming_animes,
@@ -196,13 +228,12 @@ async def main():
             LOGS.info("Auto Anime Bot Started!")
             await idle()
         finally:
-            # Await only our own tasks before stopping the Pyrogram client.
             for task in tasks:
                 if not task.done():
                     task.cancel()
             if tasks:
                 await gather(*tasks, return_exceptions=True)
-            if bot.is_initialized:
+            if getattr(bot, "is_initialized", False):
                 await bot.stop()
 
     except Exception:
@@ -216,9 +247,10 @@ async def main():
         await clean_up()
         LOGS.info("Cleanup complete!")
 
+
 if __name__ == '__main__':
     try:
-        # Let Pyrofork drive its client coroutine on the owning event loop.
+        # Let Pyrofork drive the client coroutine on its owning event loop.
         bot.run(main())
     except (KeyboardInterrupt, SystemExit):
         LOGS.info("Bot stopped!")
