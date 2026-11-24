@@ -6,7 +6,6 @@ import time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client
 from pyrogram.enums import ParseMode
-from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from uvloop import install
 from datetime import datetime
@@ -32,7 +31,7 @@ LOGS = getLogger(__name__)
 load_dotenv('config.env')
 
 ani_cache = {
-    'fetch_animes': False,
+    'fetch_animes': True,
     'fetch_manga': True,
     'global_pause': False,
     'ongoing': set(),
@@ -45,12 +44,7 @@ ffQueue = Queue()
 ff_queued = dict()
 
 class Var:
-    # Pyrogram expects API_ID as an integer; validate it before creating the client.
-    try:
-        API_ID = int(getenv("API_ID", "0") or 0)
-    except (TypeError, ValueError):
-        API_ID = 0
-    API_HASH, BOT_TOKEN = getenv("API_HASH"), getenv("BOT_TOKEN")
+    API_ID, API_HASH, BOT_TOKEN = getenv("API_ID"), getenv("API_HASH"), getenv("BOT_TOKEN")
     MONGO_URI = getenv("MONGO_URI")
     
     if not BOT_TOKEN or not API_HASH or not API_ID or not MONGO_URI:
@@ -86,11 +80,9 @@ class Var:
 
     LOW_END_RENAME = True
 
-    BOT_USERNAME = getenv('BOT_USERNAME', "Orewa_Monkey_D_Kaizuko_Bot")
+    BOT_USERNAME = getenv('BOT_USERNAME', "uchiha_Sasuke_itachi_bot")
     CREATION_USERNAME = getenv('CREATION_USERNAME', "Ongoing Anime Time")
-    # Always generate file-share deep links for the actual Monkey bot.
-    # Ignore stale FILE_SHARE_BOT_USERNAME values from config.env.
-    FILE_SHARE_BOT_USERNAME = "Orewa_Monkey_D_Kaizuko_Bot"
+    
     SEND_SCHEDULE = getenv("SEND_SCHEDULE", "False").lower() == "true"
     SCHEDULE_TYPE = getenv("SCHEDULE_TYPE", "sub").lower()
 
@@ -251,19 +243,7 @@ try:
         bot_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(bot_loop)
 
-    # Persist Pyrogram's MTProto authorization in MongoDB. Heroku dynos
-    # have disposable filesystems, so the default local *.session file is not
-    # reliable across dyno replacement. Motor is already used by this project.
-    SESSION_MONGO = AsyncIOMotorClient(Var.MONGO_URI)
-    bot = Client(
-        name=Var.MONGO_NAME,
-        api_id=Var.API_ID,
-        api_hash=Var.API_HASH,
-        bot_token=Var.BOT_TOKEN,
-        mongodb={"connection": SESSION_MONGO, "remove_peers": False},
-        plugins=dict(root="bot/modules"),
-        parse_mode=ParseMode.HTML,
-    )
+    bot = Client(name="AutoAnime", api_id=Var.API_ID, api_hash=Var.API_HASH, bot_token=Var.BOT_TOKEN, plugins=dict(root="bot/modules"), parse_mode=ParseMode.HTML)
     try:
         bot_loop = bot.loop or bot_loop
     except Exception:
