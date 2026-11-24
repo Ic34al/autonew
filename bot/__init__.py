@@ -6,6 +6,7 @@ import time
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from pyrogram import Client
 from pyrogram.enums import ParseMode
+from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import load_dotenv
 from uvloop import install
 from datetime import datetime
@@ -53,8 +54,6 @@ class Var:
 
     MONGO_NAME = getenv("MONGO_NAME", "AutoAnime")
     USER_SESSION = getenv("USER_SESSION")
-    # Optional previously-authorized Pyrogram session string for Heroku.
-    PYROGRAM_SESSION = getenv("PYROGRAM_SESSION")
     RSS_LOW_END = {
     "480": "https://subsplease.org/rss/?r=sd",
     "720": "https://subsplease.org/rss/?r=720",
@@ -247,15 +246,16 @@ try:
         bot_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(bot_loop)
 
-    # Use a fresh in-memory MTProto session for the bot-token client.
-    # Heroku dynos are disposable; MongoDB remains dedicated to application
-    # data and must not restore a possibly stale Pyrogram authorization key.
+    # Persist Pyrogram's MTProto authorization in MongoDB. Heroku dynos
+    # have disposable filesystems, so the default local *.session file is not
+    # reliable across dyno replacement. Motor is already used by this project.
+    SESSION_MONGO = AsyncIOMotorClient(Var.MONGO_URI)
     bot = Client(
         name=Var.MONGO_NAME,
         api_id=Var.API_ID,
         api_hash=Var.API_HASH,
         bot_token=Var.BOT_TOKEN,
-        in_memory=True,
+        mongodb={"connection": SESSION_MONGO, "remove_peers": False},
         plugins=dict(root="bot/modules"),
         parse_mode=ParseMode.HTML,
     )
