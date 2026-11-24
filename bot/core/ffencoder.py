@@ -780,13 +780,13 @@ class FFEncoder:
             # "-c:a copy" can otherwise preserve a high-bitrate source track and
             # defeat the file-size budget even when video bitrate is constrained.
             ffcode = re.sub(
-                r"(?i)(?<![\\w-])-(?:c:a|codec:a)\\s+\\S+",
+                r"(?i)(?<![\w-])-(?:c:a|codec:a)\s+\S+",
                 "",
                 ffcode,
             )
             for option in ("-b:a", "-ab", "-ac"):
                 ffcode = re.sub(
-                    rf"(?i)(?<![\\w-]){re.escape(option)}\\s+\\S+",
+                    rf"(?i)(?<![\w-]){re.escape(option)}\s+\S+",
                     "",
                     ffcode,
                 )
