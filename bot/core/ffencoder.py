@@ -47,11 +47,16 @@ class FFEncoder:
     def __init__(
         self, message, path, name, qual, is_movie=False,
         force_default=False, force_encode=False, bypass_pause=False,
-        quiet_errors=False, fallback_mode=0, size_target_mib=1400,
+        quiet_errors=False, fallback_mode=0, size_target_mib=None,
     ):
         self.force_default = bool(force_default)
         self.fallback_mode = max(0, min(2, int(fallback_mode or 0)))
-        self.size_target_mib = max(700, min(1700, int(size_target_mib or 1400)))
+        # None means use the normal target for the requested resolution.
+        # Explicit values are reserved for oversized-file recovery retries.
+        self.size_target_mib = (
+            max(650, min(1700, int(size_target_mib)))
+            if size_target_mib is not None else None
+        )
         self.force_encode = bool(force_encode)
         self.bypass_pause = bool(bypass_pause)
         self.quiet_errors = bool(quiet_errors)
@@ -722,32 +727,42 @@ class FFEncoder:
                 f"CRF {crf_value}, audio {audio_bitrate}."
             )
 
-        # Enforce an average bitrate budget, not only VBV peak limits.
-        # A peak-only maxrate does not guarantee a bounded total file size and
-        # allowed long HDRip episodes to exceed the upload preflight limit.
+        # Enforce a resolution-aware average bitrate budget.
+        # A single 1,400 MiB target for every tier made 480p files unnecessarily
+        # large (e.g. ~900 MB). Normal encodes now use per-quality size budgets;
+        # explicit size_target_mib is used only by oversized-file recovery.
         try:
             source_duration = float(await mediainfo(dl_npath, get_duration=True))
             if source_duration <= 0:
                 raise ValueError(f"Invalid source duration: {source_duration!r}")
 
-            # Aim for 1,400 MiB so audio, subtitles, attachments and muxing
-            # overhead still leave a wide margin below the 1,900 MiB preflight.
-            target_bytes = self.size_target_mib * 1024 * 1024
-            target_total_bps = int((target_bytes * 8 / source_duration) * 0.82)
-            # Reserve 1.5 Mbps for audio and container overhead. The average
-            # video bitrate is the key size control; VBV limits bitrate peaks.
-            video_bitrate = max(300_000, target_total_bps - 1_500_000)
-            video_maxrate = max(video_bitrate, int(video_bitrate * 1.10))
+            quality_size_targets = {
+                "1080": 1300,
+                "720": 800,
+                "480": 450,
+                "360": 300,
+                "240": 200,
+                "144": 120,
+                "HDRi": 1500,
+            }
+            target_mib = self.size_target_mib or quality_size_targets.get(self.__qual, 800)
+            target_bytes = target_mib * 1024 * 1024
+
+            # Reserve the selected tier's audio bitrate plus muxing overhead.
+            audio_bps = {
+                "1080": 128_000, "720": 96_000, "480": 64_000,
+                "360": 48_000, "240": 32_000, "144": 24_000,
+                "HDRi": 160_000,
+            }.get(self.__qual, 96_000)
+            total_budget_bps = int((target_bytes * 8 / source_duration) * 0.90)
+            video_bitrate = max(300_000, total_budget_bps - audio_bps - 100_000)
+            video_maxrate = max(video_bitrate, int(video_bitrate * 1.15))
             video_bufsize = video_maxrate * 2
 
-            # Force a predictable software encoder. Custom templates may use
-            # stream copy or hardware encoders that ignore/interpret rate
-            # controls differently. Keep audio/subtitle mappings untouched.
+            # Force a predictable software encoder. Keep audio/subtitle mappings.
             codec_pattern = r"(?i)(?<![\w-])-(?:c:v|codec:v)\s+\S+"
             ffcode, codec_count = re.subn(codec_pattern, "-c:v libx264", ffcode)
             if not codec_count:
-                # Add the encoder before other output options when the template
-                # omitted an explicit video codec.
                 output_token = next(
                     (token for token in (shlex.quote(out_npath), f"'{out_npath}'", f'"{out_npath}"', out_npath)
                      if token in ffcode),
@@ -757,7 +772,8 @@ class FFEncoder:
                     raise RuntimeError("Cannot select video encoder: output path not found.")
                 ffcode = ffcode.replace(output_token, f"-c:v libx264 {output_token}", 1)
 
-            # Remove conflicting rate-control options from custom templates.
+            # Remove conflicting rate-control options before applying the
+            # final bitrate budget. This prevents a template CRF from overriding it.
             for option in ("-crf", "-qp", "-b:v", "-vb", "-maxrate", "-bufsize", "-minrate"):
                 ffcode = re.sub(
                     rf"(?i)(?<![\w-]){re.escape(option)}\s+\S+",
@@ -765,8 +781,6 @@ class FFEncoder:
                     ffcode,
                 )
 
-            # Apply a deterministic average bitrate and VBV ceiling after the
-            # custom template, immediately before the output path.
             output_token = next(
                 (token for token in (shlex.quote(out_npath), f"'{out_npath}'", f'"{out_npath}"', out_npath)
                  if token in ffcode),
@@ -781,9 +795,9 @@ class FFEncoder:
             ffcode = ffcode.replace(output_token, f"{enforced_options} {output_token}", 1)
 
             LOGS.info(
-                f"Enforced Telegram-safe average bitrate for {self.__name} ({self.__qual}p): "
+                f"Enforced {self.__qual}p size profile for {self.__name}: "
                 f"duration={source_duration:.1f}s, video bitrate={video_bitrate} bps, "
-                f"peak={video_maxrate} bps, target output<={self.size_target_mib} MiB."
+                f"target output~{target_mib} MiB."
             )
         except Exception as size_profile_error:
             self.last_error = (
