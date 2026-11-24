@@ -136,20 +136,10 @@ async def main():
         LOGS.info("Loading settings...")
         await load_settings()
 
-        LOGS.info("Starting scheduler...")
-        sch.add_job(
-            upcoming_animes,
-            "cron",
-            hour=0,
-            minute=30,
-            timezone="Asia/Kolkata",
-        )
-        sch.add_job(clean_old_files, "interval", hours=1)
-        sch.start()
-
-        # Retry Telegram's transient auth ImportBotAuthorization 500 errors
-        # at the actual Client.start() boundary. Pyrogram disconnects a
-        # partially-started client before re-raising, so the next attempt is safe.
+        # Telegram has an externally reported cold-bot authorization incident
+        # affecting auth.ImportBotAuthorization. Keep this worker alive and
+        # retry with capped exponential backoff. Pyrogram's start() disconnects
+        # a partially-started client before re-raising.
         auth_retry_count = 0
         while True:
             try:
@@ -169,13 +159,27 @@ async def main():
                 if not transient_auth_error:
                     raise
                 auth_retry_count += 1
-                delay = min(30 * (2 ** min(auth_retry_count - 1, 4)), 300)
-                LOGS.exception(
+                delay = min(60 * (2 ** min(auth_retry_count - 1, 4)), 900)
+                LOGS.error(
                     "Telegram bot authorization returned a transient server "
                     f"error (attempt {auth_retry_count}); retrying in {delay}s. "
-                    "The Heroku worker will remain alive."
+                    "The Heroku worker will remain alive. Check Telegram service "
+                    "status if auth.ImportBotAuthorization keeps failing."
                 )
                 await asleep(delay)
+
+        # Only start background jobs after Telegram authorization succeeds.
+        # This prevents jobs from running against a client that never logged in.
+        LOGS.info("Starting scheduler...")
+        sch.add_job(
+            upcoming_animes,
+            "cron",
+            hour=0,
+            minute=30,
+            timezone="Asia/Kolkata",
+        )
+        sch.add_job(clean_old_files, "interval", hours=1)
+        sch.start()
 
         try:
             await restart()
