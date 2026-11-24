@@ -157,10 +157,14 @@ async def main():
                 break
             except Exception as exc:
                 error_text = f"{type(exc).__name__}: {exc}"
+                error_code = getattr(exc, "CODE", None)
+                error_id = str(getattr(exc, "ID", "") or "")
                 transient_auth_error = (
-                    "RPC_CALL_FAIL" in error_text
+                    error_code == 500
+                    or "RPC_CALL_FAIL" in error_text
                     or "RpcCallFail" in error_text
                     or "ImportBotAuthorization" in error_text
+                    or "INTERNAL_SERVER_ERROR_500" in error_id
                 )
                 if not transient_auth_error:
                     raise
