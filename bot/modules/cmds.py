@@ -4353,10 +4353,16 @@ async def anime_search_cmd(client, message: Message):
                                 href if href.startswith("http")
                                 else "https://subsplease.org/" + href.lstrip("/")
                             )
+                            # Keep every operation that uses catalogue_key inside
+                            # the matching-link branch. If the directory has no
+                            # matching href, do not reference an uninitialized key.
                             catalogue_key = ("", page_url)
-                    previous_catalogue = show_catalogues.get(catalogue_key)
-                    previous_season = previous_catalogue[1] if isinstance(previous_catalogue, tuple) else None
-                    show_catalogues[catalogue_key] = (clean_label, previous_season)
+                            previous_catalogue = show_catalogues.get(catalogue_key)
+                            previous_season = (
+                                previous_catalogue[1]
+                                if isinstance(previous_catalogue, tuple) else None
+                            )
+                            show_catalogues[catalogue_key] = (clean_label, previous_season)
                 except Exception as directory_error:
                     await rep.report(
                         f"/search SubsPlease show-directory lookup failed for {anime_name}: {directory_error}",
