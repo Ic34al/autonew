@@ -4083,7 +4083,8 @@ async def anime_search_cmd(client, message: Message):
             value = re.sub(r"\b(?:episode|ep)\s*0*\d{1,3}\b", " ", value, flags=re.IGNORECASE)
             return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
-        aliases = {normalize(x) for x in await get_all_possible_anime_names(anime_name) if x}
+        raw_aliases = await get_all_possible_anime_names(anime_name)
+        aliases = {normalize(x) for x in raw_aliases if x}
         aliases.add(normalize(anime_name))
         # Remove generic words so alternate punctuation/season formatting can
         # still match without accepting unrelated shows with one shared word.
@@ -4129,6 +4130,22 @@ async def anime_search_cmd(client, message: Message):
             "https://subsplease.org/rss/?r=720",
             "https://subsplease.org/rss/?r=1080",
         ])
+
+        # SubsPlease's show page can list a release even when its own rolling
+        # RSS/API search omits it. Search Nyaa's RSS index for the SubsPlease
+        # release group as an additional source; its RSS enclosure is the
+        # actual .torrent URL, unlike the human-facing Nyaa item page.
+        from urllib.parse import quote_plus
+        nyaa_terms = []
+        for term in [anime_name, *raw_aliases]:
+            term = str(term or "").strip()
+            if term and term.casefold() not in {x.casefold() for x in nyaa_terms}:
+                nyaa_terms.append(term)
+        for term in nyaa_terms[:6]:
+            query = quote_plus(f"[SubsPlease] {term}")
+            urls.append(
+                f"https://nyaa.si/?page=rss&q={query}&c=1_2&f=0"
+            )
         urls = list(dict.fromkeys(str(x).strip() for x in urls if x and str(x).strip()))
         if not urls:
             return await status.edit_text("<b>No anime RSS feeds configured.</b> Set RSS_ITEMS_ANIME in Heroku Config Vars.")
@@ -4195,16 +4212,33 @@ async def anime_search_cmd(client, message: Message):
                 headers={"User-Agent": "Mozilla/5.0"}
             ) as api_client:
                 # SubsPlease search uses the "s" parameter (not "q").
-                api_response = await api_client.get(
-                    "https://subsplease.org/api/",
-                    params={"f": "search", "tz": "Etc/GMT", "s": anime_name}
-                )
-                api_response.raise_for_status()
-                api_payload = api_response.json()
+                # Search every known title variant: the API may index a show
+                # under its full Japanese/romaji title rather than the short
+                # English title entered in /search.
+                api_payloads = []
+                api_terms = []
+                for term in [anime_name, *raw_aliases]:
+                    term = str(term or "").strip()
+                    if term and term.casefold() not in {x.casefold() for x in api_terms}:
+                        api_terms.append(term)
+                for term in api_terms[:8]:
+                    try:
+                        api_response = await api_client.get(
+                            "https://subsplease.org/api/",
+                            params={"f": "search", "tz": "Etc/GMT", "s": term}
+                        )
+                        api_response.raise_for_status()
+                        payload = api_response.json()
+                        if isinstance(payload, dict):
+                            api_payloads.append(payload)
+                    except Exception as search_error:
+                        await rep.report(
+                            f"/search SubsPlease API query failed for '{term}': {search_error}",
+                            "warning"
+                        )
 
                 # Search API can omit an episode that is still present in the
                 # site's latest catalogue. Query latest while the client is open.
-                api_payloads = [api_payload]
                 try:
                     latest_response = await api_client.get(
                         "https://subsplease.org/api/",
