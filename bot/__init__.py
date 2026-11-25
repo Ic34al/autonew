@@ -31,7 +31,7 @@ LOGS = getLogger(__name__)
 load_dotenv('config.env')
 
 ani_cache = {
-    'fetch_animes': False,
+    'fetch_animes': True,
     'fetch_manga': True,
     'global_pause': False,
     'ongoing': set(),
