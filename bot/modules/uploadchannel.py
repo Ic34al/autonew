@@ -590,7 +590,10 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 continue
             items = (
                 payload.get("results") or payload.get("latest")
-                or payload.get("releases") or payload.get("data") or {}
+                or payload.get("releases") or payload.get("data")
+                # Some SubsPlease API responses are already a title-keyed
+                # release mapping, without a results/latest wrapper.
+                or payload
             )
             iterable = items.items() if isinstance(items, dict) else enumerate(items) if isinstance(items, list) else []
             for release_key, item in iterable:
@@ -2218,7 +2221,16 @@ async def uploadchannel_callbacks(client, callback):
                     "terminated by signal", "torrent download failed",
                     "torrent download error", "download failed - no files found",
                 )
+                pending_episodes = []
                 for episode_number in range(1, released_episode_count + 1):
+                    if episode_number in existing_episodes:
+                        await report_stage(
+                            f"already published: {selected_title} "
+                            f"S{season_index:02d}E{episode_number:02d}; skipping duplicate",
+                            selected_title,
+                        )
+                        continue
+
                     async def episode_progress(stage):
                         nonlocal channel_stage
                         channel_stage = stage
@@ -2233,7 +2245,9 @@ async def uploadchannel_callbacks(client, callback):
                             await _upload_single_episode(
                                 selected_media, destination_id, season_index, episode_number,
                                 user_client, progress_callback=episode_progress,
-                                force_repost=True,
+                                # Normal /uploadchannel must reuse confirmed
+                                # publications; force_repost is reserved for an
+                                # explicit user-requested repost operation.
                                 publish_attempt_id=publish_attempt_id,
                             )
                             action = "reused saved qualities or encoded missing qualities and published"
@@ -2247,31 +2261,60 @@ async def uploadchannel_callbacks(client, callback):
                                     (asyncio.TimeoutError, TimeoutError, ConnectionError, OSError),
                                 ) or any(marker in error_text for marker in transient_markers)
                             )
-                            if not transient or attempt >= 3:
-                                raise
-                            delay = min(30, 5 * (2 ** (attempt - 1)))
+                            if transient and attempt < 3:
+                                delay = min(30, 5 * (2 ** (attempt - 1)))
+                                await report_stage(
+                                    f"temporary download/encode/Telegram error for "
+                                    f"S{season_index:02d}E{episode_number:02d}; "
+                                    f"retrying in {delay}s (attempt {attempt + 1}/3)",
+                                    selected_title,
+                                )
+                                await asyncio.sleep(delay)
+                                continue
+
+                            # Isolate a missing torrent or failed encode/upload to
+                            # this episode. Continue with later released episodes.
+                            pending_episodes.append(
+                                (episode_number, f"{type(episode_error).__name__}: {episode_error}")
+                            )
                             await report_stage(
-                                f"temporary download/encode/Telegram error for "
-                                f"S{season_index:02d}E{episode_number:02d}; "
-                                f"retrying in {delay}s (attempt {attempt + 1}/3)",
+                                f"S{season_index:02d}E{episode_number:02d} not completed "
+                                f"({str(episode_error)[:180]}); continuing with next episode",
                                 selected_title,
                             )
-                            await asyncio.sleep(delay)
+                            break
+                    else:
+                        action = "published"
 
+                    if any(number == episode_number for number, _ in pending_episodes):
+                        continue
                     await report_stage(
                         f"{action}: {selected_title} S{season_index:02d}E{episode_number:02d}",
                         selected_title,
                     )
 
-                await db.set_anime_archive_batch(
-                    anime_id, season_index, destination_id, "complete",
-                    "", f"released-episodes-only S{season_index} 4-quality",
-                )
-                await report_stage(
-                    f"ONGOING SEASON BACKFILL COMPLETE: {selected_title} Season {season_index}; "
-                    f"processed only the {released_episode_count} episode(s) confirmed released by AniList",
-                    selected_title,
-                )
+                if pending_episodes:
+                    pending_labels = ", ".join(f"E{number:02d}" for number, _ in pending_episodes)
+                    await db.set_anime_archive_batch(
+                        anime_id, season_index, destination_id, "failed",
+                        "", f"released-episodes-only S{season_index}; pending {pending_labels}",
+                    )
+                    await report_stage(
+                        f"BACKFILL PARTIAL: {selected_title} Season {season_index}; "
+                        f"{len(pending_episodes)} episode(s) need retry ({pending_labels}). "
+                        "Remaining episodes were processed.",
+                        selected_title,
+                    )
+                else:
+                    await db.set_anime_archive_batch(
+                        anime_id, season_index, destination_id, "complete",
+                        "", f"released-episodes-only S{season_index} 4-quality",
+                    )
+                    await report_stage(
+                        f"ONGOING SEASON BACKFILL COMPLETE: {selected_title} Season {season_index}; "
+                        f"processed only the {released_episode_count} episode(s) confirmed released by AniList",
+                        selected_title,
+                    )
         
         
 
@@ -2286,18 +2329,20 @@ async def uploadchannel_callbacks(client, callback):
         ]
         if failures:
             await rep.report(
-                "One or more /uploadchannel anime workers failed:\n" + "\n".join(failures),
-                "error",
-            )
-            raise RuntimeError(
-                f"{len(failures)} of {len(archive_jobs)} anime backfill worker(s) failed. "
-                "Other workers were allowed to finish. " + "; ".join(failures)
+                "/uploadchannel finished with isolated worker failures:\n" + "\n".join(failures),
+                "warning",
             )
 
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         summary = "\n".join(f"• <b>{_escape(name)}</b> — <code>{chat_id}</code>" for name, chat_id, _, _ in created)
+        if failures:
+            summary += "\n\n<b>Needs retry:</b>\n" + "\n".join(
+                f"• {_escape(item)}" for item in failures
+            )
         await callback.message.edit(
-            f"✅ Processed {len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n{summary}\n\nThe existing scheduled uploader can now route matching new releases through these mappings."
+            f"{'⚠️ Finished with warnings' if failures else '✅ Processed'} "
+            f"{len(created)} anime channel(s); existing channel mappings are reused to prevent duplicate creation.\n\n"
+            f"{summary}\n\nThe scheduled uploader setting was not changed."
         )
     except Exception as exc:
         await rep.report(
