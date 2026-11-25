@@ -636,10 +636,13 @@ async def send_sticker_to_channel(channel, sticker_id=None, client=None):
             f"after post to {channel} (message_id={sent_message.id})",
             "info"
         )
-        return True
+        # Return Telegram's actual message ID, not boolean True. Callers
+        # persist this value as a durable sticker checkpoint; returning True
+        # was stored as message_id=1 and made later retries falsely skip it.
+        return int(sent_message.id)
     except Exception as error:
         await rep.report(f"Priority sticker delivery failed for {channel}: {error}", "error")
-        return False
+        return None
 
 async def build_main_channel_announcement_caption(aniInfo, anime_name, episode_number, qualities, bold_title=True):
     """Build the exact established Main Channel caption with Telegram expandable synopsis."""
@@ -9440,9 +9443,11 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     # Updating an existing card is not a new publication.
                     sticker_targets = []
                 elif destination_channel is not None:
-                    # Both the selected anime channel and its Main Channel
-                    # join-request announcement receive one completion sticker.
+                    # The dedicated episode post and its Main Channel
+                    # join-request announcement each receive the priority sticker.
                     sticker_targets = [int(destination_channel)]
+                    if int(destination_channel) != int(Var.MAIN_CHANNEL):
+                        sticker_targets.append(int(Var.MAIN_CHANNEL))
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
                     sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
                 else:
