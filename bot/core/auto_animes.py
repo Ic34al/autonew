@@ -8811,7 +8811,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     return output_path
 
 
-async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False):
+async def get_animes(name, torrent, force=False, qualities_override=None, destination_channel=None, manual_search=False, mapped_channel=None, defer_main_announcement=False, retry_mode=False):
     # Manual selected-channel batches can hold automatic processing while active.
     mode = await db.get_mode()
     if mode != "anime":
@@ -8963,7 +8963,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # skip an existing destination post: continue to the FILE_STORE
         # checkpoint, reuse verified qualities, and publish a fresh post with
         # fresh Monkey file-share links.
-        if existing_target_post and not (force and manual_search):
+        if existing_target_post and not (force and manual_search) and not retry_mode:
             # Automatic ongoing RSS uploads must treat a confirmed destination
             # post as terminal: complete its resume record and cache the episode
             # so it is never downloaded, encoded, or retried again.
@@ -8991,7 +8991,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # episode even after it falls out of the RSS feed window.
         await db.saveAnimeResume(ani_id, ep_no, name, torrent, destination_channel=target_channel)
         
-        if force or not existing_target_post:
+        if force or retry_mode or not existing_target_post:
             
             if "[Batch]" in name or "(Batch)" in name:
                 await rep.report(f"Batch torrent detected; processing 720p batch: {name}", "info")
@@ -9324,7 +9324,31 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # Telegram may temporarily rate-limit the Main Channel post.
                 # Retry the publish step without re-uploading the already stored files.
                 last_publish_error = None
-                for publish_attempt in range(5):
+                if retry_mode and existing_target_post:
+                    # A retry resumes missing quality checkpoints on the original
+                    # episode card. Never create a second card for the same episode.
+                    try:
+                        existing_message = await bot.get_messages(
+                            chat_id=int(channel_to_use),
+                            message_ids=int(existing_target_post),
+                        )
+                        if not existing_message or getattr(existing_message, "empty", False):
+                            raise RuntimeError(
+                                f"Existing episode post {existing_target_post} is unavailable "
+                                f"in destination {channel_to_use}; refusing to create a duplicate."
+                            )
+                        await bot.edit_message_reply_markup(
+                            chat_id=int(channel_to_use),
+                            message_id=int(existing_target_post),
+                            reply_markup=markup,
+                        )
+                        post_msg = existing_message
+                    except Exception as retry_post_error:
+                        raise RuntimeError(
+                            f"Could not safely update existing episode post for {name}: "
+                            f"{retry_post_error}"
+                        ) from retry_post_error
+                for publish_attempt in range(0 if post_msg is not None else 5):
                     try:
                         if destination_channel is not None:
                             # Manual /search and /addtask must publish to the
@@ -9401,14 +9425,21 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     )
 
                 # Persist the Main Channel post ID immediately after send succeeds.
-                if destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
+                if retry_mode and int(channel_to_use) != int(Var.MAIN_CHANNEL):
+                    await db.saveAnimeDestinationPost(
+                        ani_id, ep_no, int(channel_to_use), int(existing_target_post)
+                    )
+                elif destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
                 # Send stickers only after the episode post is confirmed.
                 sticker_targets = []
-                if destination_channel is not None:
+                if retry_mode:
+                    # Updating an existing card is not a new publication.
+                    sticker_targets = []
+                elif destination_channel is not None:
                     # Both the selected anime channel and its Main Channel
                     # join-request announcement receive one completion sticker.
                     sticker_targets = [int(destination_channel)]
