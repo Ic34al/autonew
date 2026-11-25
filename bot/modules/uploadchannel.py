@@ -470,7 +470,11 @@ async def _find_episode_torrent(media, season_number, episode_number):
                     }
                     if len(alias_tokens) >= 2:
                         overlap = len(alias_tokens & release_tokens)
-                        if overlap / len(alias_tokens) >= 0.60:
+                        # AniList season subtitles can differ substantially from
+                        # SubsPlease's canonical show title (e.g. Steel Ball Run).
+                        # Require at least two meaningful shared words, while
+                        # allowing a 45% overlap for long translated titles.
+                        if overlap >= 2 and overlap / len(alias_tokens) >= 0.45:
                             title_match = True
                             break
             if not title_match:
@@ -508,9 +512,10 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 continue
 
             detected_season = _season_number_from_release(title)
+            # Reject an explicitly different season. Some valid SubsPlease
+            # releases omit the season marker entirely; the title + exact episode
+            # match above is sufficient when no conflicting season is present.
             if detected_season is not None and detected_season != season:
-                continue
-            if season > 1 and detected_season != season:
                 continue
 
             torrent_link = None
@@ -596,15 +601,33 @@ async def _find_episode_torrent(media, season_number, episode_number):
                 episode_name = str(item.get("episode") or "").strip()
                 release_label = str(item.get("title") or release_key or "").strip()
                 candidate_show = _plain_title(show_name or release_label)
-                show_match = any(
-                    _plain_title(alias) == candidate_show
-                    or (
-                        len(_plain_title(alias).split()) >= 2
-                        and set(_plain_title(alias).split()).issubset(set(candidate_show.split()))
-                    )
-                    for alias in search_aliases
-                    if _plain_title(alias)
-                )
+                candidate_tokens = {
+                    token for token in candidate_show.split()
+                    if len(token) > 2 and not token.isdigit()
+                }
+                show_match = False
+                for alias in search_aliases:
+                    alias_key = _plain_title(alias)
+                    alias_tokens = {
+                        token for token in alias_key.split()
+                        if len(token) > 2 and not token.isdigit()
+                        and token not in {
+                            "the", "and", "for", "with", "from", "that",
+                            "this", "her", "his", "their", "you", "your", "into",
+                        }
+                    }
+                    overlap = len(alias_tokens & candidate_tokens)
+                    if (
+                        alias_key == candidate_show
+                        or (alias_tokens and alias_tokens.issubset(candidate_tokens))
+                        or (
+                            len(alias_tokens) >= 2
+                            and overlap >= 2
+                            and overlap / len(alias_tokens) >= 0.45
+                        )
+                    ):
+                        show_match = True
+                        break
                 if not show_match:
                     continue
 
@@ -636,9 +659,11 @@ async def _find_episode_torrent(media, season_number, episode_number):
                     or _season_number_from_release(release_label)
                     or _season_number_from_release(show_name)
                 )
+                # A SubsPlease show-search result can expose only a numeric
+                # episode ("01") because its show catalogue is already scoped
+                # to the selected title. Reject explicit season conflicts, but
+                # do not reject a valid exact episode solely for a missing marker.
                 if detected_season is not None and detected_season != season:
-                    continue
-                if season > 1 and detected_season != season:
                     continue
 
                 downloads = item.get("downloads") or []
