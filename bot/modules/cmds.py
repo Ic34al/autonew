@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_main_channel_announcement_caption, build_anime_watch_markup, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_main_channel_announcement_caption, build_anime_watch_markup, get_or_create_anime_channel, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -3196,7 +3196,12 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
                 episode_data = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
                 if not isinstance(episode_data, dict):
                     episode_data = {}
-                has_post = bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
+                retry_channel = int(await get_or_create_anime_channel(title, info))
+                has_post = (
+                    bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
+                    if retry_channel == int(Var.MAIN_CHANNEL)
+                    else bool(await db.getAnimeDestinationPost(ani_id, str(ep_no), retry_channel))
+                )
                 if all(episode_data.get(q) for q in required_qualities) and has_post:
                     continue
                 queue.append((title, link))
@@ -3288,7 +3293,7 @@ async def run_selected_retry(client, status, target_date, queue):
                     f"<code>{title}</code>\\n"
                     f"<i>Reusing saved quality checkpoints...</i>"
                 )
-                result = await get_animes(title, link, force=True, manual_search=True)
+                result = await get_animes(title, link, force=False, manual_search=True, retry_mode=True)
                 if cancel_event.is_set():
                     raise asyncio.CancelledError()
                 verify = TextEditor(title)
@@ -3299,7 +3304,16 @@ async def run_selected_retry(client, status, target_date, queue):
                     ep_no = ep_no[0] if ep_no else None
                 saved = await db.getAnime(ani_id) if ani_id is not None else {}
                 episode = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
-                has_post = bool(await db.getAnimeMainPost(ani_id, str(ep_no))) if ani_id is not None and ep_no is not None else False
+                verify_channel = (
+                    int(await get_or_create_anime_channel(title, verify))
+                    if ani_id is not None and ep_no is not None
+                    else int(Var.MAIN_CHANNEL)
+                )
+                has_post = (
+                    bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
+                    if verify_channel == int(Var.MAIN_CHANNEL)
+                    else bool(await db.getAnimeDestinationPost(ani_id, str(ep_no), verify_channel))
+                ) if ani_id is not None and ep_no is not None else False
                 missing = []
                 if not isinstance(episode, dict):
                     missing.extend(required_qualities)
