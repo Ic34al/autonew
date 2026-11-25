@@ -910,7 +910,10 @@ async def _upload_single_episode(media, destination_id, season_number, episode_n
                 media.get("id"), season_number, sticker_episode_key,
                 destination_id, stage_key,
             )
-            if saved_sticker and not force_repost:
+            # Older builds persisted bool True as message_id=1 because
+            # send_sticker_to_channel returned a boolean. Treat that sentinel
+            # as an invalid checkpoint and send the real priority sticker.
+            if saved_sticker and int(saved_sticker) > 1 and not force_repost:
                 return
             sticker_message_id = await send_sticker_to_channel(
                 destination_id, getattr(Var, "STICKER_ID", None), client=bot
