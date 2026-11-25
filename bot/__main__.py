@@ -15,6 +15,7 @@ from bot.modules.up_posts import upcoming_animes as legacy_upcoming_animes
 from bot.modules.daily_schedule import upcoming_animes
 from bot.web import start_server
 from bot.core.database import db
+from bot.core.auto_animes import fetch_animes
 @bot.on_message(command('restart') & user(Var.ADMINS))
 @new_task
 async def restart(client, message):
@@ -206,11 +207,12 @@ async def main():
 
             LOGS.info("Starting tasks...")
             LOGS.info(
-                "Automatic RSS anime uploads are OFF. "
-                "Manual /uploadchannel remains available."
+                "Automatic RSS anime uploads are ON. "
+                "The SubsPlease scanner and unfinished-episode recovery are enabled."
             )
             tasks = [
                 create_task(queue_loop(), name="app-queue-loop"),
+                create_task(fetch_animes(), name="app-anime-rss"),
             ]
 
             LOGS.info("Auto Anime Bot Started!")
