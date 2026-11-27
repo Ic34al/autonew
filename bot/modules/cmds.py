@@ -9,7 +9,7 @@ from pyrogram import filters, Client
 from pyrogram.types import Message
 import subprocess
 from bot import bot, bot_loop, Var, ani_cache
-from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_main_channel_announcement_caption, build_anime_watch_markup, get_or_create_anime_channel, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
+from bot.core.auto_animes import get_animes, process_manga_chapter, process_batch_anime, send_sticker_to_channel, build_anime_soul_poster, build_main_channel_announcement_caption, build_anime_watch_markup, get_or_create_anime_channel, resolve_upload_destination, AUTO_UPLOAD_PRIORITY_LOCK, AUTO_UPLOAD_PRIORITY_PENDING, MANUAL_SEARCH_HOLD
 from bot.core.text_utils import TextEditor
 from bot.core.database import db
 from bot.core.func_utils import decode, is_fsubbed, get_fsubs, editMessage, sendMessage, new_task, convertTime, getfeed, getfeeds, encode, get_message_id, get_messages 
@@ -88,6 +88,48 @@ async def get_chat_cached(client, chat_id, ttl=900):
                 )
                 await asyncio.sleep(wait_seconds)
         raise RuntimeError(f"Telegram kept rate-limiting channel lookup for {chat_id}.")
+
+
+async def resolve_manual_upload_destination(client, destination, source="selected channel"):
+    """Validate bot posting rights and safely fall back to Main Channel."""
+    main_id = int(Var.MAIN_CHANNEL)
+    try:
+        requested_id = int(destination)
+    except (TypeError, ValueError):
+        requested_id = main_id
+
+    async def _can_post(channel_id):
+        try:
+            chat = await get_chat_cached(client, channel_id, ttl=0)
+            me = await client.get_me()
+            member = await client.get_chat_member(channel_id, me.id)
+            status = str(getattr(member, "status", "")).casefold()
+            is_admin = status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")
+            if not is_admin or getattr(member, "can_post_messages", True) is False:
+                return None
+            return chat
+        except Exception:
+            return None
+
+    chat = await _can_post(requested_id)
+    if chat:
+        return requested_id, chat
+    if requested_id == main_id:
+        raise RuntimeError(
+            f"Main Channel {main_id} is inaccessible or the bot cannot post there. "
+            "Check MAIN_CHANNEL and grant the bot administrator/post permission."
+        )
+    main_chat = await _can_post(main_id)
+    if not main_chat:
+        raise RuntimeError(
+            f"{source} {requested_id} is inaccessible, and Main Channel {main_id} "
+            "is also inaccessible to the bot."
+        )
+    await rep.report(
+        f"{source} {requested_id} is deleted/inaccessible; switched this batch to Main Channel {main_id}.",
+        "warning",
+    )
+    return main_id, main_chat
 
 async def publish_manual_search_batch_announcement(anime_name, queue, destination):
     """Publish one combined Main Channel card and its completion sticker per batch."""
@@ -3196,7 +3238,10 @@ async def run_retry_for_date(client, status, target_date, anime_filter=None):
                 episode_data = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
                 if not isinstance(episode_data, dict):
                     episode_data = {}
-                retry_channel = int(await get_or_create_anime_channel(title, info))
+                retry_channel = await resolve_upload_destination(
+                    await get_or_create_anime_channel(title, info),
+                    source="/retry mapped anime channel",
+                )
                 has_post = (
                     bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
                     if retry_channel == int(Var.MAIN_CHANNEL)
@@ -3305,7 +3350,10 @@ async def run_selected_retry(client, status, target_date, queue):
                 saved = await db.getAnime(ani_id) if ani_id is not None else {}
                 episode = saved.get(str(ep_no), {}) if isinstance(saved, dict) else {}
                 verify_channel = (
-                    int(await get_or_create_anime_channel(title, verify))
+                    await resolve_upload_destination(
+                        await get_or_create_anime_channel(title, verify),
+                        source="/retry mapped anime channel",
+                    )
                     if ani_id is not None and ep_no is not None
                     else int(Var.MAIN_CHANNEL)
                 )
@@ -3523,14 +3571,9 @@ async def addtask_destination_callback(client, callback_query):
     try:
         destination = int(callback_query.data.split(":", 1)[1])
         await callback_query.answer("Checking destination channel...")
-        chat = await get_chat_cached(client, destination)
-        me = await client.get_me()
-        member = await client.get_chat_member(destination, me.id)
-        status = str(getattr(member, "status", "")).lower()
-        if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
-            return await callback_query.message.edit_text("<b>Bot is not an administrator in this channel.</b>")
-        if getattr(member, "can_post_messages", True) is False:
-            return await callback_query.message.edit_text("<b>Bot cannot post in this channel.</b>")
+        destination, chat = await resolve_manual_upload_destination(
+            client, destination, source="Selected /addtask channel"
+        )
 
         urls = PENDING_ADDTASK_BATCHES.pop(callback_query.from_user.id, [])
         if not urls:
@@ -4892,14 +4935,13 @@ async def anime_search_destination_callback(client, callback_query):
     if not state or state["user_id"] != callback_query.from_user.id:
         return await callback_query.message.edit_text("<b>Search results expired. Run /search again.</b>")
     try:
-        chat = await get_chat_cached(client, destination)
-        me = await client.get_me()
-        member = await client.get_chat_member(destination, me.id)
-        status = str(getattr(member, "status", "")).lower()
-        if not (status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")):
-            return await callback_query.message.edit_text("<b>Bot is not an administrator in this channel.</b>")
-        if getattr(member, "can_post_messages", True) is False:
-            return await callback_query.message.edit_text("<b>Bot cannot post in this channel.</b>")
+        destination, chat = await resolve_manual_upload_destination(
+            client, destination, source="Selected /search channel"
+        )
+    except Exception as destination_error:
+        return await callback_query.message.edit_text(
+            f"<b>Cannot publish to selected channel or Main Channel:</b> {str(destination_error)[:400]}"
+        )
 
         queue = [state["episodes"][i] for i in sorted(state["selected"])]
         anime_name = state["anime"]
@@ -4972,15 +5014,16 @@ async def anime_search_destination_callback(client, callback_query):
             finally:
                 MANUAL_SEARCH_HOLD.clear()
 
-        main_announcement_sent = False
+        main_announcement_sent = destination == int(Var.MAIN_CHANNEL) and (completed + skipped > 0)
         if failed == 0 and completed + skipped > 0:
             try:
-                await publish_manual_search_batch_announcement(
-                    anime_name, queue, destination
-                )
-                main_announcement_sent = True
-                # Keep the selected batch resumable until its single Main post
-                # has been sent; only then mark every episode task complete.
+                if destination != int(Var.MAIN_CHANNEL):
+                    await publish_manual_search_batch_announcement(
+                        anime_name, queue, destination
+                    )
+                    main_announcement_sent = True
+                # If Main Channel was selected/fallback, each episode card is
+                # already published there; do not create a duplicate batch card.
                 for position in range(len(queue)):
                     await db.markManualSearchTaskComplete(f"{batch_id}:{position}")
             except Exception as announcement_error:
@@ -4995,7 +5038,7 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Selected destination:</b> {chat.title or destination}\n"
             f"<b>Posted:</b> {completed}\n<b>Already in this channel:</b> {skipped}\n"
             f"<b>Failed / unconfirmed:</b> {failed}\n"
-            f"<b>Main Channel:</b> {'One join-request announcement sent after the full batch.' if main_announcement_sent else 'No announcement sent; check failed/unconfirmed uploads.'}"
+            f"<b>Main Channel:</b> {'Episodes posted directly here.' if destination == int(Var.MAIN_CHANNEL) and main_announcement_sent else 'One join-request announcement sent after the full batch.' if main_announcement_sent else 'No announcement sent; check failed/unconfirmed uploads.'}"
         )
     except Exception as error:
         await callback_query.message.edit_text(f"<b>Could not upload to selected channel:</b> {str(error)[:500]}")
