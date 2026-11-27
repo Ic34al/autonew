@@ -1763,6 +1763,10 @@ async def uploadchannel_command(client, message):
             "selected": set(),
             "created": [],
             "page": 0,
+            # Bind callbacks to this exact menu message. An older keyboard must
+            # never mutate a newer /uploadchannel selection from the same admin.
+            "message_id": status.id,
+            "lock": asyncio.Lock(),
         }
         requested_title = message.text.split(None, 1)[1].strip() if len(message.text.split(None, 1)) > 1 else ""
         if requested_title:
@@ -1812,8 +1816,12 @@ async def uploadchannel_callbacks(client, callback):
     state = UPLOAD_CHANNEL_SESSIONS.get(owner_id)
     if owner_id not in Var.ADMINS or not state:
         return await callback.answer("This selection has expired. Run /uploadchannel again.", show_alert=True)
+    if int(getattr(callback.message, "id", 0) or 0) != int(state.get("message_id", 0) or 0):
+        return await callback.answer("This is an older menu. Run /uploadchannel again.", show_alert=True)
 
     data = callback.data
+    # Acknowledge before any Telegram edit or lock wait; otherwise slow edit RPCs
+    # leave the inline keyboard looking tappable while Telegram times out the tap.
     if data == "uc:noop":
         return await callback.answer()
     if data.startswith("uc:page:"):
@@ -1821,26 +1829,44 @@ async def uploadchannel_callbacks(client, callback):
             page = int(data.rsplit(":", 1)[1])
         except ValueError:
             return await callback.answer("Invalid page.", show_alert=True)
-        state["page"] = max(0, page)
-        await callback.message.edit_reply_markup(
-            _selection_keyboard(state["items"], state["selected"], page=state["page"])
-        )
-        return await callback.answer()
+        await callback.answer("Updating page…")
+        async with state.setdefault("lock", asyncio.Lock()):
+            state["page"] = max(0, page)
+            await callback.message.edit_reply_markup(
+                _selection_keyboard(state["items"], state["selected"], page=state["page"])
+            )
+        return
     if data == "uc:cancel":
+        await callback.answer("Selection cancelled.")
         UPLOAD_CHANNEL_SESSIONS.pop(owner_id, None)
         return await callback.message.edit("Channel creation cancelled.")
     if data.startswith("uc:toggle:"):
-        index = int(data.rsplit(":", 1)[1])
+        try:
+            index = int(data.rsplit(":", 1)[1])
+        except ValueError:
+            return await callback.answer("Invalid anime selection.", show_alert=True)
         if index < 0 or index >= len(state["items"]):
             return await callback.answer("Invalid anime selection.", show_alert=True)
-        if index in state["selected"]:
-            state["selected"].remove(index)
-        else:
-            state["selected"].add(index)
-        await callback.message.edit_reply_markup(
-            _selection_keyboard(state["items"], state["selected"])
-        )
-        return await callback.answer(f"{len(state['selected'])} selected")
+        async with state.setdefault("lock", asyncio.Lock()):
+            if index in state["selected"]:
+                state["selected"].remove(index)
+            else:
+                state["selected"].add(index)
+            selected_count = len(state["selected"])
+            await callback.answer(f"{selected_count} selected")
+            try:
+                await callback.message.edit_reply_markup(
+                    _selection_keyboard(state["items"], state["selected"], page=state.get("page", 0))
+                )
+            except Exception as edit_error:
+                await rep.report(
+                    f"/uploadchannel selection update failed for {owner_id}, item {index}: "
+                    f"{type(edit_error).__name__}: {edit_error}",
+                    "warning",
+                    log=False,
+                )
+                raise
+        return
 
     if data != "uc:create":
         return await callback.answer()
