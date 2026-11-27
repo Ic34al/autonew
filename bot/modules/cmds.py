@@ -3357,18 +3357,25 @@ async def run_selected_retry(client, status, target_date, queue):
                     if ani_id is not None and ep_no is not None
                     else int(Var.MAIN_CHANNEL)
                 )
-                has_post = (
+                has_destination_post = (
                     bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
                     if verify_channel == int(Var.MAIN_CHANNEL)
                     else bool(await db.getAnimeDestinationPost(ani_id, str(ep_no), verify_channel))
                 ) if ani_id is not None and ep_no is not None else False
+                has_main_post = (
+                    bool(await db.getAnimeMainPost(ani_id, str(ep_no)))
+                    if ani_id is not None and ep_no is not None
+                    else False
+                )
                 missing = []
                 if not isinstance(episode, dict):
                     missing.extend(required_qualities)
                 else:
                     missing.extend(q for q in required_qualities if not episode.get(q))
-                if not has_post:
-                    missing.append("Main Channel post")
+                if not has_destination_post:
+                    missing.append("dedicated episode post" if verify_channel != int(Var.MAIN_CHANNEL) else "Main Channel episode post")
+                if verify_channel != int(Var.MAIN_CHANNEL) and not has_main_post:
+                    missing.append("Main Channel request announcement")
                 if missing:
                     reason = f"not complete ({', '.join(missing)}); pipeline result={result!r}"
                     failed.append((title, reason))
