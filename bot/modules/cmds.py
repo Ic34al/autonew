@@ -4979,6 +4979,10 @@ async def anime_search_destination_callback(client, callback_query):
             f"<b>Cannot publish to selected channel or Main Channel:</b> {str(destination_error)[:400]}"
         )
 
+    # Keep the batch workflow in its own try block. Previously this code was
+    # indented inside the destination-error handler, after an unconditional
+    # return, so a successful channel selection never started the upload.
+    try:
         queue = [state["episodes"][i] for i in sorted(state["selected"])]
         anime_name = state["anime"]
         batch_id = secrets.token_hex(8)
