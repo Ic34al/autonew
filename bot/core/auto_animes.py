@@ -7693,7 +7693,9 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
 
         episode_key = f"{ani_id}:{ep_no}"
         episode_lock_token = uuid.uuid4().hex
-        if not await db.claimAnimeEpisode(ani_id, ep_no, episode_lock_token):
+        if not await db.claimAnimeEpisode(
+            ani_id, ep_no, episode_lock_token, takeover=bool(retry_mode)
+        ):
             return "in_progress"
 
         encoding_enabled = await db.get_encoding()
