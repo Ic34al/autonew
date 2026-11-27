@@ -9062,7 +9062,9 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
         # Claim only after duplicate/complete-post checks. Every path after this
         # point is inside the function's try/finally and releases the token.
         episode_lock_token = uuid.uuid4().hex
-        if not await db.claimAnimeEpisode(ani_id, ep_no, episode_lock_token):
+        if not await db.claimAnimeEpisode(
+            ani_id, ep_no, episode_lock_token, takeover=bool(retry_mode)
+        ):
             ani_cache['ongoing'].discard(episode_key)
             return "in_progress"
 
