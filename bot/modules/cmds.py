@@ -3606,6 +3606,7 @@ async def addtask_destination_callback(client, callback_query):
         )
 
         async def run_addtask_batch():
+            nonlocal destination, chat
             completed, skipped, failed = 0, 0, []
             announcement_queue = []
             main_announcement_sent = False
