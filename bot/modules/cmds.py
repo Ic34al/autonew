@@ -3635,6 +3635,12 @@ async def addtask_destination_callback(client, callback_query):
                         qualities_override=list(Var.QUALS),
                         defer_main_announcement=(int(destination) != int(Var.MAIN_CHANNEL))
                     )
+                    if destination != int(Var.MAIN_CHANNEL):
+                        # Keep the rest of this batch and its final announcement
+                        # aligned if the chosen destination disappears mid-run.
+                        destination, chat = await resolve_manual_upload_destination(
+                            client, destination, source="/addtask batch destination"
+                        )
                     if result in ("uploaded", "already_published"):
                         completed += 1
                         announcement_queue.append((task_info.title, task_info.link))
@@ -4984,6 +4990,12 @@ async def anime_search_destination_callback(client, callback_query):
                                 title, torrent, force=True, manual_search=True,
                                 destination_channel=destination,
                                 defer_main_announcement=True
+                            )
+                        if destination != int(Var.MAIN_CHANNEL):
+                            # Re-check after each episode; if the selected channel
+                            # was deleted mid-batch, remaining episodes go to Main.
+                            destination, chat = await resolve_manual_upload_destination(
+                                client, destination, source="/search batch destination"
                             )
                         if result == "already_published":
                             skipped += 1
