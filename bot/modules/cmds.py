@@ -3334,8 +3334,8 @@ async def run_selected_retry(client, status, target_date, queue):
                 raise asyncio.CancelledError()
             try:
                 await status.edit_text(
-                    f"<b>Retrying {index}/{len(queue)}</b>\\n"
-                    f"<code>{title}</code>\\n"
+                    f"<b>Retrying {index}/{len(queue)}</b>\n"
+                    f"<code>{title}</code>\n"
                     f"<i>Reusing saved quality checkpoints...</i>"
                 )
                 result = await get_animes(title, link, force=False, manual_search=True, retry_mode=True)
@@ -3393,12 +3393,12 @@ async def run_selected_retry(client, status, target_date, queue):
                 # rest of the user's explicitly selected retry queue.
                 continue
         summary = (
-            f"<b>/retry finished.</b>\\nDate: <code>{target_date.isoformat()}</code> (IST)\\n"
-            f"Selected: <code>{len(queue)}</code>\\nCompleted: <code>{completed}</code>\\n"
+            f"<b>/retry finished.</b>\nDate: <code>{target_date.isoformat()}</code> (IST)\n"
+            f"Selected: <code>{len(queue)}</code>\nCompleted: <code>{completed}</code>\n"
             f"Failed: <code>{len(failed)}</code>"
         )
         if failed:
-            summary += "\\n\\n<b>Failed items and reasons:</b>\\n" + "\\n".join(
+            summary += "\n\n<b>Failed items and reasons:</b>\n" + "\n".join(
                 f"• <code>{title[:90]}</code> — {reason[:220]}" for title, reason in failed[:8]
             )
         await status.edit_text(summary)
