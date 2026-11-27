@@ -8423,16 +8423,12 @@ async def fetch_animes():
                         await asleep(2)
                     AUTO_UPLOAD_PRIORITY_PENDING.set()
                     async with AUTO_UPLOAD_PRIORITY_LOCK:
-                        # Pass the resolved destination through the parameter
-                        # get_animes actually supports. Mapped releases go to their
-                        # /addanime channel; unmapped releases explicitly go to Main.
-                        result = await get_animes(
-                            title,
-                            link,
-                            destination_channel=(
-                                Var.MAIN_CHANNEL if route_to_main else int(selected_channel)
-                            ),
-                        )
+                        # Let the canonical resolver re-check /addanime and
+                        # selected-channel mappings for every release. Passing a
+                        # cached selected_channel here bypasses stale/deleted mapping
+                        # cleanup and can route a new RSS episode to a dead channel.
+                        # The resolver chooses a valid dedicated channel or Main.
+                        result = await get_animes(title, link)
                     if result in ("uploaded", "already_published"):
                         seen_links.add(link)
                         retry_after.pop(link, None)
