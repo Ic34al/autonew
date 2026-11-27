@@ -4777,23 +4777,39 @@ async def anime_search_cmd(client, message: Message):
 
 @bot.on_callback_query(filters.regex(r"^aselect:(\d+):(\d+)$"))
 async def anime_search_select_callback(client, callback_query):
-    if callback_query.from_user.id not in Var.ADMINS:
-        return await callback_query.answer("Not authorized.", show_alert=True)
-    _, message_id, raw_index = callback_query.data.split(":")
-    state = ANIME_SEARCH_RESULTS.get(int(message_id))
-    if not state or state["user_id"] != callback_query.from_user.id:
-        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
-    index = int(raw_index)
-    if index >= len(state["episodes"]):
-        return await callback_query.answer("Episode not found.", show_alert=True)
-    if index in state["selected"]:
-        state["selected"].remove(index)
-    else:
-        state["selected"].add(index)
-    await callback_query.message.edit_reply_markup(
-        reply_markup=build_anime_search_keyboard(int(message_id), state)
-    )
-    await callback_query.answer("Selection updated.")
+    # Acknowledge the tap before editing Telegram markup; slow edits otherwise
+    # leave the iOS client showing a spinner and make the button feel dead.
+    try:
+        await callback_query.answer("Updating selection...")
+    except Exception:
+        pass
+    if not callback_query.from_user or callback_query.from_user.id not in Var.ADMINS:
+        return
+    try:
+        _, message_id, raw_index = callback_query.data.split(":")
+        message_id, index = int(message_id), int(raw_index)
+        state = ANIME_SEARCH_RESULTS.get(message_id)
+        if not state or state["user_id"] != callback_query.from_user.id:
+            return await callback_query.message.reply_text(
+                "<b>Search selection expired.</b> Run /search again."
+            )
+        if index < 0 or index >= len(state["episodes"]):
+            return await callback_query.message.reply_text("<b>Episode selection is invalid.</b> Run /search again.")
+        if index in state["selected"]:
+            state["selected"].remove(index)
+        else:
+            state["selected"].add(index)
+        await callback_query.message.edit_reply_markup(
+            reply_markup=build_anime_search_keyboard(message_id, state)
+        )
+    except Exception as error:
+        await rep.report(f"/search selection callback failed: {error}", "error")
+        try:
+            await callback_query.message.reply_text(
+                f"<b>Could not update selection:</b> <code>{str(error)[:250]}</code>"
+            )
+        except Exception:
+            pass
 
 
 def build_anime_search_keyboard(message_id, state):
@@ -4825,28 +4841,34 @@ def build_anime_search_keyboard(message_id, state):
 
 @bot.on_callback_query(filters.regex(r"^aselectall:(\d+)$"))
 async def anime_search_select_all_callback(client, callback_query):
-    if callback_query.from_user.id not in Var.ADMINS:
-        return await callback_query.answer("Not authorized.", show_alert=True)
+    try:
+        await callback_query.answer("Selecting all...")
+    except Exception:
+        pass
+    if not callback_query.from_user or callback_query.from_user.id not in Var.ADMINS:
+        return
     message_id = int(callback_query.data.split(":")[1])
     state = ANIME_SEARCH_RESULTS.get(message_id)
     if not state or state["user_id"] != callback_query.from_user.id:
-        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+        return await callback_query.message.reply_text("<b>Search selection expired.</b> Run /search again.")
     state["selected"] = set(range(len(state["episodes"])))
     await callback_query.message.edit_reply_markup(reply_markup=build_anime_search_keyboard(message_id, state))
-    await callback_query.answer("All episodes selected.")
 
 
 @bot.on_callback_query(filters.regex(r"^aselectclear:(\d+)$"))
 async def anime_search_clear_callback(client, callback_query):
-    if callback_query.from_user.id not in Var.ADMINS:
-        return await callback_query.answer("Not authorized.", show_alert=True)
+    try:
+        await callback_query.answer("Clearing selection...")
+    except Exception:
+        pass
+    if not callback_query.from_user or callback_query.from_user.id not in Var.ADMINS:
+        return
     message_id = int(callback_query.data.split(":")[1])
     state = ANIME_SEARCH_RESULTS.get(message_id)
     if not state or state["user_id"] != callback_query.from_user.id:
-        return await callback_query.answer("Search results expired. Run /search again.", show_alert=True)
+        return await callback_query.message.reply_text("<b>Search selection expired.</b> Run /search again.")
     state["selected"].clear()
     await callback_query.message.edit_reply_markup(reply_markup=build_anime_search_keyboard(message_id, state))
-    await callback_query.answer("Selection cleared.")
 
 
 @bot.on_callback_query(filters.regex(r"^aupload:(\d+)$"))
