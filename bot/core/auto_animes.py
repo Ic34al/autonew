@@ -8535,9 +8535,12 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                 )
                 return chat.id
 
+        # Missing mapping is a normal fallback, not an operational warning.
+        # Keep expected fallback decisions out of the high-volume Anime Logs channel.
         await rep.report(
             f"No /addanime channel mapping found for '{base_name}'; using Main Channel.",
-            "warning"
+            "info",
+            log=False
         )
         return Var.MAIN_CHANNEL
     except Exception as error:
