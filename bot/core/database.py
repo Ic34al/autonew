@@ -316,8 +316,8 @@ class MongoDB:
 
         # Older releases stored the Main Channel message ID as msg_id.
         return episode_data.get("main_msg_id") or episode_data.get("msg_id")
-    async def claimAnimeEpisode(self, ani_id, ep, token):
-        """Claim a verified episode globally across all bot workers."""
+    async def claimAnimeEpisode(self, ani_id, ep, token, takeover=False):
+        """Claim an episode; explicit admin retry may recover an orphaned worker lock."""
         # Fail closed: an unknown episode must never bypass duplicate protection.
         if ani_id is None or ep is None or not token:
             return False
@@ -327,6 +327,17 @@ class MongoDB:
         expires = now + datetime.timedelta(hours=12)
 
         try:
+            if takeover:
+                # Called only by the explicit admin /retry path after its local
+                # in-process active-task guard. Replace a stale lock left by a
+                # worker crash so retries are not blocked for the full 12-hour TTL.
+                result = await self.__db.episode_locks.update_one(
+                    {"_id": key},
+                    {"$set": {"token": token, "expires_at": expires}},
+                    upsert=True,
+                )
+                return bool(result.acknowledged)
+
             await self.__db.episode_locks.update_one(
                 {
                     "_id": key,
