@@ -752,6 +752,39 @@ async def validate_channel_id(channel_id):
             return None
     return None
 
+
+async def resolve_upload_destination(channel_id, source="episode destination"):
+    """Use the requested channel when reachable; otherwise safely use Main Channel."""
+    main_id = int(Var.MAIN_CHANNEL)
+    try:
+        requested_id = int(channel_id) if channel_id is not None else main_id
+    except (TypeError, ValueError):
+        requested_id = main_id
+
+    requested_chat = await validate_channel_id(requested_id)
+    if requested_chat:
+        return int(getattr(requested_chat, "id", requested_id))
+
+    if requested_id == main_id:
+        raise RuntimeError(
+            f"Main Channel {main_id} is inaccessible to this bot. "
+            "Check MAIN_CHANNEL and ensure the bot is an administrator with post permission."
+        )
+
+    main_chat = await validate_channel_id(main_id)
+    if not main_chat:
+        raise RuntimeError(
+            f"{source} {requested_id} is inaccessible, and Main Channel {main_id} "
+            "is also inaccessible. No episode was published."
+        )
+
+    await rep.report(
+        f"{source} {requested_id} is inaccessible/deleted; routing this episode to "
+        f"Main Channel {main_id}.",
+        "warning",
+    )
+    return int(getattr(main_chat, "id", main_id))
+
 async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
     try:
         main_post = None
@@ -7662,6 +7695,10 @@ async def process_low_end(name, torrent_url, force=False, destination_channel=No
             if mapped_channel is not None
             else int(await get_or_create_anime_channel(name, aniInfo))
         )
+        target_channel = await resolve_upload_destination(
+            target_channel,
+            source="Selected /configured anime destination",
+        )
         existing_target_post = (
             await db.getAnimeMainPost(ani_id, ep_no)
             if target_channel == int(Var.MAIN_CHANNEL)
@@ -8458,10 +8495,14 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                     continue
                 chat = await validate_channel_id(mapped)
                 if not chat:
-                    raise RuntimeError(
-                        f"Configured /addanime channel {mapped} for '{key}' is inaccessible. "
-                        "Episode upload stopped to prevent publishing to the wrong channel."
+                    # Stale/deleted mapping: continue checking aliases. If no
+                    # valid mapping remains, the resolver below uses Main Channel.
+                    await rep.report(
+                        f"Saved /addanime channel {mapped} for '{key}' is inaccessible/deleted; "
+                        "skipping this mapping and checking remaining aliases.",
+                        "warning",
                     )
+                    continue
                 await rep.report(
                     f"Dedicated channel mapping matched: {base_name} -> {chat.id} (alias: {key}). "
                     "Main Channel will receive the join-request announcement.",
@@ -8475,8 +8516,12 @@ async def get_or_create_anime_channel(name: str, aniInfo):
         )
         return Var.MAIN_CHANNEL
     except Exception as error:
-        await rep.report(f"Dedicated-channel lookup failed for {name}: {error}", "error")
-        raise
+        # Mapping/alias database problems must not block RSS download and encoding.
+        await rep.report(
+            f"Dedicated-channel lookup failed for {name}: {error}; using Main Channel.",
+            "warning",
+        )
+        return Var.MAIN_CHANNEL
 
 
 async def create_anime_channel(name, aniInfo):
@@ -8956,6 +9001,10 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             else int(mapped_channel)
             if mapped_channel is not None
             else int(await get_or_create_anime_channel(name, aniInfo))
+        )
+        target_channel = await resolve_upload_destination(
+            target_channel,
+            source="Selected /configured anime destination",
         )
         existing_target_post = (
             await db.getAnimeMainPost(ani_id, ep_no)
