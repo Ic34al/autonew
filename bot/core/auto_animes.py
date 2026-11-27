@@ -761,7 +761,22 @@ async def resolve_upload_destination(channel_id, source="episode destination"):
     except (TypeError, ValueError):
         requested_id = main_id
 
-    requested_chat = await validate_channel_id(requested_id)
+    async def _bot_can_publish(candidate_id):
+        candidate_chat = await validate_channel_id(candidate_id)
+        if not candidate_chat:
+            return None
+        try:
+            bot_me = await bot.get_me()
+            member = await bot.get_chat_member(candidate_id, bot_me.id)
+            status = str(getattr(member, "status", "")).casefold()
+            is_admin = status.endswith("administrator") or status.endswith("owner") or status.endswith("creator")
+            if not is_admin or getattr(member, "can_post_messages", True) is False:
+                return None
+            return candidate_chat
+        except Exception:
+            return None
+
+    requested_chat = await _bot_can_publish(requested_id)
     if requested_chat:
         return int(getattr(requested_chat, "id", requested_id))
 
@@ -771,7 +786,7 @@ async def resolve_upload_destination(channel_id, source="episode destination"):
             "Check MAIN_CHANNEL and ensure the bot is an administrator with post permission."
         )
 
-    main_chat = await validate_channel_id(main_id)
+    main_chat = await _bot_can_publish(main_id)
     if not main_chat:
         raise RuntimeError(
             f"{source} {requested_id} is inaccessible, and Main Channel {main_id} "
@@ -9006,6 +9021,11 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             target_channel,
             source="Selected /configured anime destination",
         )
+
+        # The publication branch below uses destination_channel directly. Keep it
+        # synchronized with the validated fallback target to avoid sending to a stale ID.
+        if destination_channel is not None:
+            destination_channel = target_channel
         existing_target_post = (
             await db.getAnimeMainPost(ani_id, ep_no)
             if target_channel == int(Var.MAIN_CHANNEL)
