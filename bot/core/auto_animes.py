@@ -8510,11 +8510,25 @@ async def get_or_create_anime_channel(name: str, aniInfo):
                     continue
                 chat = await validate_channel_id(mapped)
                 if not chat:
-                    # Stale/deleted mapping: continue checking aliases. If no
-                    # valid mapping remains, the resolver below uses Main Channel.
+                    # Remove only the stale alias that was just validated. This
+                    # prevents every future RSS scan from reusing a deleted channel.
+                    try:
+                        await db.remove_anime_channel_mapping(key, mapped)
+                    except Exception as cleanup_error:
+                        await rep.report(
+                            f"Could not remove stale /addanime mapping '{key}' -> {mapped}: {cleanup_error}",
+                            "warning",
+                        )
+                    try:
+                        await db.remove_selected_anime_channel(key)
+                    except Exception as cleanup_error:
+                        await rep.report(
+                            f"Could not disable stale selected-channel mapping '{key}': {cleanup_error}",
+                            "warning",
+                        )
                     await rep.report(
-                        f"Saved /addanime channel {mapped} for '{key}' is inaccessible/deleted; "
-                        "skipping this mapping and checking remaining aliases.",
+                        f"Removed inaccessible/deleted channel mapping {mapped} for '{key}'; "
+                        "checking remaining aliases and using Main Channel if none are valid.",
                         "warning",
                     )
                     continue
@@ -9415,6 +9429,31 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             reply_markup=markup,
                         )
                         post_msg = existing_message
+                        # A dedicated episode card and its Main Channel request
+                        # announcement are separate durable checkpoints. If an
+                        # older run saved the dedicated card but crashed before
+                        # announcing it, repair only the missing Main post.
+                        if (
+                            int(channel_to_use) != int(Var.MAIN_CHANNEL)
+                            and not await db.getAnimeMainPost(ani_id, ep_no)
+                        ):
+                            announcement_markup = await build_anime_watch_markup(channel_to_use)
+                            if photo_path and ospath.exists(photo_path):
+                                with open(photo_path, 'rb') as photo_file:
+                                    repaired_main_post = await bot.send_photo(
+                                        Var.MAIN_CHANNEL, photo=photo_file,
+                                        caption=caption, reply_markup=announcement_markup
+                                    )
+                            else:
+                                repaired_main_post = await bot.send_photo(
+                                    Var.MAIN_CHANNEL, photo=photo_url,
+                                    caption=caption, reply_markup=announcement_markup
+                                )
+                            if not repaired_main_post or not getattr(repaired_main_post, "id", None):
+                                raise RuntimeError(
+                                    f"Main Channel announcement repair was not confirmed for {name}."
+                                )
+                            await db.saveAnimeMainPost(ani_id, ep_no, repaired_main_post.id)
                     except Exception as retry_post_error:
                         raise RuntimeError(
                             f"Could not safely update existing episode post for {name}: "
