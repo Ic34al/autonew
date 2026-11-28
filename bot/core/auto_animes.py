@@ -207,28 +207,28 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
         return f"<b>{html.escape(str(value))}</b>"
 
     caption = (
-        f"<blockquote>❐ {bold(display_title)}</blockquote>\\n"
-        "✦─━━━━━━━━━━─✦\\n"
-        f"{bold('›› Sᴇᴀꜱᴏɴ: ' + season_number)}\\n"
-        f"{bold('›› Eᴘɪsᴏᴅᴇ: ' + episode_label)}\\n"
-        f"{bold('›› Qᴜᴀʟɪᴛʏ: ' + quality_text)}\\n"
-        f"{bold('›› Lᴀɴɢᴜᴀɢᴇ: ' + language)}\\n"
-        "✦─━━━━━━━━━━─✦\\n"
-        f"<blockquote>{bold('≡ Sᴛᴀᴛᴜꜱ: ' + status)}</blockquote>\\n"
-        f"<blockquote>{bold('≡ Pᴏᴡᴇʀᴇᴅ Bʏ: ')}<b><a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>\\n"
-        "✦─━━━━━━━━━━─✦\\n"
-        f"<blockquote>{bold('≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - ')}<b><a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a></b></blockquote>\\n"
+        f"<blockquote>❐ {bold(display_title)}</blockquote>\n"
+        "✦─━━━━━━━━━━─✦\n"
+        f"{bold('›› Sᴇᴀꜱᴏɴ: ' + season_number)}\n"
+        f"{bold('›› Eᴘɪsᴏᴅᴇ: ' + episode_label)}\n"
+        f"{bold('›› Qᴜᴀʟɪᴛʏ: ' + quality_text)}\n"
+        f"{bold('›› Lᴀɴɢᴜᴀɢᴇ: ' + language)}\n"
+        "✦─━━━━━━━━━━─✦\n"
+        f"<blockquote>{bold('≡ Sᴛᴀᴛᴜꜱ: ' + status)}</blockquote>\n"
+        f"<blockquote>{bold('≡ Pᴏᴡᴇʀᴇᴅ Bʏ: ')}<b><a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>\n"
+        "✦─━━━━━━━━━━─✦\n"
+        f"<blockquote>{bold('≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - ')}<b><a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a></b></blockquote>\n"
         f"<blockquote>{bold('≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ sᴜʙᴛɪᴛʟᴇs ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.')}</blockquote>"
     )
     description = re.sub(r"<[^>]+>", " ", str(data.get("description") or ""))
-    description = html.unescape(re.sub(r"\\s+", " ", description)).strip()
+    description = html.unescape(re.sub(r"\s+", " ", description)).strip()
     if description:
         synopsis = html.escape(description)
-        budget = max(0, 1024 - len(caption) - len("\\n<blockquote expandable><b>Synopsis:</b> </blockquote>"))
+        budget = max(0, 1024 - len(caption) - len("\n<blockquote expandable><b>Synopsis:</b> </blockquote>"))
         if len(synopsis) > budget:
             synopsis = synopsis[:max(0, budget - 3)].rsplit(" ", 1)[0] + "..."
         if synopsis:
-            caption += f"\\n<blockquote expandable><b>Synopsis:</b> {synopsis}</blockquote>"
+            caption += f"\n<blockquote expandable><b>Synopsis:</b> {synopsis}</blockquote>"
     return caption
 
 async def process_batch_anime(anime_name, torrent_url, audio, destination_channel=None, send_completion_sticker=True):
