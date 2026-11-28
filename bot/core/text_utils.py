@@ -948,10 +948,10 @@ class TextEditor:
             )
 
         return (
-            f"[S0-01] {anime_name} "
+            f"[S{anime_season}-01] {anime_name} "
             f"{'['+qual+'p]' if qual else ''} "
             f"{'['+codec.upper()+'] ' if codec else ''}"
-            f"[{lang}] {Var.BRAND_UNAME}.mkv"
+            f"{Var.BRAND_UNAME}.mkv"
         )
 
     @handle_logs
