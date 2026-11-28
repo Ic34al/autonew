@@ -8588,82 +8588,84 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Resolve /addanime channel mappings for scheduled RSS titles and AniList aliases."""
+    """Resolve saved anime destinations; never silently redirect a broken mapping to Main."""
     try:
         base_name = extract_base_anime_name(name)
-        candidates = [base_name, name, normalize_anime_name_for_search(base_name)]
-        data = getattr(aniInfo, "adata", {}) or {}
-        title_data = data.get("title", {}) or {}
+        adata = getattr(aniInfo, "adata", {}) or {}
+        pdata = getattr(aniInfo, "pdata", {}) or {}
+        title_data = adata.get("title") or {}
+        candidates = [name, base_name, pdata.get("anime_title"),
+                      normalize_anime_name_for_search(base_name)]
         if isinstance(title_data, dict):
-            candidates.extend(title_data.get(key) for key in ("english", "romaji", "native"))
-        candidates.extend(data.get("synonyms", []) or [])
-        try:
-            candidates.extend(await get_all_possible_anime_names(base_name))
-        except Exception as alias_error:
-            await rep.report(f"Could not expand channel aliases for {base_name}: {alias_error}", "warning")
+            candidates.extend(title_data.get(k) for k in ("english", "romaji", "native"))
+        candidates.extend(adata.get("synonyms") or [])
+        for value in (name, base_name):
+            try:
+                candidates.extend(await get_all_possible_anime_names(value))
+            except Exception as alias_error:
+                await rep.report(f"Could not expand saved-channel aliases for '{value}': {alias_error}", "warning", log=False)
 
-        seen = set()
-        for candidate in candidates:
-            value = re.sub(r"\s+", " ", str(candidate or "")).strip()
-            if not value:
-                continue
-            keys = (value.lower(), normalize_anime_name_for_search(value))
-            for key in dict.fromkeys(k for k in keys if k):
-                if key in seen:
-                    continue
-                seen.add(key)
-                mapped = await db.get_anime_channel(key)
-                if not mapped:
-                    # Also accept mappings created by the newer explicit selector.
-                    mapped = await db.get_selected_anime_channel(key)
-                if not mapped:
-                    continue
-                chat = await validate_channel_id(mapped)
-                if not chat:
-                    # Remove only the stale alias that was just validated. This
-                    # prevents every future RSS scan from reusing a deleted channel.
-                    try:
-                        await db.remove_anime_channel_mapping(key, mapped)
-                    except Exception as cleanup_error:
-                        await rep.report(
-                            f"Could not remove stale /addanime mapping '{key}' -> {mapped}: {cleanup_error}",
-                            "warning",
-                        )
-                    try:
-                        await db.remove_selected_anime_channel(key)
-                    except Exception as cleanup_error:
-                        await rep.report(
-                            f"Could not disable stale selected-channel mapping '{key}': {cleanup_error}",
-                            "warning",
-                        )
-                    await rep.report(
-                        f"Removed inaccessible/deleted channel mapping {mapped} for '{key}'; "
-                        "checking remaining aliases and using Main Channel if none are valid.",
-                        "warning",
-                    )
-                    continue
-                await rep.report(
-                    f"Dedicated channel mapping matched: {base_name} -> {chat.id} (alias: {key}). "
-                    "Main Channel will receive the join-request announcement.",
-                    "success"
-                )
-                return chat.id
+        def compact(value):
+            return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
 
-        # Missing mapping is a normal fallback, not an operational warning.
-        # Keep expected fallback decisions out of the high-volume Anime Logs channel.
-        await rep.report(
-            f"No /addanime channel mapping found for '{base_name}'; using Main Channel.",
-            "info",
-            log=False
-        )
-        return Var.MAIN_CHANNEL
+        def series_key(value):
+            value = str(value or "").casefold()
+            value = re.sub(r"\\bseason\\s*0*\\d+\\b|\\bs\\s*0*\\d{1,2}\\b", " ", value)
+            value = re.sub(r"\\b(?:episode|ep)\\s*[-._ ]*0*\\d+\\b", " ", value)
+            value = re.sub(r"\\b(?:part|cour)\\s*0*\\d+\\b", " ", value)
+            return compact(extract_base_anime_name(value))
+
+        candidates = list(dict.fromkeys(str(v).strip() for v in candidates if v and str(v).strip()))
+        wanted_exact = list(dict.fromkeys(compact(v) for v in candidates if compact(v)))
+        wanted_series = list(dict.fromkeys(series_key(v) for v in candidates if series_key(v)))
+        all_channels = await db.get_all_anime_channels()
+        records = list((all_channels or {}).items())
+
+        for wanted in wanted_exact:
+            ids = {int(cid) for stored, cid in records
+                   if compact(stored) == wanted and str(cid).lstrip("-").isdigit()}
+            if len(ids) > 1:
+                raise RuntimeError(f"Conflicting exact saved mappings for '{base_name}': {sorted(ids)}")
+            if ids:
+                mapped = next(iter(ids))
+                info = await validate_channel_id(mapped)
+                if not info:
+                    raise RuntimeError(f"Saved /addanime mapping for '{base_name}' points to inaccessible channel {mapped}; refusing Main Channel fallback.")
+                await rep.report(f"Automatic RSS destination resolved: {base_name} -> {info.id}", "success", log=False)
+                return int(info.id)
+
+        for wanted in wanted_series:
+            ids = {int(cid) for stored, cid in records
+                   if series_key(stored) == wanted and str(cid).lstrip("-").isdigit()}
+            if len(ids) > 1:
+                raise RuntimeError(f"Multiple saved channels match '{base_name}': {sorted(ids)}; refusing to guess.")
+            if ids:
+                mapped = next(iter(ids))
+                info = await validate_channel_id(mapped)
+                if not info:
+                    raise RuntimeError(f"Saved anime channel {mapped} for '{base_name}' is inaccessible; refusing Main Channel fallback.")
+                await rep.report(f"Automatic RSS destination resolved by series alias: {base_name} -> {info.id}", "success", log=False)
+                return int(info.id)
+
+        selected = await db.list_selected_anime_channels()
+        for wanted in wanted_exact:
+            ids = {int(row.get("channel_id")) for row in (selected or [])
+                   if compact(row.get("anime_name")) == wanted
+                   and str(row.get("channel_id", "")).lstrip("-").isdigit()}
+            if len(ids) > 1:
+                raise RuntimeError(f"Conflicting /uploadchannel selections for '{base_name}': {sorted(ids)}")
+            if ids:
+                mapped = next(iter(ids))
+                info = await validate_channel_id(mapped)
+                if not info:
+                    raise RuntimeError(f"Selected channel {mapped} for '{base_name}' is inaccessible; refusing Main Channel fallback.")
+                return int(info.id)
+
+        await rep.report(f"No saved /addanime or /uploadchannel destination matched '{base_name}'; using Main Channel.", "info", log=False)
+        return int(Var.MAIN_CHANNEL)
     except Exception as error:
-        # Mapping/alias database problems must not block RSS download and encoding.
-        await rep.report(
-            f"Dedicated-channel lookup failed for {name}: {error}; using Main Channel.",
-            "warning",
-        )
-        return Var.MAIN_CHANNEL
+        await rep.report(f"Anime destination resolution failed for '{name}': {error}. Upload stopped instead of redirecting to Main Channel.", "error")
+        raise
 
 
 async def create_anime_channel(name, aniInfo):
