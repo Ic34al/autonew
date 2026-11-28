@@ -2260,7 +2260,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
-async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None, info_card=False):
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None, info_card=False, artwork_override=None):
     """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
     import io
     import textwrap
