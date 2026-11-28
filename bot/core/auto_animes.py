@@ -2314,7 +2314,7 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     # AniList can legitimately have no usable cover for a title. In that case,
     # discover artwork from independent anime catalogues before holding the upload.
     # Require a close title match so an unrelated anime poster is never attached.
-    if not artwork_urls:
+    if True:  # Also search independent catalogues when AniList URLs exist but later fail validation.
         import difflib
         import re
 
@@ -2357,26 +2357,25 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
             else:
                 last_discovery_error = None
 
-            # Jikan/MyAnimeList fallback, used if Kitsu has no close match.
-            if not artwork_urls:
-                try:
-                    jikan_response = await discovery_client.get(
-                        "https://api.jikan.moe/v4/anime",
-                        params={"q": title or anime_name, "limit": 5, "sfw": "true"},
-                    )
-                    jikan_response.raise_for_status()
-                    for item in (jikan_response.json().get("data") or []):
-                        candidate_title = item.get("title_english") or item.get("title")
-                        score = difflib.SequenceMatcher(
-                            None, target_key, _art_title_key(candidate_title)
-                        ).ratio()
-                        images = (item.get("images") or {}).get("jpg") or {}
-                        if score >= 0.78:
-                            candidate = images.get("large_image_url") or images.get("image_url")
-                            if candidate and candidate not in artwork_urls:
-                                artwork_urls.append(candidate)
-                except Exception as exc:
-                    last_discovery_error = str(exc)
+            # Jikan/MyAnimeList is also queried as an independent second fallback.
+            try:
+                jikan_response = await discovery_client.get(
+                    "https://api.jikan.moe/v4/anime",
+                    params={"q": title or anime_name, "limit": 5, "sfw": "true"},
+                )
+                jikan_response.raise_for_status()
+                for item in (jikan_response.json().get("data") or []):
+                    candidate_title = item.get("title_english") or item.get("title")
+                    score = difflib.SequenceMatcher(
+                        None, target_key, _art_title_key(candidate_title)
+                    ).ratio()
+                    images = (item.get("images") or {}).get("jpg") or {}
+                    if score >= 0.78:
+                        candidate = images.get("large_image_url") or images.get("image_url")
+                        if candidate and candidate not in artwork_urls:
+                            artwork_urls.append(candidate)
+            except Exception as exc:
+                last_discovery_error = str(exc)
 
     art = None
     last_art_error = None
