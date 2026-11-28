@@ -4160,8 +4160,15 @@ async def anime_search_cmd(client, message: Message):
         # romaji, native and synonym titles are important when SubsPlease uses
         # a different release-group title from the name typed by the admin.
         search_info = TextEditor(anime_name)
-        await search_info.load_info()
-        search_data = search_info.adata or {}
+        search_data = {}
+        try:
+            await search_info.load_info()
+            search_data = search_info.adata or {}
+        except Exception as metadata_error:
+            await rep.report(
+                f"/search AniList metadata lookup failed for '{anime_name}'; continuing with RSS title matching: {metadata_error}",
+                "warning", log=False,
+            )
         search_title_data = search_data.get("title") or {}
         if isinstance(search_title_data, dict):
             raw_aliases.extend(
