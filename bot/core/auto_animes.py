@@ -206,20 +206,30 @@ async def build_main_channel_feed_caption(aniInfo, anime_name, episode_number, q
     def bold(value):
         return f"<b>{html.escape(str(value))}</b>"
 
-    return (
-        f"<blockquote>❐ {bold(display_title)}</blockquote>\n"
-        "✦─━━━━━━━━━━─✦\n"
-        f"{bold('›› Sᴇᴀꜱᴏɴ: ' + season_number)}\n"
-        f"{bold('›› Eᴘɪsᴏᴅᴇ: ' + episode_label)}\n"
-        f"{bold('›› Qᴜᴀʟɪᴛʏ: ' + quality_text)}\n"
-        f"{bold('›› Lᴀɴɢᴜᴀɢᴇ: ' + language)}\n"
-        "✦─━━━━━━━━━━─✦\n"
-        f"<blockquote>{bold('≡ Sᴛᴀᴛᴜꜱ: ' + status)}</blockquote>\n"
-        f"<blockquote>{bold('≡ Pᴏᴡᴇʀᴇᴅ Bʏ: ')}<b><a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>\n"
-        "✦─━━━━━━━━━━─✦\n"
-        f"<blockquote>{bold('≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - ')}<b><a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a></b></blockquote>\n"
+    caption = (
+        f"<blockquote>❐ {bold(display_title)}</blockquote>\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"{bold('›› Sᴇᴀꜱᴏɴ: ' + season_number)}\\n"
+        f"{bold('›› Eᴘɪsᴏᴅᴇ: ' + episode_label)}\\n"
+        f"{bold('›› Qᴜᴀʟɪᴛʏ: ' + quality_text)}\\n"
+        f"{bold('›› Lᴀɴɢᴜᴀɢᴇ: ' + language)}\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"<blockquote>{bold('≡ Sᴛᴀᴛᴜꜱ: ' + status)}</blockquote>\\n"
+        f"<blockquote>{bold('≡ Pᴏᴡᴇʀᴇᴅ Bʏ: ')}<b><a href='https://t.me/Ongoing_Anime_Time'>Ongoing Anime Time</a></b></blockquote>\\n"
+        "✦─━━━━━━━━━━─✦\\n"
+        f"<blockquote>{bold('≡ Hᴏᴡ Tᴏ Dᴏᴡɴʟᴏᴀᴅ? - ')}<b><a href='https://t.me/+y6wpSaZzvk0xYjQ9'>Wᴀᴛᴄʜ Nᴏᴡ</a></b></blockquote>\\n"
         f"<blockquote>{bold('≡ ᴜꜱᴇ vlc player or mx player ᴛᴏ ᴄʜᴀɴɢᴇ ᴀᴜᴅɪᴏ ᴀɴᴅ sᴜʙᴛɪᴛʟᴇs ᴏʀ ᴀ ʙᴇᴛᴛᴇʀ ᴠɪᴇᴡɪɴɢ ᴇxᴩᴇʀɪᴇɴᴄᴇ.')}</blockquote>"
     )
+    description = re.sub(r"<[^>]+>", " ", str(data.get("description") or ""))
+    description = html.unescape(re.sub(r"\\s+", " ", description)).strip()
+    if description:
+        synopsis = html.escape(description)
+        budget = max(0, 1024 - len(caption) - len("\\n<blockquote expandable><b>Synopsis:</b> </blockquote>"))
+        if len(synopsis) > budget:
+            synopsis = synopsis[:max(0, budget - 3)].rsplit(" ", 1)[0] + "..."
+        if synopsis:
+            caption += f"\\n<blockquote expandable><b>Synopsis:</b> {synopsis}</blockquote>"
+    return caption
 
 async def process_batch_anime(anime_name, torrent_url, audio, destination_channel=None, send_completion_sticker=True):
     import re
@@ -2026,73 +2036,86 @@ async def fetch_animes():
             )
 
 async def get_or_create_anime_channel(name: str, aniInfo):
-    """Resolve dedicated-channel mappings; unmapped anime always use Main Channel."""
+    """Resolve saved anime destinations; never silently redirect a broken mapping to Main."""
     try:
-        base_anime_name = extract_base_anime_name(name)
-        normalized_name = normalize_anime_name_for_search(base_anime_name)
-        candidates = [base_anime_name, name, normalized_name]
-        title_data = (getattr(aniInfo, "adata", {}) or {}).get("title", {}) or {}
+        base_name = extract_base_anime_name(name)
+        adata = getattr(aniInfo, "adata", {}) or {}
+        pdata = getattr(aniInfo, "pdata", {}) or {}
+        title_data = adata.get("title") or {}
+        candidates = [name, base_name, pdata.get("anime_title"),
+                      normalize_anime_name_for_search(base_name)]
         if isinstance(title_data, dict):
-            candidates.extend(title_data.get(key) for key in ("english", "romaji", "native"))
-        candidates.extend((getattr(aniInfo, "adata", {}) or {}).get("synonyms", []) or [])
-        try:
-            candidates.extend(await get_all_possible_anime_names(base_anime_name))
-        except Exception as alias_error:
-            await rep.report(f"Could not expand anime channel aliases for {base_anime_name}: {alias_error}", "warning")
+            candidates.extend(title_data.get(k) for k in ("english", "romaji", "native"))
+        candidates.extend(adata.get("synonyms") or [])
+        for value in (name, base_name):
+            try:
+                candidates.extend(await get_all_possible_anime_names(value))
+            except Exception as alias_error:
+                await rep.report(f"Could not expand saved-channel aliases for '{value}': {alias_error}", "warning", log=False)
 
-        def mapping_keys(value):
-            value = str(value or "").strip()
-            if not value:
-                return []
-            normalized = normalize_anime_name_for_search(value)
-            compact = re.sub(r"\s+", " ", value.lower()).strip()
-            return list(dict.fromkeys(key for key in (value.lower(), normalized, compact) if key))
+        def compact(value):
+            return "".join(ch for ch in str(value or "").casefold() if ch.isalnum())
 
-        candidate_keys = set()
-        for candidate in candidates:
-            candidate_keys.update(mapping_keys(candidate))
+        def series_key(value):
+            value = str(value or "").casefold()
+            value = re.sub(r"\\bseason\\s*0*\\d+\\b|\\bs\\s*0*\\d{1,2}\\b", " ", value)
+            value = re.sub(r"\\b(?:episode|ep)\\s*[-._ ]*0*\\d+\\b", " ", value)
+            value = re.sub(r"\\b(?:part|cour)\\s*0*\\d+\\b", " ", value)
+            return compact(extract_base_anime_name(value))
 
-        # Prefer the explicit /addanime mapping; otherwise honor the
-        # channel selected and persisted by /uploadchannel.
-        seen = set()
-        for candidate in candidates:
-            for key in mapping_keys(candidate):
-                if key in seen:
-                    continue
-                seen.add(key)
-                try:
-                    mapped = await db.get_anime_channel(key)
-                    if not mapped:
-                        mapped = await db.get_selected_anime_channel(key)
-                    if not mapped:
-                        continue
-                    info = await validate_channel_id(mapped)
-                    if not info:
-                        await rep.report(f"Configured anime channel {mapped} for '{key}' is unavailable; checking other saved aliases.", "warning")
-                        continue
-                    for alias in candidates:
-                        for alias_key in mapping_keys(alias):
-                            try:
-                                await db.add_anime_channel_mapping(alias_key, info.id)
-                            except Exception:
-                                pass
-                    await rep.report(
-                        f"Automatic release routed to configured channel {info.id} for {base_anime_name}.",
-                        "success"
-                    )
-                    return info.id
-                except Exception as lookup_error:
-                    await rep.report(f"Anime channel mapping lookup failed for '{key}': {lookup_error}", "warning")
+        candidates = list(dict.fromkeys(str(v).strip() for v in candidates if v and str(v).strip()))
+        wanted_exact = list(dict.fromkeys(compact(v) for v in candidates if compact(v)))
+        wanted_series = list(dict.fromkeys(series_key(v) for v in candidates if series_key(v)))
+        all_channels = await db.get_all_anime_channels()
+        records = list((all_channels or {}).items())
 
-        # Do not silently create a new destination. No mapping means Main Channel.
-        await rep.report(
-            f"No dedicated channel mapping found for '{base_anime_name}'; using Main Channel.",
-            "info"
-        )
-        return Var.MAIN_CHANNEL
+        # Exact title/alias records have priority over broader season aliases.
+        for wanted in wanted_exact:
+            ids = {int(cid) for stored, cid in records
+                   if compact(stored) == wanted and str(cid).lstrip("-").isdigit()}
+            if len(ids) > 1:
+                raise RuntimeError(f"Conflicting exact saved mappings for '{base_name}': {sorted(ids)}")
+            if ids:
+                mapped = next(iter(ids))
+                info = await validate_channel_id(mapped)
+                if not info:
+                    raise RuntimeError(f"Saved /addanime mapping for '{base_name}' points to inaccessible channel {mapped}; refusing Main Channel fallback.")
+                await rep.report(f"Automatic RSS destination resolved: {base_name} -> {info.id}", "success", log=False)
+                return int(info.id)
+
+        for wanted in wanted_series:
+            ids = {int(cid) for stored, cid in records
+                   if series_key(stored) == wanted and str(cid).lstrip("-").isdigit()}
+            if len(ids) > 1:
+                raise RuntimeError(f"Multiple saved channels match '{base_name}': {sorted(ids)}; refusing to guess.")
+            if ids:
+                mapped = next(iter(ids))
+                info = await validate_channel_id(mapped)
+                if not info:
+                    raise RuntimeError(f"Saved anime channel {mapped} for '{base_name}' is inaccessible; refusing Main Channel fallback.")
+                await rep.report(f"Automatic RSS destination resolved by series alias: {base_name} -> {info.id}", "success", log=False)
+                return int(info.id)
+
+        selected = await db.list_selected_anime_channels()
+        for wanted in wanted_exact:
+            ids = {int(row.get("channel_id")) for row in (selected or [])
+                   if compact(row.get("anime_name")) == wanted
+                   and str(row.get("channel_id", "")).lstrip("-").isdigit()}
+            if len(ids) > 1:
+                raise RuntimeError(f"Conflicting /uploadchannel selections for '{base_name}': {sorted(ids)}")
+            if ids:
+                mapped = next(iter(ids))
+                info = await validate_channel_id(mapped)
+                if not info:
+                    raise RuntimeError(f"Selected channel {mapped} for '{base_name}' is inaccessible; refusing Main Channel fallback.")
+                return int(info.id)
+
+        await rep.report(f"No saved /addanime or /uploadchannel destination matched '{base_name}'; using Main Channel.", "info", log=False)
+        return int(Var.MAIN_CHANNEL)
     except Exception as error:
-        await rep.report(f"Error in get_or_create_anime_channel: {error}", "error")
-        return Var.MAIN_CHANNEL
+        await rep.report(f"Anime destination resolution failed for '{name}': {error}. Upload stopped instead of redirecting to Main Channel.", "error")
+        raise
+
 
 async def create_anime_channel(name, aniInfo):
     try:
