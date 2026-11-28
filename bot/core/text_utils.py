@@ -1013,9 +1013,10 @@ class TextEditor:
         title = (
             titles.get("english")
             or titles.get("romaji")
-            or titles.get("native")
             or anime_name
         )
+        if not is_movie and "season" not in str(title).casefold():
+            title = f"{title} Season {anime_season}"
 
         status = self.adata.get("status", "RELEASING")
         genres = ", ".join(self.adata.get("genres") or [])
