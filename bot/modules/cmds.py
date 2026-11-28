@@ -4798,8 +4798,8 @@ async def anime_search_cmd(client, message: Message):
             f"<b>Search results:</b> <code>{html.escape(str(resolved_title))}</code>\n"
             f"<b>Season selected:</b> <code>{current_season}</code> (newest season-tagged releases found)\n"
             f"<b>Episodes found:</b> {len(selected_matches)}\n"
-            + (f"<blockquote expandable><b>Synopsis:</b> {html.escape(synopsis)}</blockquote>\\n" if synopsis else "")
-            + "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n\\n"
+            + (f"<blockquote expandable><b>Synopsis:</b> {html.escape(synopsis)}</blockquote>\n" if synopsis else "")
+            + "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\n\n"
             + "Choose only the episodes you want to upload, then tap <b>Upload Selected</b>.",
             reply_markup=build_episode_keyboard(status.id, ANIME_SEARCH_RESULTS[status.id])
         )
