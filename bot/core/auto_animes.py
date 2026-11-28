@@ -7619,13 +7619,20 @@ async def upload_file(file_path, quality):
         await rep.report(f"Upload error: {str(e)}", "error")
         return None
 def extract_release_episode(title):
-    """Extract the episode number from common SubsPlease naming formats."""
-    value = str(title or "")
+    """Extract episode numbers from SubsPlease and common fansub release titles."""
+    # RSS feeds sometimes use non-breaking spaces or Unicode dash characters.
+    # Normalize these before applying the release-name patterns.
+    value = str(title or "").replace("\u00a0", " ").replace("\u202f", " ")
+    value = re.sub(r"[‐‑‒–—−]", "-", value)
     patterns = (
-        r'\bS\d{1,2}\s*[-.\-–—−]\s*0*(\d{1,3})\b',
-        r'\bS\d{1,2}E0*(\d{1,3})\b',
+        r'\bS\s*0*\d{1,2}\s*[-.]\s*0*(\d{1,3})\b',
+        r'\bS\s*0*\d{1,2}\s*E\s*0*(\d{1,3})\b',
         r'\b(?:episode|ep)\s*[-._ ]?0*(\d{1,3})\b',
-        r'\s-\s0*(\d{1,3})(?:\D|$)',
+        # SubsPlease: "[SubsPlease] Series Name - 10 (720p) [HASH].mkv"
+        r'\s-\s*0*(\d{1,3})(?=\s*(?:\(|\[|\.|$))',
+        # Also accept an en/em dash separator after normalization and compact
+        # filenames such as "Series_-_10_1080p".
+        r'[-_]\s*0*(\d{1,3})(?=\s*(?:\(|\[|_|\.|$))',
     )
     for pattern in patterns:
         match = re.search(pattern, value, flags=re.IGNORECASE)
@@ -8960,53 +8967,64 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             if season_match:
                 aniInfo.pdata["anime_season"] = str(int(season_match.group(1))).zfill(2)
 
-            # Retry the AniList lookup using a cleaned title with release-group,
-            # quality and codec tags removed before falling back to a local key.
-            if not ani_id:
-                fallback_title = extract_base_anime_name(clean_anime_title(name))
-                if fallback_title:
-                    try:
-                        fallback_info = TextEditor(fallback_title)
-                        await fallback_info.load_info()
-                        fallback_id = fallback_info.adata.get("id")
-                        if fallback_id:
-                            aniInfo = fallback_info
-                            ani_id = fallback_id
-                    except Exception as lookup_error:
-                        await rep.report(
-                            f"Manual RSS AniList lookup fallback failed for '{fallback_title}': "
-                            f"{lookup_error}", "warning", log=False
-                        )
+        # Retry AniList matching with the cleaned series title for BOTH scheduled
+        # RSS and manual /search releases. A release-group/quality suffix can make
+        # the first lookup fail even though the episode number is present.
+        if not ani_id:
+            fallback_title = extract_base_anime_name(clean_anime_title(name))
+            if fallback_title:
+                try:
+                    fallback_info = TextEditor(fallback_title)
+                    await fallback_info.load_info()
+                    fallback_id = fallback_info.adata.get("id")
+                    if fallback_id:
+                        aniInfo = fallback_info
+                        ani_id = fallback_id
+                except Exception as lookup_error:
+                    await rep.report(
+                        f"RSS AniList title fallback failed for '{fallback_title}': "
+                        f"{lookup_error}", "warning", log=False
+                    )
 
-            # Reapply the RSS numbering after the fallback TextEditor instance
-            # replaces the original metadata object.
-            if ep_no:
-                aniInfo.pdata["episode_number"] = str(ep_no)
-            if season_match:
-                aniInfo.pdata["anime_season"] = str(int(season_match.group(1))).zfill(2)
+        # Preserve the exact RSS episode and season after a fallback metadata lookup.
+        if ep_no:
+            aniInfo.pdata["episode_number"] = str(ep_no)
+        if manual_search and season_match:
+            aniInfo.pdata["anime_season"] = str(int(season_match.group(1))).zfill(2)
 
-            # A valid episode number from the exact RSS release is enough to
-            # process a manual request. Use a deterministic title/season key if
-            # AniList has no match, so duplicate protection and resume tracking
-            # still work across workers and restarts.
-            if ep_no and not ani_id:
-                season_match = re.search(
-                    r"\bS\s*0*(\d{1,2})\s*(?:E|[-._ ])",
-                    str(name),
-                    re.IGNORECASE,
-                )
-                season_key = f"S{int(season_match.group(1)):02d}" if season_match else "S00"
-                title_key = normalize_anime_name_for_search(
-                    extract_base_anime_name(clean_anime_title(name))
-                ) or "unknown-anime"
-                ani_id = f"manual:{title_key}:{season_key}"
+        # AniList can legitimately fail to resolve an alternate/transliterated
+        # title. A parsed release episode is still safe to process with a stable
+        # normalized local ID, shared by scheduled RSS and manual search.
+        if ep_no and not ani_id:
+            season_match = re.search(
+                r"\bS\s*0*(\d{1,2})\s*(?:E|[-._ ])",
+                str(name),
+                re.IGNORECASE,
+            )
+            season_key = f"S{int(season_match.group(1)):02d}" if season_match else "S00"
+            title_key = normalize_anime_name_for_search(
+                extract_base_anime_name(clean_anime_title(name))
+            ) or "unknown-anime"
+            ani_id = f"manual:{title_key}:{season_key}"
 
         if not ep_no:
             ep_no = extract_release_episode(name)
-        if not ani_id or not ep_no:
-            raise RuntimeError(
-                f"Could not identify an episode number from the selected RSS release: {name}"
+        if not ep_no:
+            await rep.report(
+                f"RSS release held: episode number could not be parsed from '{name}'. "
+                "No download or channel post was started.",
+                "warning",
+                log=False,
             )
+            return "metadata_unresolved"
+        if not ani_id:
+            await rep.report(
+                f"RSS release held: could not resolve a stable anime identity for '{name}'. "
+                "No download or channel post was started.",
+                "warning",
+                log=False,
+            )
+            return "metadata_unresolved"
 
         # Check cache and confirmed channel posts before claiming the global
         # episode lock. Returning "already_published" after claiming used to
