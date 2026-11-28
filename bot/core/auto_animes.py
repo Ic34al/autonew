@@ -8665,7 +8665,7 @@ async def create_anime_channel(name, aniInfo):
         return None
 
 
-async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None):
+async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_label=None, artwork_override=None):
     """Create the ANIME SOUL split-screen streaming thumbnail (16:9)."""
     import io
     import textwrap
@@ -8692,24 +8692,71 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         pass
 
     cover_data = data.get("coverImage") or {}
-    cover_url = cover_data.get("extraLarge") or cover_data.get("large") or data.get("poster_url")
-    banner_url = data.get("bannerImage")
-    # Prefer the portrait cover for the large poster panel; use banner if cover is unavailable.
-    artwork_url = cover_url or banner_url
-    if not artwork_url:
-        await rep.report("ANIME SOUL split-screen thumbnail skipped: AniList has no artwork URL.", "warning")
+    # Try the explicitly configured anime banner first, then every real AniList
+    # artwork field. Never use a generic 404/not-found placeholder as a poster.
+    artwork_urls = []
+    for candidate in (
+        artwork_override,
+        cover_data.get("extraLarge"),
+        cover_data.get("large"),
+        data.get("poster_url"),
+        data.get("bannerImage"),
+    ):
+        candidate = str(candidate or "").strip()
+        if (
+            candidate
+            and candidate not in artwork_urls
+            and "not-found" not in candidate.lower()
+            and "404" not in candidate.lower()
+        ):
+            artwork_urls.append(candidate)
+
+    if not artwork_urls:
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable for '{title}': no real artwork URL was supplied.",
+            "warning",
+            log=False,
+        )
         return None
 
-    try:
-        async with httpx.AsyncClient(
-            timeout=httpx.Timeout(25.0, connect=10.0),
-            follow_redirects=True,
-        ) as client:
-            response = await client.get(artwork_url)
-            response.raise_for_status()
-            art = Image.open(io.BytesIO(response.content)).convert("RGB")
-    except Exception as exc:
-        await rep.report(f"ANIME SOUL artwork download failed: {exc}", "warning")
+    art = None
+    last_art_error = None
+    async with httpx.AsyncClient(
+        timeout=httpx.Timeout(25.0, connect=10.0),
+        follow_redirects=True,
+    ) as client:
+        for artwork_url in artwork_urls:
+            try:
+                response = await client.get(artwork_url)
+                response.raise_for_status()
+                # A successful HTTP response can still be an HTML 404 page.
+                content_type = response.headers.get("content-type", "").lower()
+                if content_type and not (
+                    content_type.startswith("image/")
+                    or "octet-stream" in content_type
+                ):
+                    raise ValueError(f"URL returned non-image content ({content_type})")
+                candidate_image = Image.open(io.BytesIO(response.content))
+                candidate_image.verify()
+                candidate_image = Image.open(io.BytesIO(response.content)).convert("RGB")
+                candidate_image.load()
+                art = candidate_image
+                break
+            except Exception as exc:
+                last_art_error = exc
+                await rep.report(
+                    f"Artwork source rejected for '{title}' ({artwork_url}): {exc}",
+                    "warning",
+                    log=False,
+                )
+
+    if art is None:
+        await rep.report(
+            f"ANIME SOUL thumbnail unavailable for '{title}': all actual artwork sources failed; "
+            f"last error: {last_art_error}",
+            "warning",
+            log=False,
+        )
         return None
 
     W, H = 1600, 900
@@ -9140,16 +9187,33 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             if banner_url:
                 photo_url = banner_url
             elif hasattr(Var, 'ANIME') and Var.ANIME in name:
-                photo_url = Var.CUSTOM_BANNER
+                photo_url = getattr(Var, "CUSTOM_BANNER", None)
             else:
-                photo_url = aniInfo.adata.get("poster_url", "https://i.ibb.co/NdG0PXdx/not-found.png")
-            
+                photo_url = (
+                    (aniInfo.adata.get("coverImage") or {}).get("extraLarge")
+                    or (aniInfo.adata.get("coverImage") or {}).get("large")
+                    or aniInfo.adata.get("poster_url")
+                    or aniInfo.adata.get("bannerImage")
+                )
+
+            poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
             try:
-                poster_path = f"thumbs/anime_soul_{aniInfo.adata.get('id') or hashlib.md5(cleaned_name.encode()).hexdigest()}.jpg"
-                photo_path = await build_anime_soul_poster(aniInfo, cleaned_name, poster_path)
+                photo_path = await build_anime_soul_poster(
+                    aniInfo, cleaned_name, poster_path, artwork_override=photo_url
+                )
             except Exception as poster_error:
-                await rep.report(f"ANIME SOUL poster builder failed; using original artwork: {poster_error}", "warning")
+                await rep.report(
+                    f"ANIME SOUL poster builder failed for '{cleaned_name}': {poster_error}",
+                    "error",
+                )
                 photo_path = None
+            # Never publish the generic 404 image or a stale thumbnail. If real
+            # artwork cannot be verified, stop before torrent download/encoding.
+            if not photo_path or not ospath.isfile(photo_path) or ospath.getsize(photo_path) <= 0:
+                raise RuntimeError(
+                    f"Upload held for '{cleaned_name}': no verified anime artwork thumbnail "
+                    "could be generated. No fallback/404 image will be posted."
+                )
             post_msg = None
             stat_msg = await bot.send_message(chat_id=Var.LOG_CHANNEL, text=f"<b>Processing:</b> {name}\nDownloading...")
             
