@@ -9161,6 +9161,56 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
             ) or "unknown-anime"
             ani_id = f"manual:{title_key}:{season_key}"
 
+        # Some title-search endpoints return the AniList ID but omit the
+        # synopsis/cover fields. Re-fetch the exact media by ID before building
+        # the ANIME SOUL poster/caption; never substitute another title's data.
+        if str(ani_id).isdigit() and not str(aniInfo.adata.get("description") or "").strip():
+            try:
+                details_query = """
+                query ($id: Int) {
+                  Media(id: $id, type: ANIME) {
+                    id
+                    title { english romaji native }
+                    description(asHtml: false)
+                    coverImage { extraLarge large }
+                    bannerImage
+                    genres
+                    status
+                    format
+                    season
+                    seasonYear
+                    episodes
+                    averageScore
+                    duration
+                    startDate { year month day }
+                    endDate { year month day }
+                    studios(isMain: true) { nodes { name } }
+                    synonyms
+                    siteUrl
+                  }
+                }
+                """
+                async with httpx.AsyncClient(timeout=httpx.Timeout(20.0, connect=8.0)) as metadata_client:
+                    details_response = await metadata_client.post(
+                        ANILIST_URL,
+                        json={"query": details_query, "variables": {"id": int(ani_id)}},
+                        headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    )
+                    details_response.raise_for_status()
+                    exact_data = (details_response.json().get("data") or {}).get("Media") or {}
+                if int(exact_data.get("id") or 0) == int(ani_id):
+                    aniInfo.adata.update({key: value for key, value in exact_data.items() if value is not None})
+                    aniInfo.adata["id"] = int(ani_id)
+                    await rep.report(
+                        f"Recovered exact AniList synopsis and poster metadata by ID {ani_id} for {name}.",
+                        "success", log=False,
+                    )
+            except Exception as metadata_error:
+                await rep.report(
+                    f"Exact AniList synopsis refresh failed for {name} (ID {ani_id}): {metadata_error}",
+                    "warning", log=False,
+                )
+
         if not ep_no:
             ep_no = extract_release_episode(name)
         if not ep_no:
