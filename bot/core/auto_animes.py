@@ -2054,9 +2054,9 @@ async def get_or_create_anime_channel(name: str, aniInfo):
 
         def series_key(value):
             value = str(value or "").casefold()
-            value = re.sub(r"\\bseason\\s*0*\\d+\\b|\\bs\\s*0*\\d{1,2}\\b", " ", value)
-            value = re.sub(r"\\b(?:episode|ep)\\s*[-._ ]*0*\\d+\\b", " ", value)
-            value = re.sub(r"\\b(?:part|cour)\\s*0*\\d+\\b", " ", value)
+            value = re.sub(r"\bseason\s*0*\d+\b|\bs\s*0*\d{1,2}\b", " ", value)
+            value = re.sub(r"\b(?:episode|ep)\s*[-._ ]*0*\d+\b", " ", value)
+            value = re.sub(r"\b(?:part|cour)\s*0*\d+\b", " ", value)
             return compact(extract_base_anime_name(value))
 
         candidates = list(dict.fromkeys(str(v).strip() for v in candidates if v and str(v).strip()))
