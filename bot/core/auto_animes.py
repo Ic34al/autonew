@@ -3024,8 +3024,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                         caption=main_caption,
                         reply_markup=join_markup
                     )
-                        if not main_join_post:
-                            raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
+                    if not main_join_post:
+                        raise RuntimeError("Dedicated upload completed but Main Channel join-request post was not confirmed.")
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
