@@ -3046,7 +3046,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 # Manual /search uploads send their sticker from the selection
                 # workflow, using the exact chosen destination. This prevents
                 # the generic uploader path from placing it in Main Channel.
-                # Mark complete only after the Main Channel post exists.
+                # Mark complete only after the selected/mapped destination post exists.
                 ani_cache['completed'].add(episode_key)
                 ani_cache['ongoing'].discard(episode_key)
             else:
@@ -9740,20 +9740,21 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                                 await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
                                 await db.saveAnimeDestinationPost(ani_id, ep_no, destination_channel, episode_post.id)
                         elif channel_to_use != Var.MAIN_CHANNEL:
+                            # Automatic RSS releases with a saved anime-channel
+                            # mapping belong ONLY in that dedicated channel.
+                            # Do not mirror a second full episode card into Main.
                             if photo_path and ospath.exists(photo_path):
                                 with open(photo_path, 'rb') as photo_file:
-                                    episode_post = await bot.send_photo(channel_to_use, photo=photo_file, caption=caption, reply_markup=markup)
+                                    post_msg = await bot.send_photo(channel_to_use, photo=photo_file, caption=caption, reply_markup=markup)
                             else:
-                                episode_post = await bot.send_photo(channel_to_use, photo=photo_url, caption=caption, reply_markup=markup)
-                            announcement_markup = await build_anime_watch_markup(channel_to_use)
-                            if photo_path and ospath.exists(photo_path):
-                                with open(photo_path, 'rb') as photo_file:
-                                    post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_file, caption=caption, reply_markup=announcement_markup)
-                            else:
-                                post_msg = await bot.send_photo(Var.MAIN_CHANNEL, photo=photo_url, caption=caption, reply_markup=announcement_markup)
-                            await db.saveAnimeDedicatedPost(ani_id, ep_no, episode_post.id)
+                                post_msg = await bot.send_photo(channel_to_use, photo=photo_url, caption=caption, reply_markup=markup)
+                            if not post_msg or not getattr(post_msg, "id", None):
+                                raise RuntimeError(
+                                    f"Mapped anime channel {channel_to_use} did not confirm episode post for {name}."
+                                )
+                            await db.saveAnimeDedicatedPost(ani_id, ep_no, post_msg.id)
                             await db.saveAnimeDestinationPost(
-                                ani_id, ep_no, channel_to_use, episode_post.id
+                                ani_id, ep_no, channel_to_use, post_msg.id
                             )
                         elif photo_path and ospath.exists(photo_path):
                             with open(photo_path, 'rb') as photo_file:
@@ -9784,8 +9785,10 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     await db.saveAnimeDestinationPost(
                         ani_id, ep_no, int(channel_to_use), int(existing_target_post)
                     )
-                elif destination_channel is None or str(destination_channel) == str(Var.MAIN_CHANNEL):
+                elif int(channel_to_use) == int(Var.MAIN_CHANNEL):
                     await db.saveAnimeMainPost(ani_id, ep_no, post_msg.id)
+                else:
+                    await db.saveAnimeDestinationPost(ani_id, ep_no, int(channel_to_use), post_msg.id)
                 for uploaded_qual in uploaded_qualities:
                     await db.saveAnime(ani_id, ep_no, uploaded_qual, post_msg.id)
 
@@ -9801,7 +9804,7 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                     if int(destination_channel) != int(Var.MAIN_CHANNEL):
                         sticker_targets.append(int(Var.MAIN_CHANNEL))
                 elif channel_to_use != int(Var.MAIN_CHANNEL):
-                    sticker_targets = [int(channel_to_use), int(Var.MAIN_CHANNEL)]
+                    sticker_targets = [int(channel_to_use)]
                 else:
                     sticker_targets = [int(Var.MAIN_CHANNEL)]
 
