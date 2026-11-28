@@ -2288,66 +2288,87 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
             pass
 
     cover_data = data.get("coverImage") or {}
-    # Try every artwork source, with retries. Never silently substitute a
-    # previous anime's cached/local thumbnail.
+    # Prefer an explicitly selected anime banner, but reject known placeholder
+    # URLs and fall through to AniList's actual cover/poster artwork.
     artwork_urls = []
     for candidate in (
+        artwork_override,
         cover_data.get("extraLarge"),
         cover_data.get("large"),
         data.get("poster_url"),
         data.get("bannerImage"),
     ):
-        if candidate and candidate not in artwork_urls:
+        candidate = str(candidate or "").strip()
+        lowered = candidate.lower()
+        if (
+            candidate
+            and candidate not in artwork_urls
+            and "not-found" not in lowered
+            and "not_found" not in lowered
+            and "404" not in lowered
+        ):
             artwork_urls.append(candidate)
 
     if not artwork_urls:
         await rep.report(
-            f"ANIME SOUL thumbnail unavailable for '{title}': AniList returned no artwork URL.",
-            "warning"
+            f"ANIME SOUL thumbnail unavailable for '{title}': no usable anime artwork URL.",
+            "warning",
+            log=False,
         )
         return None
 
     art = None
     last_art_error = None
-    try:
-        for artwork_url in artwork_urls:
+    for artwork_url in artwork_urls:
+        try:
             cached_bytes = _ANIME_SOUL_ART_CACHE.get(artwork_url)
             if cached_bytes:
+                cached_image = Image.open(io.BytesIO(cached_bytes))
+                cached_image.verify()
                 art = Image.open(io.BytesIO(cached_bytes)).convert("RGB")
                 art.load()
                 break
-        if art is None:
-            async with httpx.AsyncClient(
-                timeout=httpx.Timeout(25.0, connect=10.0),
-                follow_redirects=True,
-            ) as client:
-                for artwork_url in artwork_urls:
-                    for attempt in range(1, 3):
-                        try:
-                            response = await client.get(artwork_url)
-                            response.raise_for_status()
-                            _ANIME_SOUL_ART_CACHE[artwork_url] = response.content
-                            art = Image.open(io.BytesIO(response.content)).convert("RGB")
-                            art.load()
-                            break
-                        except Exception as exc:
-                            last_art_error = exc
-                            await rep.report(
-                                f"Thumbnail attempt {attempt}/2 failed for '{title}' "
-                                f"({artwork_url}): {exc}",
-                                "warning"
-                            )
-                            if attempt < 2:
-                                await asyncio.sleep(attempt)
-                    if art is not None:
-                        break
-    except Exception as exc:
-        last_art_error = exc
+        except Exception:
+            # A corrupt cached response must not prevent trying another source.
+            _ANIME_SOUL_ART_CACHE.pop(artwork_url, None)
+            art = None
+
+    if art is None:
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(25.0, connect=10.0),
+            follow_redirects=True,
+        ) as client:
+            for artwork_url in artwork_urls:
+                try:
+                    response = await client.get(artwork_url)
+                    response.raise_for_status()
+                    content_type = response.headers.get("content-type", "").lower()
+                    if content_type and not (
+                        content_type.startswith("image/")
+                        or "octet-stream" in content_type
+                    ):
+                        raise ValueError(f"URL returned non-image content ({content_type})")
+                    image_bytes = response.content
+                    candidate_image = Image.open(io.BytesIO(image_bytes))
+                    candidate_image.verify()
+                    candidate_image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                    candidate_image.load()
+                    # Cache only fully verified image bytes, never HTML/error pages.
+                    _ANIME_SOUL_ART_CACHE[artwork_url] = image_bytes
+                    art = candidate_image
+                    break
+                except Exception as exc:
+                    last_art_error = exc
+                    # Do not retry a known dead URL twice; continue to the next
+                    # independent AniList artwork source instead.
+                    continue
 
     if art is None:
         await rep.report(
-            f"ANIME SOUL thumbnail unavailable after retries for '{title}': {last_art_error}",
-            "warning"
+            f"ANIME SOUL thumbnail unavailable for '{title}': all real artwork sources "
+            f"were rejected; last error: {last_art_error}. Upload held; no placeholder posted.",
+            "warning",
+            log=False,
         )
         return None
 
