@@ -4155,8 +4155,22 @@ async def anime_search_cmd(client, message: Message):
             return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9]+", " ", value.lower())).strip()
 
         raw_aliases = await get_all_possible_anime_names(anime_name)
+        # Resolve AniList metadata once for the search title. Its English,
+        # romaji, native and synonym titles are important when SubsPlease uses
+        # a different release-group title from the name typed by the admin.
+        search_info = TextEditor(anime_name)
+        await search_info.load_info()
+        search_data = search_info.adata or {}
+        search_title_data = search_data.get("title") or {}
+        if isinstance(search_title_data, dict):
+            raw_aliases.extend(
+                value for value in search_title_data.values()
+                if isinstance(value, str) and value.strip()
+            )
+        raw_aliases.extend(search_data.get("synonyms") or [])
         aliases = {normalize(x) for x in raw_aliases if x}
         aliases.add(normalize(anime_name))
+        aliases.discard("")
         # Remove generic words so alternate punctuation/season formatting can
         # still match without accepting unrelated shows with one shared word.
         alias_tokens = [
@@ -4179,10 +4193,19 @@ async def anime_search_cmd(client, message: Message):
             ):
                 return True
             title_tokens = set(normalized_title.split())
-            return any(
-                len(tokens) >= 2 and tokens.issubset(title_tokens)
-                for tokens in alias_tokens
-            )
+            if any(len(tokens) >= 2 and tokens.issubset(title_tokens) for tokens in alias_tokens):
+                return True
+            # RSS titles often include a subtitle, punctuation or a release
+            # suffix. Permit a strong token-overlap match, never a one-word
+            # match, to avoid missing valid anime while rejecting unrelated shows.
+            for alias in aliases:
+                tokens = {token for token in alias.split() if len(token) > 1}
+                if len(tokens) < 3:
+                    continue
+                overlap = len(tokens & title_tokens)
+                if overlap >= 3 and overlap / len(tokens) >= 0.78:
+                    return True
+            return False
         feeds = await db.get_all_rss_links()
         urls = [x.get("link") for x in feeds if x.get("type") == "anime" and x.get("link")]
         configured = getattr(Var, "RSS_ITEMS_ANIME", []) or []
@@ -4598,10 +4621,10 @@ async def anime_search_cmd(client, message: Message):
                 "warning"
             )
 
-        if not matches:
+        if not matches and not catalogue_matches:
             return await status.edit_text(
                 f"<b>No matching torrent release found:</b> <code>{anime_name}</code>\n"
-                "RSS and SubsPlease search API did not return a usable torrent link."
+                "RSS, SubsPlease search API and the full show catalogue did not return a usable torrent link."
             )
 
         # One source torrent per episode: prefer the highest available source
@@ -4736,9 +4759,18 @@ async def anime_search_cmd(client, message: Message):
             return await status.edit_text("<b>No selectable episodes were found.</b>")
 
         # Keep the search results pending until the admin chooses episodes.
+        synopsis = re.sub(r"<[^>]+>", " ", str(search_data.get("description") or ""))
+        synopsis = re.sub(r"\\s+", " ", synopsis).strip()
+        synopsis = synopsis[:650].rsplit(" ", 1)[0] + "..." if len(synopsis) > 650 else synopsis
+        resolved_title = (
+            search_title_data.get("english") or search_title_data.get("romaji") or anime_name
+            if isinstance(search_title_data, dict) else anime_name
+        )
         ANIME_SEARCH_RESULTS[status.id] = {
             "user_id": message.from_user.id,
             "anime": anime_name,
+            "display_title": resolved_title,
+            "synopsis": synopsis,
             "season": current_season,
             "episodes": selected_matches,
             "selected": set(),
@@ -4762,11 +4794,12 @@ async def anime_search_cmd(client, message: Message):
             return InlineKeyboardMarkup(keyboard)
 
         await status.edit_text(
-            f"<b>Search results:</b> <code>{anime_name}</code>\n"
+            f"<b>Search results:</b> <code>{html.escape(str(resolved_title))}</code>\n"
             f"<b>Season selected:</b> <code>{current_season}</code> (newest season-tagged releases found)\n"
             f"<b>Episodes found:</b> {len(selected_matches)}\n"
-            "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\n\n"
-            "Choose only the episodes you want to upload, then tap <b>Upload Selected</b>.",
+            + (f"<blockquote expandable><b>Synopsis:</b> {html.escape(synopsis)}</blockquote>\\n" if synopsis else "")
+            + "<b>Output qualities:</b> 480p | 720p | 1080p | HDRip\\n\\n"
+            + "Choose only the episodes you want to upload, then tap <b>Upload Selected</b>.",
             reply_markup=build_episode_keyboard(status.id, ANIME_SEARCH_RESULTS[status.id])
         )
     except Exception as error:
