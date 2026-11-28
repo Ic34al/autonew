@@ -9673,31 +9673,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                             reply_markup=markup,
                         )
                         post_msg = existing_message
-                        # A dedicated episode card and its Main Channel request
-                        # announcement are separate durable checkpoints. If an
-                        # older run saved the dedicated card but crashed before
-                        # announcing it, repair only the missing Main post.
-                        if (
-                            int(channel_to_use) != int(Var.MAIN_CHANNEL)
-                            and not await db.getAnimeMainPost(ani_id, ep_no)
-                        ):
-                            announcement_markup = await build_anime_watch_markup(channel_to_use)
-                            if photo_path and ospath.exists(photo_path):
-                                with open(photo_path, 'rb') as photo_file:
-                                    repaired_main_post = await bot.send_photo(
-                                        Var.MAIN_CHANNEL, photo=photo_file,
-                                        caption=caption, reply_markup=announcement_markup
-                                    )
-                            else:
-                                repaired_main_post = await bot.send_photo(
-                                    Var.MAIN_CHANNEL, photo=photo_url,
-                                    caption=caption, reply_markup=announcement_markup
-                                )
-                            if not repaired_main_post or not getattr(repaired_main_post, "id", None):
-                                raise RuntimeError(
-                                    f"Main Channel announcement repair was not confirmed for {name}."
-                                )
-                            await db.saveAnimeMainPost(ani_id, ep_no, repaired_main_post.id)
+                        # Dedicated-channel retries update the original card only.
+                        # They must not recreate a Main Channel episode announcement.
                     except Exception as retry_post_error:
                         raise RuntimeError(
                             f"Could not safely update existing episode post for {name}: "
