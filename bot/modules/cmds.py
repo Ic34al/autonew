@@ -4141,6 +4141,7 @@ async def anime_search_cmd(client, message: Message):
     anime_name = parts[1].strip()
     status = await message.reply("<b>Searching configured anime RSS feeds...</b>")
     try:
+        import html
         from bot.core.auto_animes import get_all_possible_anime_names, is_valid_torrent_url
         import re
 
