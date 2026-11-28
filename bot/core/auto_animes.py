@@ -764,12 +764,12 @@ async def validate_channel_id(channel_id):
 
 
 async def resolve_upload_destination(channel_id, source="episode destination"):
-    """Use the requested channel when reachable; otherwise safely use Main Channel."""
+    """Validate a destination; never redirect a mapped anime to Main silently."""
     main_id = int(Var.MAIN_CHANNEL)
     try:
         requested_id = int(channel_id) if channel_id is not None else main_id
     except (TypeError, ValueError):
-        requested_id = main_id
+        raise RuntimeError(f"{source} is invalid: {channel_id!r}.")
 
     async def _bot_can_publish(candidate_id):
         candidate_chat = await validate_channel_id(candidate_id)
@@ -796,19 +796,15 @@ async def resolve_upload_destination(channel_id, source="episode destination"):
             "Check MAIN_CHANNEL and ensure the bot is an administrator with post permission."
         )
 
-    main_chat = await _bot_can_publish(main_id)
-    if not main_chat:
-        raise RuntimeError(
-            f"{source} {requested_id} is inaccessible, and Main Channel {main_id} "
-            "is also inaccessible. No episode was published."
-        )
-
-    await rep.report(
-        f"{source} {requested_id} is inaccessible/deleted; routing this episode to "
-        f"Main Channel {main_id}.",
-        "warning",
+    # A mapped/selected anime channel is authoritative. If it was deleted or
+    # the bot lost posting rights, stop and report the real failure instead of
+    # quietly sending the episode to Main Channel.
+    raise RuntimeError(
+        f"{source} {requested_id} is inaccessible or the bot lacks posting permission. "
+        "The episode was stopped; no Main Channel fallback was attempted. "
+        "Restore the channel or update its /addanime mapping."
     )
-    return int(getattr(main_chat, "id", main_id))
+
 
 async def mirror_to_main_channel(post_msg, photo_url, caption, channel_to_use):
     try:
