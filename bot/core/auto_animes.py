@@ -2295,6 +2295,8 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         artwork_override,
         cover_data.get("extraLarge"),
         cover_data.get("large"),
+        cover_data.get("medium"),
+        cover_data.get("small"),
         data.get("poster_url"),
         data.get("bannerImage"),
     ):
@@ -9213,6 +9215,8 @@ async def get_animes(name, torrent, force=False, qualities_override=None, destin
                 photo_url = (
                     (aniInfo.adata.get("coverImage") or {}).get("extraLarge")
                     or (aniInfo.adata.get("coverImage") or {}).get("large")
+                    or (aniInfo.adata.get("coverImage") or {}).get("medium")
+                    or (aniInfo.adata.get("coverImage") or {}).get("small")
                     or aniInfo.adata.get("poster_url")
                     or aniInfo.adata.get("bannerImage")
                 )
