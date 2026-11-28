@@ -892,7 +892,17 @@ class TextEditor:
 
     @handle_logs
     async def get_upname(self, qual=""):
-        anime_name = self.pdata.get("anime_title") or self.__name
+        titles = (self.adata or {}).get("title") or {}
+        anime_name = titles.get("english") or titles.get("romaji") or self.pdata.get("anime_title") or self.__name
+        season_value = self.pdata.get("anime_season") or "1"
+        if isinstance(season_value, list):
+            season_value = season_value[-1] if season_value else "1"
+        try:
+            season_number = str(int(season_value))
+        except (TypeError, ValueError):
+            season_number = str(season_value)
+        if season_number and "season" not in str(anime_name).casefold():
+            anime_name = f"{anime_name} Season {season_number}"
 
         codec = (
             'HEVC' if 'libx265' in ffargs[qual]
@@ -934,7 +944,7 @@ class TextEditor:
                 f"[S{anime_season}-{ep_no_str}] {anime_name} "
                 f"{'['+qual+'p]' if qual else ''} "
                 f"{'['+codec.upper()+'] ' if codec else ''}"
-                f"[{lang}] {Var.BRAND_UNAME}.mkv"
+                f"{Var.BRAND_UNAME}.mkv"
             )
 
         return (
