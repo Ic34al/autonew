@@ -2311,13 +2311,72 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
         ):
             artwork_urls.append(candidate)
 
+    # AniList can legitimately have no usable cover for a title. In that case,
+    # discover artwork from independent anime catalogues before holding the upload.
+    # Require a close title match so an unrelated anime poster is never attached.
     if not artwork_urls:
-        await rep.report(
-            f"ANIME SOUL thumbnail unavailable for '{title}': no usable anime artwork URL.",
-            "warning",
-            log=False,
-        )
-        return None
+        import difflib
+        import re
+
+        def _art_title_key(value):
+            return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+        target_key = _art_title_key(title or anime_name)
+        async with httpx.AsyncClient(
+            timeout=httpx.Timeout(15.0, connect=7.0),
+            follow_redirects=True,
+            headers={"User-Agent": "AutoAnimeUploader/1.0"},
+        ) as discovery_client:
+            # Kitsu catalogue fallback.
+            try:
+                kitsu_response = await discovery_client.get(
+                    "https://kitsu.io/api/edge/anime",
+                    params={"filter[text]": title or anime_name, "page[limit]": 5},
+                )
+                kitsu_response.raise_for_status()
+                for item in (kitsu_response.json().get("data") or []):
+                    attrs = item.get("attributes") or {}
+                    candidate_titles = [
+                        attrs.get("canonicalTitle"),
+                        *((attrs.get("titles") or {}).values()),
+                    ]
+                    score = max(
+                        (difflib.SequenceMatcher(None, target_key, _art_title_key(t)).ratio()
+                         for t in candidate_titles if t),
+                        default=0,
+                    )
+                    poster = attrs.get("posterImage") or {}
+                    if score >= 0.78:
+                        for candidate in (
+                            poster.get("large"), poster.get("medium"), poster.get("small")
+                        ):
+                            if candidate and candidate not in artwork_urls:
+                                artwork_urls.append(candidate)
+            except Exception as exc:
+                last_discovery_error = str(exc)
+            else:
+                last_discovery_error = None
+
+            # Jikan/MyAnimeList fallback, used if Kitsu has no close match.
+            if not artwork_urls:
+                try:
+                    jikan_response = await discovery_client.get(
+                        "https://api.jikan.moe/v4/anime",
+                        params={"q": title or anime_name, "limit": 5, "sfw": "true"},
+                    )
+                    jikan_response.raise_for_status()
+                    for item in (jikan_response.json().get("data") or []):
+                        candidate_title = item.get("title_english") or item.get("title")
+                        score = difflib.SequenceMatcher(
+                            None, target_key, _art_title_key(candidate_title)
+                        ).ratio()
+                        images = (item.get("images") or {}).get("jpg") or {}
+                        if score >= 0.78:
+                            candidate = images.get("large_image_url") or images.get("image_url")
+                            if candidate and candidate not in artwork_urls:
+                                artwork_urls.append(candidate)
+                except Exception as exc:
+                    last_discovery_error = str(exc)
 
     art = None
     last_art_error = None
@@ -2368,7 +2427,9 @@ async def build_anime_soul_poster(anime_info, anime_name, output_path, episode_l
     if art is None:
         await rep.report(
             f"ANIME SOUL thumbnail unavailable for '{title}': all real artwork sources "
-            f"were rejected; last error: {last_art_error}. Upload held; no placeholder posted.",
+            f"were rejected; last error: {last_art_error}. "
+            f"External catalogue lookup: {locals().get('last_discovery_error', 'not needed')}. "
+            "Upload held; no placeholder posted.",
             "warning",
             log=False,
         )
