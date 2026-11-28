@@ -591,8 +591,14 @@ def _anime_title_match_score(query, media):
     import difflib
 
     def norm(value):
-        value = re.sub(r"\\[[^\\]]*\\]|\\([^)]*\\)", " ", str(value or ""))
-        value = re.sub(r"[^a-z0-9]+", " ", value.lower())
+        # Preserve Japanese/CJK letters and digits. ASCII-only normalization
+        # turns native AniList titles into an empty string and rejects the
+        # exact Japanese-title match before aliases can be used.
+        value = re.sub(r"[\[\](){}【】「」『』<>《》]", " ", str(value or ""))
+        value = "".join(
+            ch.casefold() if ch.isalnum() else " "
+            for ch in value
+        )
         ignored = {"season", "the", "tv", "series", "part"}
         return " ".join(word for word in value.split() if word not in ignored)
 
